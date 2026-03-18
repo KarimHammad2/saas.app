@@ -83,4 +83,21 @@ Approve suggestion abc-123
     expect(parsed.parsed.summary).toContain("Real inbound");
     expect(parsed.parsed.goals).toEqual(["Confirm resend payload support"]);
   });
+
+  it("falls back to raw message field when text/html are missing", () => {
+    const payload = {
+      id: "evt_raw_1",
+      data: {
+        from: "Karim <karim@example.com>",
+        subject: "[Project: Real Life Test] Kickoff",
+        message: "Summary:\nRaw payload body\n\nGoals:\n- Parse from message field",
+      },
+      type: "email.received",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.from).toBe("karim@example.com");
+    expect(parsed.parsed.summary).toBe("Raw payload body");
+    expect(parsed.parsed.goals).toEqual(["Parse from message field"]);
+  });
 });

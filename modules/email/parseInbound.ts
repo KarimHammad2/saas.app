@@ -266,6 +266,36 @@ function parseAdditionalEmails(content: string): string[] {
     .filter(Boolean);
 }
 
+function extractBodyContent(source: Record<string, unknown>): string {
+  const textBody = toStringOrEmpty(source.text);
+  if (textBody) {
+    return textBody;
+  }
+
+  const htmlBody = toStringOrEmpty(source.html);
+  if (htmlBody) {
+    return stripHtml(htmlBody);
+  }
+
+  // Some providers send raw content in message/body/content fields.
+  const messageBody = toStringOrEmpty(source.message);
+  if (messageBody) {
+    return messageBody;
+  }
+
+  const bodyField = toStringOrEmpty(source.body);
+  if (bodyField) {
+    return bodyField;
+  }
+
+  const contentField = toStringOrEmpty(source.content);
+  if (contentField) {
+    return contentField;
+  }
+
+  return "";
+}
+
 export function parseNormalizedContent(content: string) {
   const summary = extractSection(content, "Summary");
   const goals = toBulletList(extractSection(content, "Goals"));
@@ -305,8 +335,6 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
   const source = pickSource(root);
   const senderRaw = extractSenderRaw(source);
   const subject = toStringOrEmpty(source.subject) || "No Subject";
-  const textBody = toStringOrEmpty(source.text);
-  const htmlBody = toStringOrEmpty(source.html);
   const messageId =
     toStringOrEmpty(root.id) ||
     toStringOrEmpty(source.id) ||
@@ -320,7 +348,7 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
   }
 
   const senderEmail = extractEmailAddress(senderRaw);
-  const rawBody = textBody || stripHtml(htmlBody);
+  const rawBody = extractBodyContent(source);
   if (!rawBody) {
     throw new InboundParseError("Inbound payload is missing email body content.");
   }
