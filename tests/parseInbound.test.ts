@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseInbound } from "@/modules/email/parseInbound";
+import { InboundParseError, parseInbound } from "@/modules/email/parseInbound";
 
 describe("parseInbound", () => {
   it("extracts labeled sections and transaction fields", () => {
@@ -99,5 +99,41 @@ Approve suggestion abc-123
     expect(parsed.from).toBe("karim@example.com");
     expect(parsed.parsed.summary).toBe("Raw payload body");
     expect(parsed.parsed.goals).toEqual(["Parse from message field"]);
+  });
+
+  it("throws when no supported body content fields are present", () => {
+    const payload = {
+      from: "karim@example.com",
+      subject: "No body",
+    };
+
+    expect(() => parseInbound(payload, "resend")).toThrowError(new InboundParseError("Inbound payload is missing email body content."));
+  });
+
+  it("parses provider body and sender aliases", () => {
+    const payload = {
+      id: "evt_alias",
+      FromFull: { Email: "alias.sender@example.com" },
+      TextBody: "Summary:\nAlias body support\n\nGoals:\n- Parse TextBody and FromFull",
+      subject: "Alias test",
+    };
+
+    const parsed = parseInbound(payload, "ses");
+    expect(parsed.from).toBe("alias.sender@example.com");
+    expect(parsed.parsed.summary).toBe("Alias body support");
+    expect(parsed.parsed.goals).toEqual(["Parse TextBody and FromFull"]);
+  });
+
+  it("normalizes recipient variants from strings and objects", () => {
+    const payload = {
+      from: "owner@example.com",
+      to: "a@example.com, b@example.com",
+      cc: [{ email: "c@example.com" }, { address: "d@example.com" }],
+      text: "Summary:\nRecipient normalization",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.to).toEqual(["a@example.com", "b@example.com"]);
+    expect(parsed.cc).toEqual(["c@example.com", "d@example.com"]);
   });
 });

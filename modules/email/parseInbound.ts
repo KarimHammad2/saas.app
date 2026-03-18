@@ -30,6 +30,42 @@ function toStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function toObjectOrNull(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function toObjectFromUnknown(value: unknown): Record<string, unknown> | null {
+  const objectValue = toObjectOrNull(value);
+  if (objectValue) {
+    return objectValue;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return toObjectOrNull(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function nestedString(source: Record<string, unknown>, path: string[]): string {
+  let current: unknown = source;
+  for (const segment of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return "";
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return toStringOrEmpty(current);
+}
+
 function toStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter((item): item is string => typeof item === "string").map((item) => item.trim());
@@ -38,10 +74,14 @@ function toStringArray(value: unknown): string[] {
 }
 
 function pickSource(root: Record<string, unknown>): Record<string, unknown> {
-  const nestedData = root.data;
-  if (nestedData && typeof nestedData === "object" && !Array.isArray(nestedData)) {
-    return nestedData as Record<string, unknown>;
+  const candidates = [root.data, root.payload, root.mail, root.Message, root];
+  for (const candidate of candidates) {
+    const objectCandidate = toObjectFromUnknown(candidate);
+    if (objectCandidate) {
+      return objectCandidate;
+    }
   }
+
   return root;
 }
 
@@ -98,25 +138,54 @@ function extractEmailAddress(value: string): string {
 
 function extractSenderRaw(source: Record<string, unknown>): string {
   const fromRaw = source.from;
+  const fromAliasRaw = source.From;
   const senderRaw = source.sender;
+  const senderAliasRaw = source.sender_email;
+  const fromEmailAlias = source.from_email;
+  const fromFullEmail = nestedString(source, ["FromFull", "Email"]);
+  if (fromFullEmail) {
+    return fromFullEmail;
+  }
 
   if (typeof fromRaw === "string" && fromRaw.trim()) {
     return fromRaw.trim();
+  }
+
+  if (typeof fromAliasRaw === "string" && fromAliasRaw.trim()) {
+    return fromAliasRaw.trim();
   }
 
   if (typeof senderRaw === "string" && senderRaw.trim()) {
     return senderRaw.trim();
   }
 
+  if (typeof senderAliasRaw === "string" && senderAliasRaw.trim()) {
+    return senderAliasRaw.trim();
+  }
+
+  if (typeof fromEmailAlias === "string" && fromEmailAlias.trim()) {
+    return fromEmailAlias.trim();
+  }
+
   const fromObject = fromRaw && typeof fromRaw === "object" && !Array.isArray(fromRaw) ? (fromRaw as Record<string, unknown>) : null;
-  if (fromObject) {
-    const email = toStringOrEmpty(fromObject.email);
+  const fromAliasObject =
+    fromAliasRaw && typeof fromAliasRaw === "object" && !Array.isArray(fromAliasRaw) ? (fromAliasRaw as Record<string, unknown>) : null;
+  const fromObjects = [fromObject, fromAliasObject];
+  for (const candidate of fromObjects) {
+    if (!candidate) {
+      continue;
+    }
+    const email = toStringOrEmpty(candidate.email);
     if (email) {
       return email;
     }
-    const address = toStringOrEmpty(fromObject.address);
+    const address = toStringOrEmpty(candidate.address);
     if (address) {
       return address;
+    }
+    const nestedEmail = nestedString(candidate, ["Email"]);
+    if (nestedEmail) {
+      return nestedEmail;
     }
   }
 
@@ -272,9 +341,19 @@ function extractBodyContent(source: Record<string, unknown>): string {
     return textBody;
   }
 
+  const textBodyAlias = toStringOrEmpty(source.TextBody) || toStringOrEmpty(source["stripped-text"]) || toStringOrEmpty(source.plain);
+  if (textBodyAlias) {
+    return textBodyAlias;
+  }
+
   const htmlBody = toStringOrEmpty(source.html);
   if (htmlBody) {
     return stripHtml(htmlBody);
+  }
+
+  const htmlBodyAlias = toStringOrEmpty(source.HtmlBody) || toStringOrEmpty(source["stripped-html"]);
+  if (htmlBodyAlias) {
+    return stripHtml(htmlBodyAlias);
   }
 
   // Some providers send raw content in message/body/content fields.
@@ -283,14 +362,29 @@ function extractBodyContent(source: Record<string, unknown>): string {
     return messageBody;
   }
 
+  const messageAlias = toStringOrEmpty(source.Message) || nestedString(source, ["content", "text"]) || nestedString(source, ["content", "plain"]);
+  if (messageAlias) {
+    return messageAlias;
+  }
+
   const bodyField = toStringOrEmpty(source.body);
   if (bodyField) {
     return bodyField;
   }
 
+  const bodyAlias = toStringOrEmpty(source.Body) || nestedString(source, ["Body", "Text"]) || nestedString(source, ["Body", "Html"]);
+  if (bodyAlias) {
+    return bodyAlias;
+  }
+
   const contentField = toStringOrEmpty(source.content);
   if (contentField) {
     return contentField;
+  }
+
+  const nestedSourceBody = nestedString(source, ["data", "text"]) || nestedString(source, ["data", "html"]);
+  if (nestedSourceBody) {
+    return nestedSourceBody;
   }
 
   return "";

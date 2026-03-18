@@ -1,6 +1,7 @@
 import { getDefaultFromEmail } from "@/lib/env";
 import { getResendClient } from "@/lib/resend";
 import { parseInbound } from "@/modules/email/parseInbound";
+import { normalizeResendPayload } from "@/modules/email/providers/normalizeInboundPayload";
 import type { EmailProvider, InboundEnvelope, OutboundEmail } from "@/modules/email/providers/types";
 
 export const resendProvider: EmailProvider = {
@@ -11,7 +12,8 @@ export const resendProvider: EmailProvider = {
     return true;
   },
   parseInbound(envelope: InboundEnvelope) {
-    return parseInbound(envelope.payload, "resend");
+    const normalizedPayload = normalizeResendPayload(envelope.payload);
+    return parseInbound(normalizedPayload, "resend");
   },
   async sendEmail(message: OutboundEmail): Promise<void> {
     const resend = getResendClient();
