@@ -16,6 +16,6 @@ export interface OutboundEmail {
 export interface EmailProvider {
   name: string;
   validateSignature(envelope: InboundEnvelope): boolean;
-  parseInbound(envelope: InboundEnvelope): NormalizedEmailEvent;
+  parseInbound(envelope: InboundEnvelope): Promise<NormalizedEmailEvent> | NormalizedEmailEvent;
   sendEmail(message: OutboundEmail): Promise<void>;
 }

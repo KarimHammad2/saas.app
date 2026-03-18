@@ -111,7 +111,7 @@ export async function POST(request: Request) {
       return toErrorResponse(401, requestId, "INVALID_SIGNATURE", "Invalid inbound signature.", false);
     }
 
-    const event = provider.parseInbound(envelope);
+    const event = await provider.parseInbound(envelope);
     const processed = await processInboundEmail(event);
     await sendProjectEmail(processed.recipients, processed.payload);
 

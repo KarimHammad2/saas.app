@@ -44,19 +44,19 @@ export function normalizeResendPayload(payload: UnknownObject): UnknownObject {
   const source = objectOrRoot(root, "data");
 
   return {
-    id: root.id ?? source.id ?? source.email_id,
-    from: source.from ?? source.sender,
-    sender: source.sender ?? source.from,
-    subject: source.subject,
-    text: source.text ?? source["stripped-text"] ?? source.message,
-    html: source.html ?? source["stripped-html"],
-    message: source.message ?? source.content,
-    body: source.body,
-    content: source.content,
-    to: source.to,
-    cc: source.cc,
-    messageId: source.messageId ?? source["Message-Id"] ?? source.email_id,
-    email_id: source.email_id ?? root.id,
+    id: root.id ?? source.id ?? source.email_id ?? root.email_id,
+    from: source.from ?? root.from ?? source.sender ?? root.sender,
+    sender: source.sender ?? root.sender ?? source.from ?? root.from,
+    subject: source.subject ?? root.subject,
+    text: source.text ?? root.text ?? source["stripped-text"] ?? root["stripped-text"] ?? source.message ?? root.message,
+    html: source.html ?? root.html ?? source["stripped-html"] ?? root["stripped-html"],
+    message: source.message ?? root.message ?? source.content ?? root.content,
+    body: source.body ?? root.body,
+    content: source.content ?? root.content,
+    to: source.to ?? root.to,
+    cc: source.cc ?? root.cc,
+    messageId: source.messageId ?? root.messageId ?? source["Message-Id"] ?? root["Message-Id"] ?? source.message_id ?? root.message_id ?? source.email_id,
+    email_id: source.email_id ?? root.email_id ?? root.id,
     type: root.type,
   };
 }

@@ -1,8 +1,92 @@
 import { getDefaultFromEmail } from "@/lib/env";
+import { log } from "@/lib/log";
 import { getResendClient } from "@/lib/resend";
 import { parseInbound } from "@/modules/email/parseInbound";
 import { normalizeResendPayload } from "@/modules/email/providers/normalizeInboundPayload";
 import type { EmailProvider, InboundEnvelope, OutboundEmail } from "@/modules/email/providers/types";
+
+type UnknownObject = Record<string, unknown>;
+
+function textValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function hasBodyContent(payload: UnknownObject): boolean {
+  const candidates = [
+    payload.text,
+    payload.html,
+    payload.message,
+    payload.body,
+    payload.content,
+    payload.TextBody,
+    payload.HtmlBody,
+    payload["stripped-text"],
+    payload["stripped-html"],
+  ];
+  return candidates.some((value) => textValue(value).length > 0);
+}
+
+function toStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+  return strings.length > 0 ? strings : undefined;
+}
+
+async function hydrateResendBodyIfNeeded(payload: UnknownObject): Promise<UnknownObject> {
+  if (hasBodyContent(payload)) {
+    return payload;
+  }
+
+  const emailId = textValue(payload.email_id) || textValue(payload.id) || textValue(payload.messageId);
+  if (!emailId) {
+    return payload;
+  }
+
+  const resend = getResendClient() as unknown as {
+    emails?: {
+      receiving?: {
+        get?: (id: string) => Promise<{ data?: UnknownObject | null; error?: { message?: string } | null }>;
+      };
+    };
+  };
+
+  const getReceivedEmail = resend.emails?.receiving?.get;
+  if (!getReceivedEmail) {
+    return payload;
+  }
+
+  try {
+    const result = await getReceivedEmail(emailId);
+    if (!result || result.error || !result.data) {
+      log.warn("resend receiving retrieval failed", {
+        emailId,
+        message: result?.error?.message ?? "unknown retrieval error",
+      });
+      return payload;
+    }
+
+    const received = result.data;
+    return {
+      ...payload,
+      from: payload.from ?? received.from,
+      subject: payload.subject ?? received.subject,
+      text: payload.text ?? received.text,
+      html: payload.html ?? received.html,
+      body: payload.body ?? received.text,
+      message: payload.message ?? received.text,
+      to: payload.to ?? toStringArray(received.to),
+      cc: payload.cc ?? toStringArray(received.cc),
+      messageId: payload.messageId ?? received.message_id,
+      email_id: payload.email_id ?? received.id ?? emailId,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown retrieval exception";
+    log.warn("resend receiving retrieval threw", { emailId, message });
+    return payload;
+  }
+}
 
 export const resendProvider: EmailProvider = {
   name: "resend",
@@ -11,9 +95,10 @@ export const resendProvider: EmailProvider = {
     // Resend inbound validation can be added here if/when webhook signing is enabled.
     return true;
   },
-  parseInbound(envelope: InboundEnvelope) {
+  async parseInbound(envelope: InboundEnvelope) {
     const normalizedPayload = normalizeResendPayload(envelope.payload);
-    return parseInbound(normalizedPayload, "resend");
+    const hydratedPayload = await hydrateResendBodyIfNeeded(normalizedPayload);
+    return parseInbound(hydratedPayload, "resend");
   },
   async sendEmail(message: OutboundEmail): Promise<void> {
     const resend = getResendClient();
