@@ -52,13 +52,13 @@ async function hydrateResendBodyIfNeeded(payload: UnknownObject): Promise<Unknow
     };
   };
 
-  const getReceivedEmail = resend.emails?.receiving?.get;
-  if (!getReceivedEmail) {
+  const receivingClient = resend.emails?.receiving;
+  if (!receivingClient?.get) {
     return payload;
   }
 
   try {
-    const result = await getReceivedEmail(emailId);
+    const result = await receivingClient.get(emailId);
     if (!result || result.error || !result.data) {
       log.warn("resend receiving retrieval failed", {
         emailId,
