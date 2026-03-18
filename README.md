@@ -1,36 +1,104 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SaaS² Orchestration Layer (Full MVP)
 
-## Getting Started
+This repository implements the SaaS² email-native loop:
 
-First, run the development server:
+`User -> Frank -> Email -> saas2.app -> memory contracts -> Supabase -> outbound state email`
+
+## What Is Included
+
+- Inbound webhook route: `POST /api/inbound`
+- Provider abstraction (`Resend`, `SES stub`)
+- Deterministic email parsing into canonical normalized events
+- Memory contract layer aligned to saas2.io-style functions
+- Domain modules for:
+  - RBAC
+  - pricing tier transitions
+  - 90/10 transaction logic
+  - kickoff automation
+  - RPM suggestion approvals
+- Outbound state email containing:
+  - Summary
+  - Goals
+  - Action Items
+  - Decisions
+  - Risks
+  - Recommendations
+  - pending RPM suggestions
+  - remainder balance
+  - transaction history
+
+## Stack
+
+- Next.js App Router
+- Supabase/Postgres
+- Resend for email provider integration
+- Vitest for tests
+
+## Environment Variables
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+NEXT_PUBLIC_SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+
+# provider selection: resend | ses
+EMAIL_PROVIDER=resend
+
+# shared
+MASTER_USER_EMAIL=daniel@saas2.app
+
+# resend
+RESEND_API_KEY=
+RESEND_FROM_EMAIL="Frank <frank@domain.com>"
+
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Local Development
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Database Setup
 
-## Learn More
+Apply Supabase migrations, including:
 
-To learn more about Next.js, take a look at the following resources:
+- `20260318_000001_create_mvp_schema.sql`
+- `20260318_000002_harden_set_updated_at_search_path.sql`
+- `20260318_000003_grant_service_role_privileges.sql`
+- `20260318_000004_expand_full_mvp_schema.sql`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Testing
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run test
+npm run lint
+```
 
-## Deploy on Vercel
+## Webhook Payload Support
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`/api/inbound` accepts:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `application/json`
+- `application/x-www-form-urlencoded`
+- `multipart/form-data`
+
+Provider-specific signature validation is enforced through the selected provider module.
+
+## Manual Acceptance Checks
+
+1. **Kickoff**
+   - Send first email from a new sender.
+   - Confirm user + profile + project are created.
+2. **Project Context Update**
+   - Send labeled sections (`Summary`, `Goals`, `Action Items`, etc.).
+   - Confirm project state is updated and outbound email reflects it.
+3. **RPM Suggestion**
+   - Send `UserProfile Suggestion:` block from RPM sender.
+   - Confirm suggestion is stored as pending and appears in outbound email.
+4. **Suggestion Approval**
+   - User sends `Approve suggestion <id>`.
+   - Confirm suggestion status updates and profile context changes are applied.
+5. **Transaction Flow**
+   - Send a `Transaction:` block.
+   - Confirm tier transition, financial normalization, transaction storage, and remainder balance update.
