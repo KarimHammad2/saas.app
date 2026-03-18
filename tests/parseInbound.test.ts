@@ -56,4 +56,31 @@ Approve suggestion abc-123
     expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(20);
     expect(parsed.parsed.approvals[0]).toEqual({ suggestionId: "abc-123" });
   });
+
+  it("parses resend email.received payload shape", () => {
+    const payload = {
+      id: "evt_123",
+      created_at: "2026-03-18T21:43:30.200Z",
+      data: {
+        from: {
+          email: "karim@example.com",
+          name: "Karim",
+        },
+        to: [{ email: "frank@sign-unlimit.com" }],
+        cc: [],
+        subject: "[Project: Prod] real email",
+        text: "Summary:\nReal inbound\n\nGoals:\n- Confirm resend payload support",
+        email_id: "a8e65746-13a5-49b1-9768-ca4ff213a3d3",
+      },
+      type: "email.received",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.provider).toBe("resend");
+    expect(parsed.providerEventId).toBe("evt_123");
+    expect(parsed.from).toBe("karim@example.com");
+    expect(parsed.to).toEqual(["frank@sign-unlimit.com"]);
+    expect(parsed.parsed.summary).toContain("Real inbound");
+    expect(parsed.parsed.goals).toEqual(["Confirm resend payload support"]);
+  });
 });

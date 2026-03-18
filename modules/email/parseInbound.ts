@@ -37,6 +37,14 @@ function toStringArray(value: unknown): string[] {
   return [];
 }
 
+function pickSource(root: Record<string, unknown>): Record<string, unknown> {
+  const nestedData = root.data;
+  if (nestedData && typeof nestedData === "object" && !Array.isArray(nestedData)) {
+    return nestedData as Record<string, unknown>;
+  }
+  return root;
+}
+
 function normalizeWhitespace(content: string): string {
   return content
     .replace(/\r\n/g, "\n")
@@ -86,6 +94,87 @@ function extractEmailAddress(value: string): string {
     throw new InboundParseError("Could not extract a valid sender email.");
   }
   return normalized;
+}
+
+function extractSenderRaw(source: Record<string, unknown>): string {
+  const fromRaw = source.from;
+  const senderRaw = source.sender;
+
+  if (typeof fromRaw === "string" && fromRaw.trim()) {
+    return fromRaw.trim();
+  }
+
+  if (typeof senderRaw === "string" && senderRaw.trim()) {
+    return senderRaw.trim();
+  }
+
+  const fromObject = fromRaw && typeof fromRaw === "object" && !Array.isArray(fromRaw) ? (fromRaw as Record<string, unknown>) : null;
+  if (fromObject) {
+    const email = toStringOrEmpty(fromObject.email);
+    if (email) {
+      return email;
+    }
+    const address = toStringOrEmpty(fromObject.address);
+    if (address) {
+      return address;
+    }
+  }
+
+  const fromList = Array.isArray(fromRaw) ? fromRaw : [];
+  for (const entry of fromList) {
+    if (typeof entry === "string" && entry.trim()) {
+      return entry.trim();
+    }
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      const email = toStringOrEmpty((entry as Record<string, unknown>).email);
+      if (email) {
+        return email;
+      }
+      const address = toStringOrEmpty((entry as Record<string, unknown>).address);
+      if (address) {
+        return address;
+      }
+    }
+  }
+
+  return "";
+}
+
+function extractRecipientEmails(value: unknown): string[] {
+  const emails: string[] = [];
+
+  if (typeof value === "string") {
+    return splitEmails(value);
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      for (const email of splitEmails(entry)) {
+        emails.push(email);
+      }
+      continue;
+    }
+
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      const email = toStringOrEmpty((entry as Record<string, unknown>).email);
+      const address = toStringOrEmpty((entry as Record<string, unknown>).address);
+      const candidate = email || address;
+      if (!candidate) {
+        continue;
+      }
+      try {
+        emails.push(extractEmailAddress(candidate));
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return emails;
 }
 
 function splitEmails(value: string): string[] {
@@ -212,13 +301,19 @@ export function parseNormalizedContent(content: string) {
 }
 
 export function parseInbound(payload: unknown, provider = "generic"): NormalizedEmailEvent {
-  const source = toObject(payload);
-  const senderRaw = toStringOrEmpty(source.from) || toStringOrEmpty(source.sender);
+  const root = toObject(payload);
+  const source = pickSource(root);
+  const senderRaw = extractSenderRaw(source);
   const subject = toStringOrEmpty(source.subject) || "No Subject";
   const textBody = toStringOrEmpty(source.text);
   const htmlBody = toStringOrEmpty(source.html);
   const messageId =
-    toStringOrEmpty(source.messageId) || toStringOrEmpty(source["Message-Id"]) || crypto.randomUUID();
+    toStringOrEmpty(root.id) ||
+    toStringOrEmpty(source.id) ||
+    toStringOrEmpty(source.messageId) ||
+    toStringOrEmpty(source["Message-Id"]) ||
+    toStringOrEmpty(source.email_id) ||
+    crypto.randomUUID();
 
   if (!senderRaw) {
     throw new InboundParseError("Inbound payload is missing sender email.");
@@ -231,8 +326,29 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
   }
 
   const cleanedBody = normalizeWhitespace(stripSignatureAndQuoted(rawBody));
-  const to = toStringArray(source.to).length > 0 ? toStringArray(source.to) : splitEmails(toStringOrEmpty(source.to));
-  const cc = toStringArray(source.cc).length > 0 ? toStringArray(source.cc) : splitEmails(toStringOrEmpty(source.cc));
+  const to = (() => {
+    const fromStrings = toStringArray(source.to);
+    if (fromStrings.length > 0) {
+      return fromStrings;
+    }
+    const fromObjects = extractRecipientEmails(source.to);
+    if (fromObjects.length > 0) {
+      return fromObjects;
+    }
+    return splitEmails(toStringOrEmpty(source.to));
+  })();
+
+  const cc = (() => {
+    const fromStrings = toStringArray(source.cc);
+    if (fromStrings.length > 0) {
+      return fromStrings;
+    }
+    const fromObjects = extractRecipientEmails(source.cc);
+    if (fromObjects.length > 0) {
+      return fromObjects;
+    }
+    return splitEmails(toStringOrEmpty(source.cc));
+  })();
   const parsed = parseNormalizedContent(cleanedBody);
 
   if (parsed.rpmSuggestion) {
