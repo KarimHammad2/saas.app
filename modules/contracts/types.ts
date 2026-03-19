@@ -40,6 +40,7 @@ export interface ProjectContext {
   decisions: string[];
   risks: string[];
   recommendations: string[];
+  notes: string[];
   remainderBalance: number;
   transactionHistory: TransactionRecord[];
 }
@@ -73,6 +74,7 @@ export interface NormalizedEmailEvent {
     decisions: string[];
     risks: string[];
     recommendations: string[];
+    notes: string[];
     userProfileContext: string | null;
     rpmSuggestion: {
       content: string;

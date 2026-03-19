@@ -4,4 +4,5 @@ export interface ProjectEmailPayload {
   context: ProjectContext;
   pendingSuggestions: RPMSuggestion[];
   nextSteps: string[];
+  isWelcome: boolean;
 }

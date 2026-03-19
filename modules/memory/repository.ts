@@ -345,6 +345,35 @@ export class MemoryRepository {
     }
   }
 
+  async updateNotes(projectId: string, notes: string[]): Promise<void> {
+    if (notes.length === 0) {
+      return;
+    }
+
+    const context = await this.getProjectState(projectId);
+    const existing = context.notes ?? [];
+    const seen = new Set(existing.map((entry) => entry.trim().toLowerCase()));
+
+    const merged: string[] = [...existing];
+    for (const note of notes) {
+      const trimmed = note.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      merged.push(trimmed);
+      seen.add(key);
+    }
+
+    const { error } = await this.supabase.from("project_states").update({ notes: merged }).eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to update notes: ${error.message}`);
+    }
+  }
+
   async storeUserProfileContext(userId: string, contextText: string): Promise<void> {
     const profile = await this.getUserProfile(userId);
     const updatedLongTerm = [profile.longTermInstructions, contextText].filter(Boolean).join("\n\n");
@@ -550,7 +579,7 @@ export class MemoryRepository {
   async getProjectState(projectId: string): Promise<ProjectContext> {
     const { data: state, error: stateError } = await this.supabase
       .from("project_states")
-      .select("project_id, summary, goals, action_items, decisions, risks, recommendations")
+      .select("project_id, summary, goals, action_items, decisions, risks, recommendations, notes")
       .eq("project_id", projectId)
       .maybeSingle<{
         project_id: string;
@@ -560,6 +589,7 @@ export class MemoryRepository {
         decisions: unknown;
         risks: unknown;
         recommendations: unknown;
+        notes: unknown;
       }>();
 
     if (stateError) {
@@ -607,6 +637,7 @@ export class MemoryRepository {
       decisions: asStringArray(state?.decisions),
       risks: asStringArray(state?.risks),
       recommendations: asStringArray(state?.recommendations),
+      notes: asStringArray(state?.notes),
       remainderBalance: Number(project.remainder_balance ?? 0),
       transactionHistory,
     };

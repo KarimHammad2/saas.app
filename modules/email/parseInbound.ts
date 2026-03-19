@@ -8,6 +8,7 @@ export class InboundParseError extends Error {
 }
 
 const SECTION_LABELS = [
+  "Overview",
   "Summary",
   "Goals",
   "Tasks",
@@ -397,17 +398,22 @@ function extractBodyContent(source: Record<string, unknown>): string {
 }
 
 export function parseNormalizedContent(content: string) {
-  const summary = extractSection(content, "Summary");
+  const summary = extractSection(content, "Summary") || extractSection(content, "Overview");
   const goals = toBulletList(extractSection(content, "Goals"));
   const actionItems = toBulletList(extractSection(content, "Action Items") || extractSection(content, "Tasks"));
   const decisions = toBulletList(extractSection(content, "Decisions"));
   const risks = toBulletList(extractSection(content, "Risks"));
+  const notesSection = toBulletList(extractSection(content, "Notes"));
   const recommendations = toBulletList(extractSection(content, "Recommendations"));
   const userProfileContext = extractSection(content, "UserProfile") || extractSection(content, "Context");
   const rpmSuggestionContent = extractSection(content, "UserProfile Suggestion");
   const transactionEvent = parseTransactionBlock(extractSection(content, "Transaction"));
   const approvals = parseApprovals(content);
   const additionalEmails = parseAdditionalEmails(content);
+
+  const hasMeaning =
+    Boolean(summary && summary.trim()) || goals.length > 0 || actionItems.length > 0 || risks.length > 0;
+  const notes = hasMeaning ? notesSection : [content];
 
   return {
     summary: summary || null,
@@ -416,6 +422,7 @@ export function parseNormalizedContent(content: string) {
     decisions,
     risks,
     recommendations,
+    notes,
     userProfileContext: userProfileContext || null,
     rpmSuggestion: rpmSuggestionContent
       ? {

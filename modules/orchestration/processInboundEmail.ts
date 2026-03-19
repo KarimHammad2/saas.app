@@ -50,7 +50,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const pendingSuggestions = await repo.getPendingSuggestions(user.id);
     return {
       recipients: [user.email],
-      payload: { context: projectState, pendingSuggestions, nextSteps: defaultNextSteps() },
+      payload: {
+        context: projectState,
+        pendingSuggestions,
+        nextSteps: defaultNextSteps(),
+        isWelcome: false,
+      },
       context: {
         userId: user.id,
         projectId: project.id,
@@ -81,6 +86,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   await repo.updateDecisions(project.id, event.parsed.decisions);
   await repo.updateRisks(project.id, event.parsed.risks);
   await repo.updateRecommendations(project.id, event.parsed.recommendations);
+  await repo.updateNotes(project.id, event.parsed.notes);
 
   if (event.parsed.userProfileContext && canModifyUserProfile(role)) {
     await repo.storeUserProfileContext(user.id, event.parsed.userProfileContext);
@@ -139,6 +145,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       context: projectState,
       pendingSuggestions,
       nextSteps: defaultNextSteps(),
+      isWelcome: userCreated || projectCreated,
     },
     context: {
       userId: user.id,

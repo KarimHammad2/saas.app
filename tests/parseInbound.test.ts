@@ -51,6 +51,7 @@ Approve suggestion abc-123
     expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
     expect(parsed.parsed.risks).toEqual(["Timeline slippage"]);
     expect(parsed.parsed.recommendations).toEqual(["Weekly check-in"]);
+    expect(parsed.parsed.notes).toEqual([]);
     expect(parsed.parsed.userProfileContext).toContain("Prefer concise");
     expect(parsed.parsed.rpmSuggestion?.content).toContain("weekly updates");
     expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(20);
@@ -122,6 +123,22 @@ Approve suggestion abc-123
     expect(parsed.from).toBe("alias.sender@example.com");
     expect(parsed.parsed.summary).toBe("Alias body support");
     expect(parsed.parsed.goals).toEqual(["Parse TextBody and FromFull"]);
+  });
+
+  it("falls back to raw body in notes when meaning fields are empty", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "No labels test",
+      text: "I want to build an AI SaaS for real estate agents.",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.from).toBe("user@example.com");
+    expect(parsed.parsed.summary).toBeNull();
+    expect(parsed.parsed.goals).toEqual([]);
+    expect(parsed.parsed.actionItems).toEqual([]);
+    expect(parsed.parsed.risks).toEqual([]);
+    expect(parsed.parsed.notes).toEqual(["I want to build an AI SaaS for real estate agents."]);
   });
 
   it("normalizes recipient variants from strings and objects", () => {

@@ -1,62 +1,34 @@
 import type { ProjectEmailPayload } from "@/modules/output/types";
 
-const EMPTY_SUMMARY_TEXT = "No summary yet.";
 const EMPTY_SECTION_ITEM = "None";
 
-function formatSection(title: string, values: string[]): string {
+function formatBulletList(values: string[]): string {
   const lines = values.length > 0 ? values : [EMPTY_SECTION_ITEM];
-  const bullets = lines.map((line) => `- ${line}`).join("\n");
-  return `${title}:\n${bullets}`;
-}
-
-function formatSuggestions(items: ProjectEmailPayload["pendingSuggestions"]): string {
-  if (items.length === 0) {
-    return "Pending RPM Suggestions:\n- None";
-  }
-
-  return ["Pending RPM Suggestions:", ...items.map((item) => `- ${item.id} (${item.fromEmail}): ${item.content}`)].join(
-    "\n",
-  );
-}
-
-function formatTransactions(payload: ProjectEmailPayload): string {
-  if (payload.context.transactionHistory.length === 0) {
-    return "Transaction History:\n- None";
-  }
-
-  return [
-    "Transaction History:",
-    ...payload.context.transactionHistory.map(
-      (tx) =>
-        `- ${tx.createdAt} | ${tx.type} | Hours: ${tx.hoursPurchased} | Rate: ${tx.hourlyRate} | Remainder: ${tx.projectRemainder}`,
-    ),
-  ].join("\n");
+  return lines.map((line) => `- ${line}`).join("\n");
 }
 
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   return [
-    "PROJECT DOCUMENT",
+    "# Project Overview",
     "",
-    "Summary:",
-    context.summary || EMPTY_SUMMARY_TEXT,
+    context.summary || "No overview yet.",
     "",
-    formatSection("Goals", context.goals),
+    "# Goals",
     "",
-    formatSection("Action Items", context.actionItems),
+    formatBulletList(context.goals),
     "",
-    formatSection("Decisions", context.decisions),
+    "# Tasks",
     "",
-    formatSection("Risks", context.risks),
+    formatBulletList(context.actionItems),
     "",
-    formatSection("Recommendations", context.recommendations),
+    "# Risks",
     "",
-    formatSuggestions(payload.pendingSuggestions),
+    formatBulletList(context.risks),
     "",
-    `Remainder Balance:\n${context.remainderBalance.toFixed(2)}`,
+    "# Notes",
     "",
-    formatTransactions(payload),
+    formatBulletList(context.notes),
     "",
-    formatSection("Next Steps", payload.nextSteps),
   ].join("\n");
 }

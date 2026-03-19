@@ -42,6 +42,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
       decisions: [],
       risks: [],
       recommendations: [],
+      notes: [],
       userProfileContext: null,
       rpmSuggestion: null,
       transactionEvent: null,

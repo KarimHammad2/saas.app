@@ -13,6 +13,7 @@ const repoState = {
   updateDecisions: vi.fn(),
   updateRisks: vi.fn(),
   updateRecommendations: vi.fn(),
+  updateNotes: vi.fn(),
   storeUserProfileContext: vi.fn(),
   storeRPMSuggestion: vi.fn(),
   approveSuggestion: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("@/modules/memory/repository", () => {
       updateDecisions = repoState.updateDecisions;
       updateRisks = repoState.updateRisks;
       updateRecommendations = repoState.updateRecommendations;
+      updateNotes = repoState.updateNotes;
       storeUserProfileContext = repoState.storeUserProfileContext;
       storeRPMSuggestion = repoState.storeRPMSuggestion;
       approveSuggestion = repoState.approveSuggestion;
@@ -78,6 +80,7 @@ describe("processInboundEmail", () => {
       decisions: [],
       risks: [],
       recommendations: [],
+      notes: [],
       remainderBalance: 0,
       transactionHistory: [],
     });
@@ -104,6 +107,7 @@ describe("processInboundEmail", () => {
         decisions: [],
         risks: [],
         recommendations: [],
+        notes: [],
         userProfileContext: null,
         rpmSuggestion: null,
         transactionEvent: null,
@@ -138,6 +142,7 @@ describe("processInboundEmail", () => {
         decisions: [],
         risks: [],
         recommendations: [],
+        notes: [],
         userProfileContext: null,
         rpmSuggestion: null,
         transactionEvent: null,
@@ -170,6 +175,7 @@ describe("processInboundEmail", () => {
         decisions: [],
         risks: [],
         recommendations: [],
+        notes: [],
         userProfileContext: null,
         rpmSuggestion: null,
         transactionEvent: null,
@@ -184,5 +190,60 @@ describe("processInboundEmail", () => {
     await processInboundEmail(event);
     expect(repoState.approveSuggestion).toHaveBeenCalledWith("u1", "abc123", "user@example.com");
     expect(repoState.rejectSuggestion).toHaveBeenCalledWith("u1", "def456", "user@example.com");
+  });
+
+  it("marks first inbound as welcome and stores parsed notes", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: { id: "u1", email: "user@example.com", tier: "freemium", created_at: new Date().toISOString() },
+      created: true,
+    });
+    repoState.getOrCreateProject.mockResolvedValue({
+      project: { id: "p1", user_id: "u1", name: "Primary Project", remainder_balance: 0, created_at: new Date().toISOString() },
+      created: true,
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      summary: "",
+      goals: [],
+      actionItems: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: ["RAW NOTES"],
+      remainderBalance: 0,
+      transactionHistory: [],
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_welcome",
+      provider: "resend",
+      providerEventId: "m_welcome",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      to: [],
+      cc: [],
+      subject: "New Project",
+      rawBody: "This message has no labeled meaning; it should become notes.",
+      parsed: {
+        summary: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["RAW NOTES"],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.payload.isWelcome).toBe(true);
+    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", ["RAW NOTES"]);
   });
 });

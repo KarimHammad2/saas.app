@@ -12,12 +12,21 @@ interface RuntimeConfig {
   adminBccAddress: string | null;
   llmInstruction: string;
   projectUpdateTemplate: EmailTemplate;
+  projectWelcomeTemplate: EmailTemplate;
 }
 
 const DEFAULT_PROJECT_TEMPLATE: EmailTemplate = {
   subject: "Project Update",
   textBody: "Project Update\n\n{{summary}}\n\nAttached latest project memory document.",
   htmlBody: "<!doctype html><html><body><h2>Project Update</h2><p>{{summary}}</p><p>Attached latest project memory document.</p></body></html>",
+};
+
+const DEFAULT_PROJECT_WELCOME_TEMPLATE: EmailTemplate = {
+  subject: "Welcome to SaaS² — Your Project Started",
+  textBody:
+    "Welcome to SaaS² — Your Project Started\n\nHi,\n\nYour project has been initialized.\n\nAttached is your project document.\n\nUse this document inside ChatGPT / Gemini.\n\nWhenever you update your project, send an email back here.\n\nBest,\nFrank",
+  htmlBody:
+    "<!doctype html><html><body><h2>Welcome to SaaS² — Your Project Started</h2><p>Hi,</p><p>Your project has been initialized.</p><p>Attached is your project document.</p><p>Use this document inside ChatGPT / Gemini.</p><p>Whenever you update your project, send an email back here.</p><p>Best,<br/>Frank</p></body></html>",
 };
 
 const DEFAULT_INSTRUCTION = "Use the attached project document as authoritative context for your external LLM.";
@@ -61,12 +70,17 @@ export function renderProjectUpdateTemplate(template: EmailTemplate, summary: st
 export async function getRuntimeConfig(): Promise<RuntimeConfig> {
   const supabase = getSupabaseAdminClient();
 
-  const [settingsResult, templateResult, instructionResult] = await Promise.all([
+  const [settingsResult, projectUpdateTemplateResult, projectWelcomeTemplateResult, instructionResult] = await Promise.all([
     supabase.from("system_settings").select("key, value_json").in("key", ["email.admin_bcc.enabled", "email.admin_bcc.address"]),
     supabase
       .from("email_templates")
       .select("subject, text_body, html_body")
       .eq("key", "project_update")
+      .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
+    supabase
+      .from("email_templates")
+      .select("subject, text_body, html_body")
+      .eq("key", "project_welcome")
       .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
     supabase.from("instructions").select("content").eq("key", "llm_document_usage").maybeSingle<{ content: string }>(),
   ]);
@@ -82,20 +96,30 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
   const dbAddress = asString(addressJson.address).toLowerCase();
   const adminBccAddress = dbAddress || getAdminBccEmail();
 
-  const template = templateResult.error || !templateResult.data
+  const projectUpdateTemplate = projectUpdateTemplateResult.error || !projectUpdateTemplateResult.data
     ? DEFAULT_PROJECT_TEMPLATE
     : {
-        subject: templateResult.data.subject || DEFAULT_PROJECT_TEMPLATE.subject,
-        textBody: templateResult.data.text_body || DEFAULT_PROJECT_TEMPLATE.textBody,
-        htmlBody: templateResult.data.html_body || DEFAULT_PROJECT_TEMPLATE.htmlBody,
+        subject: projectUpdateTemplateResult.data.subject || DEFAULT_PROJECT_TEMPLATE.subject,
+        textBody: projectUpdateTemplateResult.data.text_body || DEFAULT_PROJECT_TEMPLATE.textBody,
+        htmlBody: projectUpdateTemplateResult.data.html_body || DEFAULT_PROJECT_TEMPLATE.htmlBody,
       };
 
   const llmInstruction = instructionResult.error ? DEFAULT_INSTRUCTION : instructionResult.data?.content?.trim() || DEFAULT_INSTRUCTION;
+
+  const projectWelcomeTemplate =
+    projectWelcomeTemplateResult.error || !projectWelcomeTemplateResult.data
+      ? DEFAULT_PROJECT_WELCOME_TEMPLATE
+      : {
+          subject: projectWelcomeTemplateResult.data.subject || DEFAULT_PROJECT_WELCOME_TEMPLATE.subject,
+          textBody: projectWelcomeTemplateResult.data.text_body || DEFAULT_PROJECT_WELCOME_TEMPLATE.textBody,
+          htmlBody: projectWelcomeTemplateResult.data.html_body || DEFAULT_PROJECT_WELCOME_TEMPLATE.htmlBody,
+        };
 
   return {
     adminBccEnabled,
     adminBccAddress,
     llmInstruction,
-    projectUpdateTemplate: template,
+    projectUpdateTemplate: projectUpdateTemplate,
+    projectWelcomeTemplate,
   };
 }

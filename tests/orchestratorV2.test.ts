@@ -27,11 +27,13 @@ describe("handleIncomingEmail", () => {
           decisions: [],
           risks: [],
           recommendations: [],
+          notes: [],
           remainderBalance: 0,
           transactionHistory: [],
         },
         pendingSuggestions: [],
         nextSteps: [],
+        isWelcome: false,
       },
       context: {
         userId: "u1",

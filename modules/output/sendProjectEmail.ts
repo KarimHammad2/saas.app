@@ -23,7 +23,8 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
   const document = generateProjectDocument(payload);
   const projectHtml = formatProjectEmail(payload);
   const summary = payload.context.summary || "Latest project memory regenerated.";
-  const rendered = renderProjectUpdateTemplate(runtime.projectUpdateTemplate, summary, document, runtime.llmInstruction);
+  const template = payload.isWelcome ? runtime.projectWelcomeTemplate : runtime.projectUpdateTemplate;
+  const rendered = renderProjectUpdateTemplate(template, summary, document, runtime.llmInstruction);
   const documentHtml = [
     "<h2>Download full project document</h2>",
     "<p>Included below in this email:</p>",
