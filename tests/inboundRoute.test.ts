@@ -208,6 +208,35 @@ describe("POST /api/inbound", () => {
     });
   });
 
+  it("returns explicit configuration error when provider is misconfigured", async () => {
+    mockedGetEmailProvider.mockReturnValue(
+      buildProvider({
+        validateSignature: vi.fn(() => {
+          throw new Error("Missing required environment variable: RESEND_WEBHOOK_SECRET");
+        }),
+      }),
+    );
+
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(500);
+    expect(json).toMatchObject({
+      ok: false,
+      code: "CONFIGURATION_ERROR",
+      error: "Inbound webhook is misconfigured on the server.",
+      retryable: false,
+    });
+  });
+
   it("reads multipart file content before provider parsing", async () => {
     const provider = buildProvider({
       parseInbound: vi.fn(() => {

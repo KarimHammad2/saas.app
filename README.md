@@ -87,6 +87,14 @@ npm run lint
 Resend webhook signatures are verified using `svix-*` headers and `RESEND_WEBHOOK_SECRET`.
 SES remains a future provider stub and is not used for MVP outbound delivery.
 
+### Resend Webhook Secret Setup (Vercel)
+
+If `/api/inbound` responds with `CONFIGURATION_ERROR`, the server is missing a valid `RESEND_WEBHOOK_SECRET`.
+
+1. In Resend, open your inbound webhook and copy the **Signing secret** (must start with `whsec_`).
+2. In Vercel, open your project settings and add `RESEND_WEBHOOK_SECRET` for the environments you deploy to.
+3. Redeploy, then re-send a webhook event to confirm `/api/inbound` succeeds.
+
 ## MVP Scope Traceability
 
 - **Inbound email handling (plaintext + HTML + forwarding/signature strip + section detection):**

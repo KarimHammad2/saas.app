@@ -111,6 +111,13 @@ function decodeWebhookSecret(secret: string): Buffer {
   return Buffer.from(cleaned.slice("whsec_".length), "base64");
 }
 
+function isWebhookConfigError(error: Error): boolean {
+  return (
+    error.message.includes("Missing required environment variable: RESEND_WEBHOOK_SECRET") ||
+    error.message.includes("RESEND_WEBHOOK_SECRET must start with whsec_.")
+  );
+}
+
 function validateSvixSignature(envelope: InboundEnvelope): boolean {
   const svixId = envelope.headers["svix-id"];
   const svixTimestamp = envelope.headers["svix-timestamp"];
@@ -146,7 +153,11 @@ export const resendProvider: EmailProvider = {
     try {
       return validateSvixSignature(envelope);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown signature validation error";
+      const err = error instanceof Error ? error : new Error("unknown signature validation error");
+      if (isWebhookConfigError(err)) {
+        throw err;
+      }
+      const message = err.message;
       log.error("resend signature verification failed", { message });
       return false;
     }

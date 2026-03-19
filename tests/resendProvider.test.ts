@@ -16,6 +16,22 @@ function signSvixPayload(payload: string, id: string, timestamp: string, secret:
 }
 
 describe("resendProvider.validateSignature", () => {
+  it("throws for missing webhook secret configuration", () => {
+    delete process.env.RESEND_WEBHOOK_SECRET;
+
+    expect(() =>
+      resendProvider.validateSignature({
+        headers: {
+          "svix-id": "msg_123",
+          "svix-timestamp": String(Math.floor(Date.now() / 1000)),
+          "svix-signature": "v1,invalid",
+        },
+        payload: { hello: "world" },
+        rawBody: JSON.stringify({ hello: "world" }),
+      }),
+    ).toThrow("Missing required environment variable: RESEND_WEBHOOK_SECRET");
+  });
+
   it("returns true for valid svix signature", () => {
     const secret = `whsec_${Buffer.from("test_secret").toString("base64")}`;
     process.env.RESEND_WEBHOOK_SECRET = secret;

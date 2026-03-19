@@ -20,6 +20,13 @@ type ParsedRequestPayload = {
   payloadKeys: string[];
 };
 
+function isConfigurationError(error: Error): boolean {
+  return (
+    error.message.includes("Missing required environment variable:") ||
+    error.message.includes("must start with whsec_")
+  );
+}
+
 function toErrorResponse(
   status: number,
   requestId: string,
@@ -147,6 +154,24 @@ export async function POST(request: Request) {
     }
 
     const err = error instanceof Error ? error : new Error("Unexpected server error.");
+    if (isConfigurationError(err)) {
+      log.error("inbound route misconfigured", {
+        requestId,
+        provider: providerName,
+        contentType,
+        payloadKeys,
+        errorName: err.name,
+        message: err.message,
+      });
+      return toErrorResponse(
+        500,
+        requestId,
+        "CONFIGURATION_ERROR",
+        "Inbound webhook is misconfigured on the server.",
+        false,
+      );
+    }
+
     log.error("inbound route failed", {
       requestId,
       provider: providerName,
