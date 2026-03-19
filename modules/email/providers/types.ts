@@ -3,6 +3,7 @@ import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 export interface InboundEnvelope {
   headers: Record<string, string>;
   payload: Record<string, unknown>;
+  rawBody?: string;
 }
 
 export interface OutboundEmail {

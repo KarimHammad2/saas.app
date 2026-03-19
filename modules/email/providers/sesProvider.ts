@@ -6,7 +6,7 @@ export const sesProvider: EmailProvider = {
   name: "ses",
   validateSignature(envelope: InboundEnvelope): boolean {
     void envelope;
-    // Signature verification is provider-specific and can be enforced when SES signing keys are configured.
+    // Future-only provider in this MVP branch; SES signing can be added later.
     return true;
   },
   parseInbound(envelope: InboundEnvelope) {
@@ -15,6 +15,6 @@ export const sesProvider: EmailProvider = {
   },
   async sendEmail(message: OutboundEmail): Promise<void> {
     void message;
-    throw new Error("SES provider is not implemented in MVP. Use Resend.");
+    throw new Error("SES outbound is not implemented for MVP. Use Resend.");
   },
 };

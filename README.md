@@ -48,6 +48,7 @@ MASTER_USER_EMAIL=daniel@saas2.app
 
 # resend
 RESEND_API_KEY=
+RESEND_WEBHOOK_SECRET=
 RESEND_FROM_EMAIL="Frank <frank@domain.com>"
 
 ```
@@ -83,7 +84,38 @@ npm run lint
 - `application/x-www-form-urlencoded`
 - `multipart/form-data`
 
-Provider-specific signature validation is enforced through the selected provider module.
+Resend webhook signatures are verified using `svix-*` headers and `RESEND_WEBHOOK_SECRET`.
+SES remains a future provider stub and is not used for MVP outbound delivery.
+
+## MVP Scope Traceability
+
+- **Inbound email handling (plaintext + HTML + forwarding/signature strip + section detection):**
+  - `modules/email/parseInbound.ts`
+  - `modules/email/providers/normalizeInboundPayload.ts`
+- **Email provider abstraction (`sendEmail`, `parseInbound`, `validateSignature`):**
+  - `modules/email/providers/types.ts`
+  - `modules/email/providers/resendProvider.ts`
+  - `modules/email/providers/sesProvider.ts`
+- **Orchestration boundary (no UI, no direct DB logic in route):**
+  - `app/api/inbound/route.ts`
+  - `modules/orchestration/processInboundEmail.ts`
+- **Memory-layer contract behavior (`storeSummary`, `appendActionItems`, `updateGoals`, profile/suggestion/transaction stores, `getProjectState`):**
+  - `modules/memory/repository.ts`
+- **Domain modules (RBAC, pricing, financial logic, kickoff automation):**
+  - `modules/domain/rbac.ts`
+  - `modules/domain/pricing.ts`
+  - `modules/domain/financial.ts`
+  - `modules/domain/kickoff.ts`
+- **RPM workflow (pending suggestions + approval):**
+  - `modules/orchestration/processInboundEmail.ts`
+  - `modules/memory/repository.ts`
+- **Outbound project-state email (state + approvals + suggestions + transaction history):**
+  - `modules/output/sendProjectEmail.ts`
+  - `modules/output/formatProjectEmail.ts`
+  - `modules/output/generateProjectDocument.ts`
+- **Persistence schema and idempotency support:**
+  - `supabase/migrations/20260318_000001_create_mvp_schema.sql`
+  - `supabase/migrations/20260318_000004_expand_full_mvp_schema.sql`
 
 ## Manual Acceptance Checks
 

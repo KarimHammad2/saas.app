@@ -111,9 +111,10 @@ describe("POST /api/inbound", () => {
   });
 
   it("returns 401 when signature validation fails", async () => {
+    const validateSignature = vi.fn(() => false);
     mockedGetEmailProvider.mockReturnValue(
       buildProvider({
-        validateSignature: vi.fn(() => false),
+        validateSignature,
       }),
     );
 
@@ -134,6 +135,9 @@ describe("POST /api/inbound", () => {
       code: "INVALID_SIGNATURE",
       retryable: false,
     });
+    expect(validateSignature).toHaveBeenCalledOnce();
+    const envelope = validateSignature.mock.calls[0]?.[0];
+    expect(envelope.rawBody).toBe('{"from":"user@example.com","text":"Summary:\\nHi"}');
   });
 
   it("returns 400 when payload parsing fails", async () => {

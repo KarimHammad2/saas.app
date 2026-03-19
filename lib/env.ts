@@ -23,7 +23,11 @@ export function getSupabaseServiceRoleKey(): string {
 }
 
 export function getEmailProviderName(): string {
-  return (process.env.EMAIL_PROVIDER ?? "resend").trim().toLowerCase();
+  const provider = (process.env.EMAIL_PROVIDER ?? "resend").trim().toLowerCase();
+  if (provider !== "resend" && provider !== "ses") {
+    throw new Error(`Unsupported EMAIL_PROVIDER: ${provider}`);
+  }
+  return provider;
 }
 
 export function getMasterUserEmail(): string {
@@ -36,4 +40,8 @@ export function getDefaultFromEmail(): string {
 
 export function getResendApiKey(): string {
   return requireEnv("RESEND_API_KEY");
+}
+
+export function getResendWebhookSecret(): string {
+  return requireEnv("RESEND_WEBHOOK_SECRET");
 }

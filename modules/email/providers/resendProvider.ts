@@ -1,9 +1,10 @@
-import { getDefaultFromEmail } from "@/lib/env";
+import { getDefaultFromEmail, getResendWebhookSecret } from "@/lib/env";
 import { log } from "@/lib/log";
 import { getResendClient } from "@/lib/resend";
 import { parseInbound } from "@/modules/email/parseInbound";
 import { normalizeResendPayload } from "@/modules/email/providers/normalizeInboundPayload";
 import type { EmailProvider, InboundEnvelope, OutboundEmail } from "@/modules/email/providers/types";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 type UnknownObject = Record<string, unknown>;
 
@@ -88,12 +89,67 @@ async function hydrateResendBodyIfNeeded(payload: UnknownObject): Promise<Unknow
   }
 }
 
+function parseSvixSignatures(signatureHeader: string): string[] {
+  return signatureHeader
+    .split(" ")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .flatMap((segment) => {
+      const [version, value] = segment.split(",", 2);
+      if (version !== "v1" || !value) {
+        return [];
+      }
+      return [value];
+    });
+}
+
+function decodeWebhookSecret(secret: string): Buffer {
+  const cleaned = secret.trim();
+  if (!cleaned.startsWith("whsec_")) {
+    throw new Error("RESEND_WEBHOOK_SECRET must start with whsec_.");
+  }
+  return Buffer.from(cleaned.slice("whsec_".length), "base64");
+}
+
+function validateSvixSignature(envelope: InboundEnvelope): boolean {
+  const svixId = envelope.headers["svix-id"];
+  const svixTimestamp = envelope.headers["svix-timestamp"];
+  const svixSignature = envelope.headers["svix-signature"];
+  const rawBody = envelope.rawBody ?? "";
+
+  if (!svixId || !svixTimestamp || !svixSignature || !rawBody) {
+    return false;
+  }
+
+  const secret = decodeWebhookSecret(getResendWebhookSecret());
+  const signedContent = `${svixTimestamp}.${svixId}.${rawBody}`;
+  const expected = createHmac("sha256", secret).update(signedContent).digest("base64");
+  const expectedBuffer = Buffer.from(expected);
+
+  const providedSignatures = parseSvixSignatures(svixSignature);
+  if (providedSignatures.length === 0) {
+    return false;
+  }
+
+  return providedSignatures.some((signature) => {
+    const candidate = Buffer.from(signature);
+    if (candidate.length !== expectedBuffer.length) {
+      return false;
+    }
+    return timingSafeEqual(candidate, expectedBuffer);
+  });
+}
+
 export const resendProvider: EmailProvider = {
   name: "resend",
   validateSignature(envelope: InboundEnvelope): boolean {
-    void envelope;
-    // Resend inbound validation can be added here if/when webhook signing is enabled.
-    return true;
+    try {
+      return validateSvixSignature(envelope);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown signature validation error";
+      log.error("resend signature verification failed", { message });
+      return false;
+    }
   },
   async parseInbound(envelope: InboundEnvelope) {
     const normalizedPayload = normalizeResendPayload(envelope.payload);

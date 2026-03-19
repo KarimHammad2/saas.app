@@ -89,6 +89,7 @@ export async function POST(request: Request) {
   let providerName = "unknown";
   let contentType = request.headers.get("content-type") ?? "";
   let payloadKeys: string[] = [];
+  const rawBody = await request.clone().text();
 
   try {
     const provider = getEmailProvider();
@@ -99,6 +100,7 @@ export async function POST(request: Request) {
     const envelope = {
       headers: headersToObject(request.headers),
       payload: parsedRequest.payload,
+      rawBody,
     };
 
     if (!provider.validateSignature(envelope)) {
