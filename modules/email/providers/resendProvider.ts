@@ -129,7 +129,8 @@ function validateSvixSignature(envelope: InboundEnvelope): boolean {
   }
 
   const secret = decodeWebhookSecret(getResendWebhookSecret());
-  const signedContent = `${svixTimestamp}.${svixId}.${rawBody}`;
+  // Svix signs as: <id>.<timestamp>.<payload>
+  const signedContent = `${svixId}.${svixTimestamp}.${rawBody}`;
   const expected = createHmac("sha256", secret).update(signedContent).digest("base64");
   const expectedBuffer = Buffer.from(expected);
 

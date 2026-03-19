@@ -10,7 +10,7 @@ import { resendProvider } from "@/modules/email/providers/resendProvider";
 
 function signSvixPayload(payload: string, id: string, timestamp: string, secret: string): string {
   const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
-  const signedContent = `${timestamp}.${id}.${payload}`;
+  const signedContent = `${id}.${timestamp}.${payload}`;
   const digest = createHmac("sha256", key).update(signedContent).digest("base64");
   return `v1,${digest}`;
 }
