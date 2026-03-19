@@ -58,6 +58,33 @@ Approve suggestion abc-123
     expect(parsed.parsed.approvals[0]).toEqual({ suggestionId: "abc-123", decision: "approve" });
   });
 
+  it("decodes HTML entities in labeled sections", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "[Project: Revamp] Update",
+      text: `
+Summary:
+Tom &amp; Jerry
+
+Action Items:
+- Draft &amp; review
+
+Decisions:
+- Use &lt;Supabase&gt;
+`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+
+    expect(parsed.from).toBe("user@example.com");
+    expect(parsed.parsed.summary).toBe("Tom & Jerry");
+    expect(parsed.parsed.goals).toEqual([]);
+    expect(parsed.parsed.actionItems).toEqual(["Draft & review"]);
+    expect(parsed.parsed.decisions).toEqual(["Use <Supabase>"]);
+    expect(parsed.parsed.risks).toEqual([]);
+    expect(parsed.parsed.notes).toEqual([]);
+  });
+
   it("parses resend email.received payload shape", () => {
     const payload = {
       id: "evt_123",

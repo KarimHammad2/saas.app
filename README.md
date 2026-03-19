@@ -17,15 +17,11 @@ This repository implements the SaaS² email-native loop:
   - kickoff automation
   - RPM suggestion approvals
 - Outbound state email containing:
-  - Summary
+  - Overview
   - Goals
-  - Action Items
-  - Decisions
+  - Tasks
   - Risks
-  - Recommendations
-  - pending RPM suggestions
-  - remainder balance
-  - transaction history
+  - Notes
 
 ## Stack
 

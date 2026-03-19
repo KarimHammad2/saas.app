@@ -1,34 +1,36 @@
 import type { ProjectEmailPayload } from "@/modules/output/types";
 
-const EMPTY_SECTION_ITEM = "None";
-
-function formatBulletList(values: string[]): string {
-  const lines = values.length > 0 ? values : [EMPTY_SECTION_ITEM];
-  return lines.map((line) => `- ${line}`).join("\n");
+function formatBulletList(values: string[], emptyPlaceholder: string): string {
+  if (values.length === 0) {
+    // Keep the document "paste into ChatGPT" friendly: placeholders are plain text,
+    // not bullet rows like "- None".
+    return emptyPlaceholder;
+  }
+  return values.map((line) => `- ${line}`).join("\n");
 }
 
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   return [
-    "# Project Overview",
+    "# Overview",
     "",
-    context.summary || "No overview yet.",
+    context.summary || "(No overview yet)",
     "",
     "# Goals",
     "",
-    formatBulletList(context.goals),
+    formatBulletList(context.goals, "(No goals yet)"),
     "",
     "# Tasks",
     "",
-    formatBulletList(context.actionItems),
+    formatBulletList(context.actionItems, "(No tasks yet)"),
     "",
     "# Risks",
     "",
-    formatBulletList(context.risks),
+    formatBulletList(context.risks, "(No risks yet)"),
     "",
     "# Notes",
     "",
-    formatBulletList(context.notes),
+    formatBulletList(context.notes, "(No notes yet)"),
     "",
   ].join("\n");
 }

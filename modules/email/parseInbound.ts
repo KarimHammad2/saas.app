@@ -88,8 +88,44 @@ function pickSource(root: Record<string, unknown>): Record<string, unknown> {
   return root;
 }
 
+function decodeHtmlEntities(content: string): string {
+  let output = content;
+
+  // Common named entities seen in email clients.
+  output = output
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&nbsp;/gi, " ");
+
+  // Numeric entities: &#123; and &#x1A;
+  output = output
+    .replace(/&#(\d+);/g, (match, num) => {
+      const codePoint = Number(num);
+      if (!Number.isFinite(codePoint)) return match;
+      try {
+        return String.fromCodePoint(codePoint);
+      } catch {
+        return match;
+      }
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (match, hex) => {
+      const codePoint = parseInt(hex, 16);
+      if (!Number.isFinite(codePoint)) return match;
+      try {
+        return String.fromCodePoint(codePoint);
+      } catch {
+        return match;
+      }
+    });
+
+  return output;
+}
+
 function normalizeWhitespace(content: string): string {
-  return content
+  return decodeHtmlEntities(content)
     .replace(/\r\n/g, "\n")
     .replace(/\u2022/g, "-")
     .replace(/[–—]/g, "-")
