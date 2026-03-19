@@ -173,9 +173,11 @@ export const resendProvider: EmailProvider = {
       from: getDefaultFromEmail(),
       to: message.to,
       cc: message.cc,
+      bcc: message.bcc,
       subject: message.subject,
       text: message.text,
       html: message.html,
+      attachments: message.attachments,
     });
 
     if (error) {

@@ -2,7 +2,7 @@ import { getMasterUserEmail } from "@/lib/env";
 import { log } from "@/lib/log";
 import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
 import { applyTierFinancials } from "@/modules/domain/financial";
-import { buildKickoffSummary } from "@/modules/domain/kickoff";
+import { runKickoffFlow } from "@/modules/domain/kickoffService";
 import { getNextTier } from "@/modules/domain/pricing";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
 import { MemoryRepository } from "@/modules/memory/repository";
@@ -63,12 +63,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   await repo.storeRawProjectUpdate(project.id, event.rawBody, event as unknown as Record<string, unknown>);
 
   if (userCreated || projectCreated) {
-    const kickoff = buildKickoffSummary(event);
-    await repo.storeSummary(project.id, kickoff.summary);
-    await repo.updateGoals(project.id, kickoff.goals);
-    if (kickoff.constraints.length > 0) {
-      await repo.storeUserProfileContext(user.id, `Initial constraints:\n${kickoff.constraints.map((item) => `- ${item}`).join("\n")}`);
-    }
+    await runKickoffFlow(repo, event, user.id, project.id);
   }
 
   const activeRpmEmail = await repo.getActiveRpm(project.id);
@@ -97,7 +92,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   for (const approval of event.parsed.approvals) {
     if (canModifyUserProfile(role)) {
-      await repo.approveSuggestion(user.id, approval.suggestionId, event.from);
+      if (approval.decision === "approve") {
+        await repo.approveSuggestion(user.id, approval.suggestionId, event.from);
+      } else {
+        await repo.rejectSuggestion(user.id, approval.suggestionId, event.from);
+      }
     }
   }
 

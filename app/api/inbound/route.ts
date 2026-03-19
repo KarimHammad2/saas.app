@@ -3,8 +3,7 @@ import { NextResponse } from "next/server";
 import { log } from "@/lib/log";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import { getEmailProvider } from "@/modules/email/providers";
-import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
-import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
+import { handleInboundEmailEvent } from "@/src/orchestration/emailHandler";
 
 function headersToObject(headers: Headers): Record<string, string> {
   const result: Record<string, string> = {};
@@ -121,17 +120,16 @@ export async function POST(request: Request) {
     }
 
     const event = await provider.parseInbound(envelope);
-    const processed = await processInboundEmail(event);
-    await sendProjectEmail(processed.recipients, processed.payload);
+    const processed = await handleInboundEmailEvent(event);
 
     return NextResponse.json(
       {
         ok: true,
         provider: provider.name,
-        userId: processed.context.userId,
-        projectId: processed.context.projectId,
-        eventId: processed.context.eventId,
-        duplicate: processed.context.duplicate,
+        userId: processed.userId,
+        projectId: processed.projectId,
+        eventId: event.eventId,
+        duplicate: processed.duplicate,
         requestId,
       },
       {

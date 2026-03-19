@@ -82,6 +82,7 @@ export interface NormalizedEmailEvent {
     transactionEvent: TransactionEvent | null;
     approvals: {
       suggestionId: string;
+      decision: "approve" | "reject";
     }[];
     additionalEmails: string[];
   };

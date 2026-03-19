@@ -1,0 +1,101 @@
+import { getAdminBccEmail, getEnableAdminBcc } from "@/lib/env";
+import { getSupabaseAdminClient } from "@/lib/supabase";
+
+interface EmailTemplate {
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+}
+
+interface RuntimeConfig {
+  adminBccEnabled: boolean;
+  adminBccAddress: string | null;
+  llmInstruction: string;
+  projectUpdateTemplate: EmailTemplate;
+}
+
+const DEFAULT_PROJECT_TEMPLATE: EmailTemplate = {
+  subject: "Project Update",
+  textBody: "Project Update\n\n{{summary}}\n\nAttached latest project memory document.",
+  htmlBody: "<!doctype html><html><body><h2>Project Update</h2><p>{{summary}}</p><p>Attached latest project memory document.</p></body></html>",
+};
+
+const DEFAULT_INSTRUCTION = "Use the attached project document as authoritative context for your external LLM.";
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function renderTemplate(template: string, tokens: Record<string, string>): string {
+  let output = template;
+  for (const [key, value] of Object.entries(tokens)) {
+    output = output.replaceAll(`{{${key}}}`, value);
+  }
+  return output;
+}
+
+export function renderProjectUpdateTemplate(template: EmailTemplate, summary: string, document: string, instruction: string) {
+  const values = {
+    summary,
+    document,
+    instruction,
+  };
+  return {
+    subject: renderTemplate(template.subject, values) || DEFAULT_PROJECT_TEMPLATE.subject,
+    text: renderTemplate(template.textBody, values),
+    html: renderTemplate(template.htmlBody, values),
+  };
+}
+
+export async function getRuntimeConfig(): Promise<RuntimeConfig> {
+  const supabase = getSupabaseAdminClient();
+
+  const [settingsResult, templateResult, instructionResult] = await Promise.all([
+    supabase.from("system_settings").select("key, value_json").in("key", ["email.admin_bcc.enabled", "email.admin_bcc.address"]),
+    supabase
+      .from("email_templates")
+      .select("subject, text_body, html_body")
+      .eq("key", "project_update")
+      .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
+    supabase.from("instructions").select("content").eq("key", "llm_document_usage").maybeSingle<{ content: string }>(),
+  ]);
+
+  const settingRows = settingsResult.error ? [] : settingsResult.data ?? [];
+  const enabledRow = settingRows.find((row) => row.key === "email.admin_bcc.enabled");
+  const addressRow = settingRows.find((row) => row.key === "email.admin_bcc.address");
+
+  const enabledJson = asObject(enabledRow?.value_json);
+  const addressJson = asObject(addressRow?.value_json);
+
+  const adminBccEnabled = asBoolean(enabledJson.enabled) || getEnableAdminBcc();
+  const dbAddress = asString(addressJson.address).toLowerCase();
+  const adminBccAddress = dbAddress || getAdminBccEmail();
+
+  const template = templateResult.error || !templateResult.data
+    ? DEFAULT_PROJECT_TEMPLATE
+    : {
+        subject: templateResult.data.subject || DEFAULT_PROJECT_TEMPLATE.subject,
+        textBody: templateResult.data.text_body || DEFAULT_PROJECT_TEMPLATE.textBody,
+        htmlBody: templateResult.data.html_body || DEFAULT_PROJECT_TEMPLATE.htmlBody,
+      };
+
+  const llmInstruction = instructionResult.error ? DEFAULT_INSTRUCTION : instructionResult.data?.content?.trim() || DEFAULT_INSTRUCTION;
+
+  return {
+    adminBccEnabled,
+    adminBccAddress,
+    llmInstruction,
+    projectUpdateTemplate: template,
+  };
+}

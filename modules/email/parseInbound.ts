@@ -10,9 +10,11 @@ export class InboundParseError extends Error {
 const SECTION_LABELS = [
   "Summary",
   "Goals",
+  "Tasks",
   "Action Items",
   "Decisions",
   "Risks",
+  "Notes",
   "Recommendations",
   "Transaction",
   "UserProfile",
@@ -302,11 +304,15 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
   return event;
 }
 
-function parseApprovals(content: string): { suggestionId: string }[] {
-  const approvals: { suggestionId: string }[] = [];
-  const regex = /approve suggestion\s+([a-f0-9-]{6,})/gi;
-  for (const match of content.matchAll(regex)) {
-    approvals.push({ suggestionId: match[1] });
+function parseApprovals(content: string): Array<{ suggestionId: string; decision: "approve" | "reject" }> {
+  const approvals: Array<{ suggestionId: string; decision: "approve" | "reject" }> = [];
+  const approveRegex = /approve suggestion\s+([a-f0-9-]{6,})/gi;
+  for (const match of content.matchAll(approveRegex)) {
+    approvals.push({ suggestionId: match[1], decision: "approve" });
+  }
+  const rejectRegex = /reject suggestion\s+([a-f0-9-]{6,})/gi;
+  for (const match of content.matchAll(rejectRegex)) {
+    approvals.push({ suggestionId: match[1], decision: "reject" });
   }
   return approvals;
 }
@@ -393,7 +399,7 @@ function extractBodyContent(source: Record<string, unknown>): string {
 export function parseNormalizedContent(content: string) {
   const summary = extractSection(content, "Summary");
   const goals = toBulletList(extractSection(content, "Goals"));
-  const actionItems = toBulletList(extractSection(content, "Action Items"));
+  const actionItems = toBulletList(extractSection(content, "Action Items") || extractSection(content, "Tasks"));
   const decisions = toBulletList(extractSection(content, "Decisions"));
   const risks = toBulletList(extractSection(content, "Risks"));
   const recommendations = toBulletList(extractSection(content, "Recommendations"));

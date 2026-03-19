@@ -1,4 +1,5 @@
 import { sendEmail } from "@/modules/email/sendEmail";
+import { getRuntimeConfig, renderProjectUpdateTemplate } from "@/modules/config/runtimeConfig";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
 import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailPayload } from "@/modules/output/types";
@@ -18,19 +19,30 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     throw new Error("At least one recipient is required.");
   }
 
+  const runtime = await getRuntimeConfig();
   const document = generateProjectDocument(payload);
   const projectHtml = formatProjectEmail(payload);
+  const summary = payload.context.summary || "Latest project memory regenerated.";
+  const rendered = renderProjectUpdateTemplate(runtime.projectUpdateTemplate, summary, document, runtime.llmInstruction);
   const documentHtml = [
     "<h2>Download full project document</h2>",
     "<p>Included below in this email:</p>",
     `<pre>${escapeHtml(document)}</pre>`,
   ].join("\n");
-  const html = ["<!doctype html>", "<html>", "<body>", projectHtml, documentHtml, "</body>", "</html>"].join("\n");
+  const html = [rendered.html, "<hr/>", projectHtml, documentHtml].join("\n");
+  const bcc = runtime.adminBccEnabled && runtime.adminBccAddress ? runtime.adminBccAddress : undefined;
 
   await sendEmail({
     to: to.join(","),
-    subject: "Project Update",
-    text: `Project Update\n\n${document}\n\nDownload full project document:\nIncluded below in this message.`,
+    bcc,
+    subject: rendered.subject,
+    text: `${rendered.text}\n\n${document}\n\n${runtime.llmInstruction}`,
     html,
+    attachments: [
+      {
+        filename: "project-document.md",
+        content: document,
+      },
+    ],
   });
 }

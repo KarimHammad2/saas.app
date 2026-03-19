@@ -429,6 +429,36 @@ export class MemoryRepository {
     await this.storeUserProfileContext(userId, suggestion.content);
   }
 
+  async rejectSuggestion(userId: string, suggestionId: string, approverEmail: string): Promise<void> {
+    const { data: suggestion, error: fetchError } = await this.supabase
+      .from("rpm_suggestions")
+      .select("id, user_id, status")
+      .eq("id", suggestionId)
+      .eq("user_id", userId)
+      .maybeSingle<{ id: string; user_id: string; status: "pending" | "approved" | "rejected" }>();
+
+    if (fetchError || !suggestion) {
+      throw new Error(`Failed to find suggestion to reject: ${fetchError?.message ?? "Not found"}`);
+    }
+
+    if (suggestion.status !== "pending") {
+      return;
+    }
+
+    const { error } = await this.supabase
+      .from("rpm_suggestions")
+      .update({
+        status: "rejected",
+        resolved_at: new Date().toISOString(),
+        resolved_by_email: normalizeEmail(approverEmail),
+      })
+      .eq("id", suggestionId);
+
+    if (error) {
+      throw new Error(`Failed to reject suggestion: ${error.message}`);
+    }
+  }
+
   async getPendingSuggestions(userId: string): Promise<RPMSuggestion[]> {
     const { data, error } = await this.supabase
       .from("rpm_suggestions")

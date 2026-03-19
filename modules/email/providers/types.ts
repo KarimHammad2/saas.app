@@ -9,9 +9,14 @@ export interface InboundEnvelope {
 export interface OutboundEmail {
   to: string[];
   cc?: string[];
+  bcc?: string[];
   subject: string;
   text: string;
   html?: string;
+  attachments?: Array<{
+    filename: string;
+    content: string;
+  }>;
 }
 
 export interface EmailProvider {

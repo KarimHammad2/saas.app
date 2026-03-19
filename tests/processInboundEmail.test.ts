@@ -16,6 +16,7 @@ const repoState = {
   storeUserProfileContext: vi.fn(),
   storeRPMSuggestion: vi.fn(),
   approveSuggestion: vi.fn(),
+  rejectSuggestion: vi.fn(),
   addAdditionalEmails: vi.fn(),
   setUserTier: vi.fn(),
   assignRpm: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("@/modules/memory/repository", () => {
       storeUserProfileContext = repoState.storeUserProfileContext;
       storeRPMSuggestion = repoState.storeRPMSuggestion;
       approveSuggestion = repoState.approveSuggestion;
+      rejectSuggestion = repoState.rejectSuggestion;
       addAdditionalEmails = repoState.addAdditionalEmails;
       setUserTier = repoState.setUserTier;
       assignRpm = repoState.assignRpm;
@@ -114,5 +116,73 @@ describe("processInboundEmail", () => {
     expect(result.recipients).toEqual(["user@example.com", "rpm@example.com"]);
     expect(result.context.projectId).toBe("p1");
     expect(repoState.storeSummary).toHaveBeenCalledWith("p1", "hello");
+  });
+
+  it("marks duplicate events and skips mutating writes", async () => {
+    repoState.registerInboundEvent.mockResolvedValue(false);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e1",
+      provider: "resend",
+      providerEventId: "m1",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      to: [],
+      cc: [],
+      subject: "Update",
+      rawBody: "Summary: hello",
+      parsed: {
+        summary: "hello",
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.context.duplicate).toBe(true);
+    expect(repoState.storeRawProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it("supports approve and reject suggestion commands", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e2",
+      provider: "resend",
+      providerEventId: "m2",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      to: [],
+      cc: [],
+      subject: "Approvals",
+      rawBody: "approve suggestion abc123 reject suggestion def456",
+      parsed: {
+        summary: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [
+          { suggestionId: "abc123", decision: "approve" },
+          { suggestionId: "def456", decision: "reject" },
+        ],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.approveSuggestion).toHaveBeenCalledWith("u1", "abc123", "user@example.com");
+    expect(repoState.rejectSuggestion).toHaveBeenCalledWith("u1", "def456", "user@example.com");
   });
 });

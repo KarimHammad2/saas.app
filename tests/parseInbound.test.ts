@@ -54,7 +54,7 @@ Approve suggestion abc-123
     expect(parsed.parsed.userProfileContext).toContain("Prefer concise");
     expect(parsed.parsed.rpmSuggestion?.content).toContain("weekly updates");
     expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(20);
-    expect(parsed.parsed.approvals[0]).toEqual({ suggestionId: "abc-123" });
+    expect(parsed.parsed.approvals[0]).toEqual({ suggestionId: "abc-123", decision: "approve" });
   });
 
   it("parses resend email.received payload shape", () => {

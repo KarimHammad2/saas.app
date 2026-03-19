@@ -45,3 +45,12 @@ export function getResendApiKey(): string {
 export function getResendWebhookSecret(): string {
   return requireEnv("RESEND_WEBHOOK_SECRET");
 }
+
+export function getEnableAdminBcc(): boolean {
+  return (process.env.ENABLE_ADMIN_BCC ?? "").trim().toLowerCase() === "true";
+}
+
+export function getAdminBccEmail(): string | null {
+  const value = process.env.ADMIN_BCC_EMAIL?.trim().toLowerCase();
+  return value ? value : null;
+}

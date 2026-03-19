@@ -1,0 +1,32 @@
+import { getMasterUserEmail } from "@/lib/env";
+import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { buildKickoffSummary } from "@/modules/domain/kickoff";
+
+interface KickoffRepository {
+  storeSummary(projectId: string, summary: string): Promise<void>;
+  updateGoals(projectId: string, goals: string[]): Promise<void>;
+  storeUserProfileContext(userId: string, contextText: string): Promise<void>;
+  getActiveRpm(projectId: string): Promise<string | null>;
+  assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void>;
+}
+
+export async function runKickoffFlow(
+  repo: KickoffRepository,
+  event: NormalizedEmailEvent,
+  userId: string,
+  projectId: string,
+): Promise<void> {
+  const kickoff = buildKickoffSummary(event);
+  await repo.storeSummary(projectId, kickoff.summary);
+  await repo.updateGoals(projectId, kickoff.goals);
+
+  if (kickoff.constraints.length > 0) {
+    const content = `Initial constraints:\n${kickoff.constraints.map((item) => `- ${item}`).join("\n")}`;
+    await repo.storeUserProfileContext(userId, content);
+  }
+
+  const activeRpm = await repo.getActiveRpm(projectId);
+  if (!activeRpm) {
+    await repo.assignRpm(projectId, getMasterUserEmail(), "system@saas2.app");
+  }
+}

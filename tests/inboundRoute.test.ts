@@ -3,19 +3,14 @@ import { InboundParseError } from "@/modules/email/parseInbound";
 import type { EmailProvider } from "@/modules/email/providers/types";
 import { POST } from "@/app/api/inbound/route";
 import { getEmailProvider } from "@/modules/email/providers";
-import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
-import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
+import { handleInboundEmailEvent } from "@/src/orchestration/emailHandler";
 
 vi.mock("@/modules/email/providers", () => ({
   getEmailProvider: vi.fn(),
 }));
 
-vi.mock("@/modules/orchestration/processInboundEmail", () => ({
-  processInboundEmail: vi.fn(),
-}));
-
-vi.mock("@/modules/output/sendProjectEmail", () => ({
-  sendProjectEmail: vi.fn(),
+vi.mock("@/src/orchestration/emailHandler", () => ({
+  handleInboundEmailEvent: vi.fn(),
 }));
 
 vi.mock("@/lib/log", () => ({
@@ -27,8 +22,7 @@ vi.mock("@/lib/log", () => ({
 }));
 
 const mockedGetEmailProvider = vi.mocked(getEmailProvider);
-const mockedProcessInboundEmail = vi.mocked(processInboundEmail);
-const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
+const mockedHandleInboundEmailEvent = vi.mocked(handleInboundEmailEvent);
 
 function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
   const baseEvent = {
@@ -72,17 +66,11 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
 describe("POST /api/inbound", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mockedProcessInboundEmail.mockResolvedValue({
-      recipients: ["user@example.com"],
-      payload: { subject: "State Update", text: "Hello", html: "<p>Hello</p>" },
-      context: {
-        userId: "user_1",
-        projectId: "project_1",
-        eventId: "event_1",
-        duplicate: false,
-      },
+    mockedHandleInboundEmailEvent.mockResolvedValue({
+      userId: "user_1",
+      projectId: "project_1",
+      duplicate: false,
     });
-    mockedSendProjectEmail.mockResolvedValue();
   });
 
   it("returns 200 for valid inbound webhook", async () => {
@@ -104,10 +92,32 @@ describe("POST /api/inbound", () => {
 
     expect(response.status).toBe(200);
     expect(json.ok).toBe(true);
+    expect(json.duplicate).toBe(false);
     expect(json.requestId).toBeTypeOf("string");
     expect(response.headers.get("x-request-id")).toBe(json.requestId);
-    expect(mockedProcessInboundEmail).toHaveBeenCalledOnce();
-    expect(mockedSendProjectEmail).toHaveBeenCalledOnce();
+    expect(mockedHandleInboundEmailEvent).toHaveBeenCalledOnce();
+  });
+
+  it("returns duplicate=true when idempotency detects replay", async () => {
+    mockedGetEmailProvider.mockReturnValue(buildProvider());
+    mockedHandleInboundEmailEvent.mockResolvedValue({
+      userId: "user_1",
+      projectId: "project_1",
+      duplicate: true,
+    });
+
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+    expect(response.status).toBe(200);
+    expect(json.duplicate).toBe(true);
   });
 
   it("returns 401 when signature validation fails", async () => {
@@ -186,7 +196,7 @@ describe("POST /api/inbound", () => {
 
   it("returns 500 when downstream processing fails", async () => {
     mockedGetEmailProvider.mockReturnValue(buildProvider());
-    mockedProcessInboundEmail.mockRejectedValue(new Error("database unavailable"));
+    mockedHandleInboundEmailEvent.mockRejectedValue(new Error("database unavailable"));
 
     const request = new Request("http://localhost/api/inbound", {
       method: "POST",
