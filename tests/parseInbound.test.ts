@@ -267,4 +267,24 @@ Project Remainder: 1`,
     expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(1);
     expect(parsed.parsed.transactionEvent?.projectRemainder).toBe(1);
   });
+
+  it("parses simple transaction hours/rate and approval command id", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      text: `Transaction:
+Hours: 10
+Rate: $50
+
+Approve suggestion 123`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(10);
+    expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(50);
+    expect(parsed.parsed.transactionEvent?.allocatedHours).toBe(9);
+    expect(parsed.parsed.transactionEvent?.bufferHours).toBe(1);
+    expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(50);
+    expect(parsed.parsed.approvals).toEqual([{ suggestionId: "123", decision: "approve" }]);
+    expect(parsed.parsed.notes).toEqual([]);
+  });
 });

@@ -25,6 +25,31 @@ export function extractProfileSignals(rawBody: string): UserProfileStructuredCon
   const text = rawBody.toLowerCase();
   const out: UserProfileStructuredContext = {};
 
+  const roleMatch = text.match(/\b(?:i am|i'm|im)\s+(?:a|an)?\s*([a-z][a-z\s-]{2,40})\s+building\b/);
+  if (roleMatch?.[1]) {
+    out.role = roleMatch[1].replace(/\s+/g, " ").trim();
+  } else if (/\bsolo founder\b/.test(text)) {
+    out.role = "solo founder";
+  }
+
+  const businessMatch = text.match(/\bbuilding\s+(?:a|an)?\s*([a-z0-9][a-z0-9\s-]{1,40})\b/);
+  if (businessMatch?.[1]) {
+    const business = businessMatch[1].replace(/\s+/g, " ").trim().replace(/[.!,;:]$/, "");
+    out.business = business.toUpperCase() === "SAAS" ? "SaaS" : business;
+  } else if (/\bsaas\b|\bsoftware as a service\b/.test(text)) {
+    out.business = "SaaS";
+  }
+
+  const preferencesList = [
+    ...rawBody.matchAll(/\b(?:prefers?|preference|likes?|wants?)\s+([a-z0-9][a-z0-9\s-]{2,60})/gi),
+    ...rawBody.matchAll(/\b(short answers?|concise answers?|brief answers?)\b/gi),
+  ]
+    .map((match) => (match[1] ?? match[0] ?? "").trim().replace(/[.!,;:]$/, ""))
+    .filter(Boolean);
+  if (preferencesList.length > 0) {
+    out.preferencesList = Array.from(new Set(preferencesList));
+  }
+
   if (/\bsolo founder\b|\bindie\b|\bone[- ]person\b|\bfounder\b/.test(text)) {
     out.business_type = "solo_founder";
   } else if (/\bstartup\b|\bsmall team\b/.test(text)) {
@@ -64,7 +89,11 @@ export function mergeStructuredProfile(
   existing: UserProfileStructuredContext,
   extracted: UserProfileStructuredContext,
 ): UserProfileStructuredContext {
+  const nextPreferencesList = Array.from(new Set([...(existing.preferencesList ?? []), ...(extracted.preferencesList ?? [])]));
   return {
+    role: extracted.role ?? existing.role,
+    business: extracted.business ?? existing.business,
+    preferencesList: nextPreferencesList.length > 0 ? nextPreferencesList : undefined,
     business_type: extracted.business_type ?? existing.business_type,
     goals_style: extracted.goals_style ?? existing.goals_style,
     tone: extracted.tone ?? existing.tone,

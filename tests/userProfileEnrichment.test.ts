@@ -35,13 +35,16 @@ function baseEvent(rawBody: string): NormalizedEmailEvent {
 describe("userProfileEnrichment", () => {
   it("extracts solo founder signal", () => {
     const s = extractProfileSignals("I'm a solo founder building a SaaS.");
+    expect(s.role).toBe("solo founder");
+    expect(s.business).toBe("SaaS");
     expect(s.business_type).toBe("solo_founder");
   });
 
   it("merges structured context across emails", () => {
     const first = enrichUserProfileFromEmailSignals({}, baseEvent("solo founder indie project"));
     expect(first.business_type).toBe("solo_founder");
-    const second = enrichUserProfileFromEmailSignals(first, baseEvent("We sell B2B to enterprises"));
+    const second = enrichUserProfileFromEmailSignals(first, baseEvent("We sell B2B to enterprises and prefer short answers."));
     expect(second.preferences?.market).toBe("B2B");
+    expect(second.preferencesList).toEqual(["short answers"]);
   });
 });

@@ -59,7 +59,13 @@ function parseStructuredContextJson(value: unknown): UserProfileStructuredContex
   }
   const o = value as Record<string, unknown>;
   const prefs = o.preferences;
+  const preferencesList = Array.isArray(o.preferencesList)
+    ? o.preferencesList.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean)
+    : [];
   return {
+    role: typeof o.role === "string" ? o.role : undefined,
+    business: typeof o.business === "string" ? o.business : undefined,
+    preferencesList: preferencesList.length > 0 ? preferencesList : undefined,
     business_type: typeof o.business_type === "string" ? o.business_type : undefined,
     goals_style: typeof o.goals_style === "string" ? o.goals_style : undefined,
     tone: typeof o.tone === "string" ? o.tone : undefined,
@@ -81,6 +87,71 @@ function asStringArray(value: unknown): string[] {
     return [];
   }
   return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function dedupePreserveOrder(values: string[]): string[] {
+  return Array.from(new Set(values.map((entry) => entry.trim()).filter(Boolean)));
+}
+
+function parseSuggestionIntoStructuredContext(content: string): Partial<UserProfileStructuredContext> {
+  const text = content.trim();
+  if (!text) {
+    return {};
+  }
+
+  const lowered = text.toLowerCase();
+  const patch: Partial<UserProfileStructuredContext> = {};
+
+  // Deterministic extraction only; no guessing.
+  const roleMatch = lowered.match(/\b(?:i am|i'm|im)\s+(?:a|an)?\s*([a-z][a-z\s-]{2,40})\s+building\b/);
+  if (roleMatch?.[1]) {
+    patch.role = roleMatch[1].replace(/\s+/g, " ").trim();
+  } else if (/\bsolo founder\b/.test(lowered)) {
+    patch.role = "solo founder";
+  }
+
+  const businessMatch = lowered.match(/\bbuilding\s+(?:a|an)?\s*([a-z0-9][a-z0-9\s-]{1,40})\b/);
+  if (businessMatch?.[1]) {
+    patch.business = businessMatch[1].replace(/\s+/g, " ").trim().replace(/[.!,;:]$/, "");
+  } else if (/\bsaas\b/.test(lowered)) {
+    patch.business = "SaaS";
+  }
+
+  const preferenceMatches = [
+    ...text.matchAll(/\b(?:prefers?|preference|likes?|wants?)\s+([a-z0-9][a-z0-9\s-]{2,60})/gi),
+    ...text.matchAll(/\b(short answers?|concise answers?|brief answers?)\b/gi),
+  ];
+  const preferenceList = dedupePreserveOrder(
+    preferenceMatches
+      .map((match) => (match[1] ?? match[0] ?? "").trim().replace(/[.!,;:]$/, ""))
+      .filter(Boolean),
+  );
+  if (preferenceList.length > 0) {
+    patch.preferencesList = preferenceList;
+  }
+
+  return patch;
+}
+
+function applyStructuredPatch(
+  existing: UserProfileStructuredContext,
+  patch: Partial<UserProfileStructuredContext>,
+): UserProfileStructuredContext {
+  const next: UserProfileStructuredContext = {
+    ...existing,
+  };
+
+  if (patch.role) {
+    next.role = patch.role;
+  }
+  if (patch.business) {
+    next.business = patch.business;
+  }
+  if (patch.preferencesList && patch.preferencesList.length > 0) {
+    next.preferencesList = dedupePreserveOrder([...(existing.preferencesList ?? []), ...patch.preferencesList]);
+  }
+
+  return next;
 }
 
 export class MemoryRepository {
@@ -617,8 +688,11 @@ export class MemoryRepository {
       .eq("user_id", userId)
       .maybeSingle<{ id: string; content: string; user_id: string; status: "pending" | "approved" | "rejected" }>();
 
-    if (fetchError || !suggestion) {
-      throw new Error(`Failed to find suggestion to approve: ${fetchError?.message ?? "Not found"}`);
+    if (fetchError) {
+      throw new Error(`Failed to find suggestion to approve: ${fetchError.message}`);
+    }
+    if (!suggestion) {
+      return;
     }
 
     if (suggestion.status !== "pending") {
@@ -639,6 +713,15 @@ export class MemoryRepository {
     }
 
     await this.storeUserProfileContext(userId, suggestion.content);
+
+    const profile = await this.getUserProfile(userId);
+    const structuredPatch = parseSuggestionIntoStructuredContext(suggestion.content);
+    if (Object.keys(structuredPatch).length > 0) {
+      await this.replaceStructuredUserProfileContext(
+        userId,
+        applyStructuredPatch(profile.structuredContext, structuredPatch),
+      );
+    }
   }
 
   async rejectSuggestion(userId: string, suggestionId: string, approverEmail: string): Promise<void> {
@@ -649,8 +732,11 @@ export class MemoryRepository {
       .eq("user_id", userId)
       .maybeSingle<{ id: string; user_id: string; status: "pending" | "approved" | "rejected" }>();
 
-    if (fetchError || !suggestion) {
-      throw new Error(`Failed to find suggestion to reject: ${fetchError?.message ?? "Not found"}`);
+    if (fetchError) {
+      throw new Error(`Failed to find suggestion to reject: ${fetchError.message}`);
+    }
+    if (!suggestion) {
+      return;
     }
 
     if (suggestion.status !== "pending") {
@@ -671,13 +757,18 @@ export class MemoryRepository {
     }
   }
 
-  async getPendingSuggestions(userId: string): Promise<RPMSuggestion[]> {
-    const { data, error } = await this.supabase
+  async getPendingSuggestions(userId: string, projectId?: string): Promise<RPMSuggestion[]> {
+    let query = this.supabase
       .from("rpm_suggestions")
       .select("id, user_id, project_id, from_email, content, status, created_at, source")
       .eq("user_id", userId)
-      .eq("status", "pending")
-      .order("created_at", { ascending: true });
+      .eq("status", "pending");
+
+    if (projectId) {
+      query = query.eq("project_id", projectId);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: true });
 
     if (error) {
       throw new Error(`Failed to fetch pending suggestions: ${error.message}`);

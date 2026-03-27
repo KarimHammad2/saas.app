@@ -180,6 +180,7 @@ describe("processInboundEmail", () => {
     expect(result.context.projectId).toBe("p1");
     expect(repoState.updateSummaryDisplay).not.toHaveBeenCalled();
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
+    expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
   });
 
   it("marks duplicate events and skips mutating writes", async () => {
@@ -330,5 +331,7 @@ describe("processInboundEmail", () => {
     const result = await processInboundEmail(event);
     expect(result.payload.isWelcome).toBe(true);
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", ["RAW NOTES"], event.timestamp);
+    expect(result.payload.nextSteps.some((step) => /timeline/i.test(step))).toBe(true);
+    expect(result.payload.nextSteps.some((step) => /first milestone/i.test(step))).toBe(true);
   });
 });

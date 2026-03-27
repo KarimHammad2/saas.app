@@ -47,7 +47,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   if (!inserted) {
     log.info("duplicate inbound event ignored", { provider: event.provider, providerEventId: event.providerEventId });
     const projectState = await repo.getProjectState(project.id);
-    const pendingSuggestions = await repo.getPendingSuggestions(user.id);
+    const pendingSuggestions = await repo.getPendingSuggestions(user.id, project.id);
     return {
       recipients: [user.email],
       payload: {
@@ -169,7 +169,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   await repo.incrementProjectUsageCount(project.id);
 
   const projectState = await repo.getProjectState(project.id);
-  const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(user.id);
+  const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(user.id, project.id);
   const userRpm = await repo.getActiveRpm(project.id);
   const recipients = [user.email, userRpm].filter((entry): entry is string => Boolean(entry));
 

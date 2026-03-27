@@ -323,17 +323,21 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
 
   const valueByLabel = (labels: string[]): number => {
     const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const match = content.match(new RegExp(`(?:^|\\n)(?:${escapedLabels})\\s*:\\s*([\\d.]+)`, "i"));
+    const match = content.match(new RegExp(`(?:^|\\n)(?:${escapedLabels})\\s*:\\s*\\$?\\s*([\\d.]+)`, "i"));
     return Number(match?.[1] ?? 0);
   };
 
+  const hours = valueByLabel(["Hours Purchased", "Hours"]);
+  const rate = valueByLabel(["Hourly Rate", "Rate"]);
+  const totalAmount = hours * rate;
+
   const event: TransactionEvent = {
-    hoursPurchased: valueByLabel(["Hours Purchased"]),
-    hourlyRate: valueByLabel(["Hourly Rate"]),
-    allocatedHours: valueByLabel(["Allocated to Freelancer"]),
-    bufferHours: valueByLabel(["Buffer"]),
-    saas2Fee: valueByLabel(["SaaS2 Fee", "SaaS² Fee"]),
-    projectRemainder: valueByLabel(["Project Remainder"]),
+    hoursPurchased: hours,
+    hourlyRate: rate,
+    allocatedHours: valueByLabel(["Allocated to Freelancer"]) || hours * 0.9,
+    bufferHours: valueByLabel(["Buffer"]) || hours * 0.1,
+    saas2Fee: valueByLabel(["SaaS2 Fee", "SaaS² Fee"]) || totalAmount * 0.1,
+    projectRemainder: valueByLabel(["Project Remainder"]) || 0,
   };
 
   if (event.hoursPurchased <= 0 || event.hourlyRate <= 0) {
@@ -345,11 +349,11 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
 
 function parseApprovals(content: string): Array<{ suggestionId: string; decision: "approve" | "reject" }> {
   const approvals: Array<{ suggestionId: string; decision: "approve" | "reject" }> = [];
-  const approveRegex = /approve suggestion\s+([a-f0-9-]{6,})/gi;
+  const approveRegex = /approve suggestion\s+([a-z0-9-]{1,64})/gi;
   for (const match of content.matchAll(approveRegex)) {
     approvals.push({ suggestionId: match[1], decision: "approve" });
   }
-  const rejectRegex = /reject suggestion\s+([a-f0-9-]{6,})/gi;
+  const rejectRegex = /reject suggestion\s+([a-z0-9-]{1,64})/gi;
   for (const match of content.matchAll(rejectRegex)) {
     approvals.push({ suggestionId: match[1], decision: "reject" });
   }
@@ -458,7 +462,11 @@ export function parseNormalizedContent(content: string) {
     decisions.length > 0 ||
     risks.length > 0 ||
     recommendations.length > 0 ||
-    notesSection.length > 0;
+    notesSection.length > 0 ||
+    Boolean(userProfileContext) ||
+    Boolean(rpmSuggestionContent) ||
+    Boolean(transactionEvent) ||
+    approvals.length > 0;
 
   let notes = hasMeaning ? notesSection : [content];
   if (summary?.trim()) {

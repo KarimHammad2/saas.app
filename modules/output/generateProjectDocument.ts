@@ -11,12 +11,43 @@ function formatBulletList(values: string[], emptyPlaceholder: string): string {
   return values.map((line) => `- ${line}`).join("\n");
 }
 
+function formatCurrency(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function formatTransactions(payload: ProjectEmailPayload): string | null {
+  if (payload.context.transactionHistory.length === 0) {
+    return null;
+  }
+
+  const lines = payload.context.transactionHistory.map((tx) => {
+    const total = tx.hoursPurchased * tx.hourlyRate;
+    const split90 = total * 0.9;
+    const split10 = total * 0.1;
+    return [
+      `- Transaction ${tx.id}:`,
+      `  - Hours: ${tx.hoursPurchased}`,
+      `  - Rate: ${formatCurrency(tx.hourlyRate)}`,
+      `  - Total: ${formatCurrency(total)}`,
+      `  - Freelancer (90%): ${formatCurrency(split90)}`,
+      `  - Platform (10%): ${formatCurrency(split10)}`,
+    ].join("\n");
+  });
+
+  return lines.join("\n");
+}
+
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet)";
+  const hasPendingSuggestions = payload.pendingSuggestions.length > 0;
+  const pendingLines = hasPendingSuggestions
+    ? payload.pendingSuggestions.map((s) => `- ${s.content} (${s.status})`).join("\n")
+    : null;
+  const transactionSection = formatTransactions(payload);
 
   if (getProjectDocumentMode() === "minimal") {
-    return [
+    const base = [
       "# Overview",
       "",
       overview,
@@ -37,18 +68,22 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
       "",
       formatBulletList(context.notes, "(No notes yet)"),
       "",
-    ].join("\n");
+    ];
+
+    if (pendingLines) {
+      base.push("# Pending Suggestions", "", pendingLines, "");
+    }
+    if (transactionSection) {
+      base.push("# Transactions", "", transactionSection, "");
+    }
+
+    return base.join("\n");
   }
 
   const statusLine = context.currentStatus?.trim() || "(No status yet)";
-  const pendingLines =
-    payload.pendingSuggestions.length === 0
-      ? "(No pending RPM suggestions)"
-      : payload.pendingSuggestions.map((s) => `- ${s.content}`).join("\n");
   const nextLines =
     payload.nextSteps.length === 0 ? "(No next steps)" : payload.nextSteps.map((s) => `- ${s}`).join("\n");
-
-  return [
+  const rows = [
     "# Project Update",
     "",
     "## Overview",
@@ -83,19 +118,28 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     formatBulletList(context.notes, "(No notes yet)"),
     "",
-    "## RPM suggestions (pending)",
-    "",
-    pendingLines,
-    "",
     "## Next steps",
     "",
     nextLines,
     "",
+  ];
+
+  if (pendingLines) {
+    rows.push("## Pending Suggestions", "", pendingLines, "");
+  }
+
+  if (transactionSection) {
+    rows.push("## Transactions", "", transactionSection, "");
+  }
+
+  rows.push(
     "## Account",
     "",
     `- Tier: ${context.tier}`,
     `- Reminder balance: ${context.reminderBalance}`,
     `- Usage count: ${context.usageCount}`,
     "",
-  ].join("\n");
+  );
+
+  return rows.join("\n");
 }

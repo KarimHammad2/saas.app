@@ -26,6 +26,9 @@ export interface TransactionEvent {
 
 /** SOW-aligned structured profile (stored in user_profiles.context jsonb). */
 export interface UserProfileStructuredContext {
+  role?: string;
+  business?: string;
+  preferencesList?: string[];
   business_type?: string;
   goals_style?: string;
   preferences?: Record<string, unknown>;

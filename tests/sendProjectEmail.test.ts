@@ -121,5 +121,47 @@ describe("sendProjectEmail", () => {
     expect(call?.subject).toBe("Reminder Subject");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
   });
+
+  it("includes pending suggestions and transactions when present", async () => {
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(false);
+    payload.pendingSuggestions = [
+      {
+        id: "s1",
+        userId: "u1",
+        projectId: "p1",
+        fromEmail: "rpm@example.com",
+        content: "User prefers short answers",
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        source: "inbound",
+      },
+    ];
+    payload.context.transactionHistory = [
+      {
+        id: "tx1",
+        type: "hourPurchase",
+        hoursPurchased: 10,
+        hourlyRate: 50,
+        allocatedHours: 9,
+        bufferHours: 1,
+        saas2Fee: 50,
+        projectRemainder: 0,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await sendProjectEmail(["user@example.com"], payload);
+
+    const call = mockedSendEmail.mock.calls[0]?.[0];
+    const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
+    expect(attachment?.content).toContain("# Pending Suggestions");
+    expect(attachment?.content).toContain("User prefers short answers (pending)");
+    expect(attachment?.content).toContain("# Transactions");
+    expect(attachment?.content).toContain("Freelancer (90%): $450.00");
+    expect(attachment?.content).toContain("Platform (10%): $50.00");
+    expect(call?.html).toContain("<h1>Pending Suggestions</h1>");
+    expect(call?.html).toContain("<h1>Transactions</h1>");
+  });
 });
 
