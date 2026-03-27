@@ -1,4 +1,5 @@
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 export interface KickoffSummary {
   summary: string;
@@ -24,7 +25,7 @@ function inferConstraints(content: string): string[] {
 }
 
 export function buildKickoffSummary(event: NormalizedEmailEvent): KickoffSummary {
-  const summary = event.parsed.summary || event.rawBody.slice(0, 500);
+  const summary = compactOverviewForDocument(event.parsed.summary || event.rawBody);
   const goals = event.parsed.goals.length > 0 ? event.parsed.goals : inferGoals(event.rawBody);
   const constraints = inferConstraints(event.rawBody);
   const nextSteps = [

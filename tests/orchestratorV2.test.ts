@@ -22,6 +22,7 @@ describe("handleIncomingEmail", () => {
           projectId: "p1",
           userId: "u1",
           summary: "hello",
+          currentStatus: "",
           goals: [],
           actionItems: [],
           decisions: [],

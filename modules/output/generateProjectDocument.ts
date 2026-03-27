@@ -1,4 +1,5 @@
 import type { ProjectEmailPayload } from "@/modules/output/types";
+import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 function formatBulletList(values: string[], emptyPlaceholder: string): string {
   if (values.length === 0) {
@@ -11,12 +12,19 @@ function formatBulletList(values: string[], emptyPlaceholder: string): string {
 
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
+  const overview = compactOverviewForDocument(context.summary) || "(No overview yet)";
+  const statusLine = context.currentStatus?.trim() || "(No status yet)";
+
   return [
     "# Project Update",
     "",
     "## Overview",
     "",
-    context.summary || "(No overview yet)",
+    overview,
+    "",
+    "## Status",
+    "",
+    statusLine,
     "",
     "## Goals",
     "",
@@ -26,9 +34,17 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     formatBulletList(context.actionItems, "(No tasks yet)"),
     "",
+    "## Decisions",
+    "",
+    formatBulletList(context.decisions, "(No decisions yet)"),
+    "",
     "## Risks",
     "",
     formatBulletList(context.risks, "(No risks yet)"),
+    "",
+    "## Recommendations",
+    "",
+    formatBulletList(context.recommendations, "(No recommendations yet)"),
     "",
     "## Notes",
     "",

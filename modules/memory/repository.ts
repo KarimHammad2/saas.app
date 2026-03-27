@@ -1,6 +1,17 @@
 import { getMasterUserEmail } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase";
 import type { ProjectContext, RPMSuggestion, Tier, TransactionEvent, TransactionRecord, UserProfileContext } from "@/modules/contracts/types";
+import { compactOverviewForDocument } from "@/modules/output/overviewText";
+
+function formatNoteDatePrefix(iso?: string): string {
+  const d = iso ? new Date(iso) : new Date();
+  const t = Number.isNaN(d.getTime()) ? new Date() : d;
+  return `[${t.toISOString().slice(0, 10)}] `;
+}
+
+function noteHasDatePrefix(line: string): boolean {
+  return /^\[\d{4}-\d{2}-\d{2}\]\s/.test(line.trim());
+}
 
 export interface UserRecord {
   id: string;
@@ -266,11 +277,25 @@ export class MemoryRepository {
   }
 
   async storeSummary(projectId: string, summary: string): Promise<void> {
+    const compact = compactOverviewForDocument(summary);
     const { error } = await this.supabase
       .from("project_states")
-      .upsert({ project_id: projectId, summary }, { onConflict: "project_id" });
+      .upsert({ project_id: projectId, summary: compact }, { onConflict: "project_id" });
     if (error) {
       throw new Error(`Failed to store summary: ${error.message}`);
+    }
+  }
+
+  async updateCurrentStatus(projectId: string, status: string): Promise<void> {
+    const trimmed = status.trim();
+    if (!trimmed) {
+      return;
+    }
+    const { error } = await this.supabase
+      .from("project_states")
+      .upsert({ project_id: projectId, current_status: trimmed }, { onConflict: "project_id" });
+    if (error) {
+      throw new Error(`Failed to update current status: ${error.message}`);
     }
   }
 
@@ -345,7 +370,7 @@ export class MemoryRepository {
     }
   }
 
-  async updateNotes(projectId: string, notes: string[]): Promise<void> {
+  async updateNotes(projectId: string, notes: string[], receivedAtIso?: string): Promise<void> {
     if (notes.length === 0) {
       return;
     }
@@ -354,17 +379,20 @@ export class MemoryRepository {
     const existing = context.notes ?? [];
     const seen = new Set(existing.map((entry) => entry.trim().toLowerCase()));
 
+    const datePrefix = formatNoteDatePrefix(receivedAtIso);
+
     const merged: string[] = [...existing];
     for (const note of notes) {
       const trimmed = note.trim();
       if (!trimmed) {
         continue;
       }
-      const key = trimmed.toLowerCase();
+      const withPrefix = noteHasDatePrefix(trimmed) ? trimmed : `${datePrefix}${trimmed}`;
+      const key = withPrefix.trim().toLowerCase();
       if (seen.has(key)) {
         continue;
       }
-      merged.push(trimmed);
+      merged.push(withPrefix);
       seen.add(key);
     }
 
@@ -579,11 +607,12 @@ export class MemoryRepository {
   async getProjectState(projectId: string): Promise<ProjectContext> {
     const { data: state, error: stateError } = await this.supabase
       .from("project_states")
-      .select("project_id, summary, goals, action_items, decisions, risks, recommendations, notes")
+      .select("project_id, summary, current_status, goals, action_items, decisions, risks, recommendations, notes")
       .eq("project_id", projectId)
       .maybeSingle<{
         project_id: string;
         summary: string;
+        current_status: string;
         goals: unknown;
         action_items: unknown;
         decisions: unknown;
@@ -632,6 +661,7 @@ export class MemoryRepository {
       projectId: project.id,
       userId: project.user_id,
       summary: state?.summary ?? "",
+      currentStatus: typeof state?.current_status === "string" ? state.current_status : "",
       goals: asStringArray(state?.goals),
       actionItems: asStringArray(state?.action_items),
       decisions: asStringArray(state?.decisions),

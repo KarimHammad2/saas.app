@@ -37,6 +37,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
     rawBody: "Summary:\nHello",
     parsed: {
       summary: "Hello",
+      currentStatus: null,
       goals: [],
       actionItems: [],
       decisions: [],

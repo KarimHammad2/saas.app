@@ -81,12 +81,15 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   if (event.parsed.summary) {
     await repo.storeSummary(project.id, event.parsed.summary);
   }
+  if (event.parsed.currentStatus) {
+    await repo.updateCurrentStatus(project.id, event.parsed.currentStatus);
+  }
   await repo.updateGoals(project.id, event.parsed.goals);
   await repo.appendActionItems(project.id, event.parsed.actionItems);
   await repo.updateDecisions(project.id, event.parsed.decisions);
   await repo.updateRisks(project.id, event.parsed.risks);
   await repo.updateRecommendations(project.id, event.parsed.recommendations);
-  await repo.updateNotes(project.id, event.parsed.notes);
+  await repo.updateNotes(project.id, event.parsed.notes, event.timestamp);
 
   if (event.parsed.userProfileContext && canModifyUserProfile(role)) {
     await repo.storeUserProfileContext(user.id, event.parsed.userProfileContext);

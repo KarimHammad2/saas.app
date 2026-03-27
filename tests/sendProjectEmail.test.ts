@@ -29,9 +29,10 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       projectId: "p1",
       userId: "u1",
       summary: "AI SaaS for real estate",
+      currentStatus: "MVP in progress",
       goals: ["lead generation", "automation"],
       actionItems: ["launch landing page"],
-      decisions: [],
+      decisions: ["Ship weekly"],
       risks: ["timeline slippage"],
       recommendations: [],
       notes: ["User wants lead gen + automation."],
@@ -74,6 +75,8 @@ describe("sendProjectEmail", () => {
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Project Update");
+    expect(attachment?.content).toContain("## Status");
+    expect(attachment?.content).toContain("## Decisions");
     expect(attachment?.content).toContain("## Notes");
     expect(attachment?.content).toContain("- User wants lead gen + automation.");
 

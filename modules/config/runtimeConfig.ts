@@ -17,8 +17,10 @@ interface RuntimeConfig {
 
 const DEFAULT_PROJECT_TEMPLATE: EmailTemplate = {
   subject: "Project Update",
-  textBody: "Project Update\n\n{{summary}}\n\nAttached latest project memory document.",
-  htmlBody: "<!doctype html><html><body><h2>Project Update</h2><p>{{summary}}</p><p>Attached latest project memory document.</p></body></html>",
+  textBody:
+    "{{summary}}\n\nYour project has been updated.\n\nAttached is the latest project memory document.",
+  htmlBody:
+    "<!doctype html><html><body><p>{{summary}}</p><p>Your project has been updated.</p><p>Attached is the latest project memory document.</p></body></html>",
 };
 
 const DEFAULT_PROJECT_WELCOME_TEMPLATE: EmailTemplate = {

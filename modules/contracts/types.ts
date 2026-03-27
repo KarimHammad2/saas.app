@@ -35,6 +35,8 @@ export interface ProjectContext {
   projectId: string;
   userId: string;
   summary: string;
+  /** Short line for “where we are now” (from Status: in email or stored state). */
+  currentStatus: string;
   goals: string[];
   actionItems: string[];
   decisions: string[];
@@ -69,6 +71,7 @@ export interface NormalizedEmailEvent {
   rawBody: string;
   parsed: {
     summary: string | null;
+    currentStatus: string | null;
     goals: string[];
     actionItems: string[];
     decisions: string[];

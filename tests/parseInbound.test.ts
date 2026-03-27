@@ -51,6 +51,7 @@ Approve suggestion abc-123
     expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
     expect(parsed.parsed.risks).toEqual(["Timeline slippage"]);
     expect(parsed.parsed.recommendations).toEqual(["Weekly check-in"]);
+    expect(parsed.parsed.currentStatus).toBeNull();
     expect(parsed.parsed.notes).toEqual([]);
     expect(parsed.parsed.userProfileContext).toContain("Prefer concise");
     expect(parsed.parsed.rpmSuggestion?.content).toContain("weekly updates");
@@ -166,6 +167,28 @@ Decisions:
     expect(parsed.parsed.actionItems).toEqual([]);
     expect(parsed.parsed.risks).toEqual([]);
     expect(parsed.parsed.notes).toEqual(["I want to build an AI SaaS for real estate agents."]);
+  });
+
+  it("parses Status and drops notes that duplicate Summary", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "Status test",
+      text: `Summary:
+One line overview.
+
+Status:
+Building MVP — on track.
+
+Notes:
+- One line overview.
+- Extra detail only in notes.
+`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.summary).toContain("One line overview");
+    expect(parsed.parsed.currentStatus).toContain("Building MVP");
+    expect(parsed.parsed.notes).toEqual(["Extra detail only in notes."]);
   });
 
   it("normalizes recipient variants from strings and objects", () => {

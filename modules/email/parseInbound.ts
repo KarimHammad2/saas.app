@@ -10,6 +10,7 @@ export class InboundParseError extends Error {
 const SECTION_LABELS = [
   "Overview",
   "Summary",
+  "Status",
   "Goals",
   "Tasks",
   "Action Items",
@@ -122,6 +123,10 @@ function decodeHtmlEntities(content: string): string {
     });
 
   return output;
+}
+
+function normalizeForDedup(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function normalizeWhitespace(content: string): string {
@@ -435,6 +440,7 @@ function extractBodyContent(source: Record<string, unknown>): string {
 
 export function parseNormalizedContent(content: string) {
   const summary = extractSection(content, "Summary") || extractSection(content, "Overview");
+  const currentStatus = extractSection(content, "Status").trim();
   const goals = toBulletList(extractSection(content, "Goals"));
   const actionItems = toBulletList(extractSection(content, "Action Items") || extractSection(content, "Tasks"));
   const decisions = toBulletList(extractSection(content, "Decisions"));
@@ -448,11 +454,24 @@ export function parseNormalizedContent(content: string) {
   const additionalEmails = parseAdditionalEmails(content);
 
   const hasMeaning =
-    Boolean(summary && summary.trim()) || goals.length > 0 || actionItems.length > 0 || risks.length > 0;
-  const notes = hasMeaning ? notesSection : [content];
+    Boolean(summary && summary.trim()) ||
+    Boolean(currentStatus) ||
+    goals.length > 0 ||
+    actionItems.length > 0 ||
+    decisions.length > 0 ||
+    risks.length > 0 ||
+    recommendations.length > 0 ||
+    notesSection.length > 0;
+
+  let notes = hasMeaning ? notesSection : [content];
+  if (summary?.trim()) {
+    const summaryKey = normalizeForDedup(summary);
+    notes = notes.filter((entry) => normalizeForDedup(entry) !== summaryKey);
+  }
 
   return {
     summary: summary || null,
+    currentStatus: currentStatus || null,
     goals,
     actionItems,
     decisions,

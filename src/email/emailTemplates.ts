@@ -1,5 +1,5 @@
 export function buildProjectUpdateEmailText(summary: string, document: string): string {
-  return [`Project Update`, ``, summary, ``, `Attached latest project memory document.`, ``, document].join("\n");
+  return [summary, ``, `Your project has been updated.`, ``, `Attached is the latest project memory document.`, ``, document].join("\n");
 }
 
 export function buildProjectUpdateEmailHtml(summary: string, document: string): string {
@@ -9,9 +9,9 @@ export function buildProjectUpdateEmailHtml(summary: string, document: string): 
   return [
     "<!doctype html>",
     "<html><body>",
-    "<h2>Project Update</h2>",
     `<p>${safeSummary}</p>`,
-    "<p>Attached latest project memory document.</p>",
+    "<p>Your project has been updated.</p>",
+    "<p>Attached is the latest project memory document.</p>",
     `<pre>${safeDocument}</pre>`,
     "</body></html>",
   ].join("\n");

@@ -14,6 +14,7 @@ const repoState = {
   updateRisks: vi.fn(),
   updateRecommendations: vi.fn(),
   updateNotes: vi.fn(),
+  updateCurrentStatus: vi.fn(),
   storeUserProfileContext: vi.fn(),
   storeRPMSuggestion: vi.fn(),
   approveSuggestion: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("@/modules/memory/repository", () => {
       updateRisks = repoState.updateRisks;
       updateRecommendations = repoState.updateRecommendations;
       updateNotes = repoState.updateNotes;
+      updateCurrentStatus = repoState.updateCurrentStatus;
       storeUserProfileContext = repoState.storeUserProfileContext;
       storeRPMSuggestion = repoState.storeRPMSuggestion;
       approveSuggestion = repoState.approveSuggestion;
@@ -75,6 +77,7 @@ describe("processInboundEmail", () => {
       projectId: "p1",
       userId: "u1",
       summary: "summary",
+      currentStatus: "",
       goals: [],
       actionItems: [],
       decisions: [],
@@ -102,6 +105,7 @@ describe("processInboundEmail", () => {
       rawBody: "Summary: hello",
       parsed: {
         summary: "hello",
+        currentStatus: null,
         goals: [],
         actionItems: [],
         decisions: [],
@@ -120,6 +124,7 @@ describe("processInboundEmail", () => {
     expect(result.recipients).toEqual(["user@example.com", "rpm@example.com"]);
     expect(result.context.projectId).toBe("p1");
     expect(repoState.storeSummary).toHaveBeenCalledWith("p1", "hello");
+    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
   });
 
   it("marks duplicate events and skips mutating writes", async () => {
@@ -137,6 +142,7 @@ describe("processInboundEmail", () => {
       rawBody: "Summary: hello",
       parsed: {
         summary: "hello",
+        currentStatus: null,
         goals: [],
         actionItems: [],
         decisions: [],
@@ -170,6 +176,7 @@ describe("processInboundEmail", () => {
       rawBody: "approve suggestion abc123 reject suggestion def456",
       parsed: {
         summary: null,
+        currentStatus: null,
         goals: [],
         actionItems: [],
         decisions: [],
@@ -205,6 +212,7 @@ describe("processInboundEmail", () => {
       projectId: "p1",
       userId: "u1",
       summary: "",
+      currentStatus: "",
       goals: [],
       actionItems: [],
       decisions: [],
@@ -228,6 +236,7 @@ describe("processInboundEmail", () => {
       rawBody: "This message has no labeled meaning; it should become notes.",
       parsed: {
         summary: null,
+        currentStatus: null,
         goals: [],
         actionItems: [],
         decisions: [],
@@ -244,6 +253,6 @@ describe("processInboundEmail", () => {
 
     const result = await processInboundEmail(event);
     expect(result.payload.isWelcome).toBe(true);
-    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", ["RAW NOTES"]);
+    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", ["RAW NOTES"], event.timestamp);
   });
 });
