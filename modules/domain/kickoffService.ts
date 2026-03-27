@@ -8,6 +8,7 @@ interface KickoffRepository {
   storeUserProfileContext(userId: string, contextText: string): Promise<void>;
   getActiveRpm(projectId: string): Promise<string | null>;
   assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void>;
+  setKickoffCompleted(projectId: string): Promise<void>;
 }
 
 export async function runKickoffFlow(
@@ -29,4 +30,6 @@ export async function runKickoffFlow(
   if (!activeRpm) {
     await repo.assignRpm(projectId, getMasterUserEmail(), "system@saas2.app");
   }
+
+  await repo.setKickoffCompleted(projectId);
 }

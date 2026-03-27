@@ -29,6 +29,7 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       projectId: "p1",
       userId: "u1",
       summary: "AI SaaS for real estate",
+      initialSummary: "AI SaaS for real estate",
       currentStatus: "MVP in progress",
       goals: ["lead generation", "automation"],
       actionItems: ["launch landing page"],
@@ -37,6 +38,9 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       recommendations: [],
       notes: ["User wants lead gen + automation."],
       remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 1,
+      tier: "freemium",
       transactionHistory: [],
     },
     pendingSuggestions: [],
@@ -61,6 +65,11 @@ describe("sendProjectEmail", () => {
         textBody: "Welcome!",
         htmlBody: "<p>Welcome</p>",
       },
+      projectReminderTemplate: {
+        subject: "Reminder Subject",
+        textBody: "Reminder: {{summary}}",
+        htmlBody: "<p>Reminder</p>",
+      },
     });
   });
 
@@ -74,10 +83,9 @@ describe("sendProjectEmail", () => {
     expect(call?.subject).toBe("Welcome Subject");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
-    expect(attachment?.content).toContain("# Project Update");
-    expect(attachment?.content).toContain("## Status");
-    expect(attachment?.content).toContain("## Decisions");
-    expect(attachment?.content).toContain("## Notes");
+    expect(attachment?.content).toContain("# Overview");
+    expect(attachment?.content).toContain("# Goals");
+    expect(attachment?.content).toContain("# Notes");
     expect(attachment?.content).toContain("- User wants lead gen + automation.");
 
     expect(call?.html).toContain('charset="utf-8"');
@@ -86,7 +94,7 @@ describe("sendProjectEmail", () => {
     expect(call?.html).not.toContain("<pre>");
     expect(call?.text).toContain("Full project document: see attachment project-document.md");
     expect(call?.text).toContain("Use attached document.");
-    expect(call?.text).not.toContain("# Project Update");
+    expect(call?.text).not.toContain("# Overview");
   });
 
   it("uses update template when isWelcome=false", async () => {
@@ -100,7 +108,18 @@ describe("sendProjectEmail", () => {
     expect(call?.html).not.toContain("<pre>");
     expect(call?.text).toContain("Update: AI SaaS for real estate");
     expect(call?.text).toContain("Full project document: see attachment project-document.md");
-    expect(call?.text).not.toContain("## Goals");
+    expect(call?.text).not.toContain("# Goals");
+  });
+
+  it("uses reminder template when emailKind=reminder", async () => {
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(false);
+    payload.emailKind = "reminder";
+    await sendProjectEmail(["user@example.com"], payload);
+
+    const call = mockedSendEmail.mock.calls[0]?.[0];
+    expect(call?.subject).toBe("Reminder Subject");
+    expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
   });
 });
 

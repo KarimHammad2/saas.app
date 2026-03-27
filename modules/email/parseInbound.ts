@@ -1,5 +1,7 @@
 import type { NormalizedEmailEvent, TransactionEvent } from "@/modules/contracts/types";
-import { tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
+import { extractDisplayNameFromSenderRaw, tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
+import { stripQuotedReply } from "@/modules/email/stripQuotedReply";
+import { createHash } from "node:crypto";
 
 export class InboundParseError extends Error {
   constructor(message: string) {
@@ -149,27 +151,6 @@ function stripHtml(content: string): string {
     .replace(/<[^>]+>/g, " ");
 }
 
-function stripSignatureAndQuoted(content: string): string {
-  const lines = content.split("\n");
-  const result: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^on .+wrote:$/i.test(trimmed)) {
-      break;
-    }
-    if (trimmed.startsWith(">")) {
-      continue;
-    }
-    if (/^--\s*$/.test(trimmed)) {
-      break;
-    }
-    result.push(line);
-  }
-
-  return result.join("\n");
-}
-
 function extractEmailAddress(value: string): string {
   const normalized = tryNormalizeEmailAddress(value);
   if (!normalized) {
@@ -303,6 +284,23 @@ function splitEmails(value: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeRecipientList(value: unknown): string[] {
+  const fromStrings = toStringArray(value);
+  if (fromStrings.length > 0) {
+    return fromStrings
+      .flatMap((entry) => splitEmails(entry))
+      .filter(Boolean);
+  }
+  const fromObjects = extractRecipientEmails(value);
+  if (fromObjects.length > 0) {
+    return fromObjects;
+  }
+  if (typeof value === "string") {
+    return splitEmails(value);
+  }
+  return [];
+}
+
 function extractSection(content: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const allLabels = SECTION_LABELS.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
@@ -323,18 +321,19 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
     return null;
   }
 
-  const valueByLabel = (label: string): number => {
-    const match = content.match(new RegExp(`${label}\\s*:\\s*([\\d.]+)`, "i"));
+  const valueByLabel = (labels: string[]): number => {
+    const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const match = content.match(new RegExp(`(?:^|\\n)(?:${escapedLabels})\\s*:\\s*([\\d.]+)`, "i"));
     return Number(match?.[1] ?? 0);
   };
 
   const event: TransactionEvent = {
-    hoursPurchased: valueByLabel("Hours Purchased"),
-    hourlyRate: valueByLabel("Hourly Rate"),
-    allocatedHours: valueByLabel("Allocated to Freelancer"),
-    bufferHours: valueByLabel("Buffer"),
-    saas2Fee: valueByLabel("SaaS2 Fee|SaaS² Fee"),
-    projectRemainder: valueByLabel("Project Remainder"),
+    hoursPurchased: valueByLabel(["Hours Purchased"]),
+    hourlyRate: valueByLabel(["Hourly Rate"]),
+    allocatedHours: valueByLabel(["Allocated to Freelancer"]),
+    bufferHours: valueByLabel(["Buffer"]),
+    saas2Fee: valueByLabel(["SaaS2 Fee", "SaaS² Fee"]),
+    projectRemainder: valueByLabel(["Project Remainder"]),
   };
 
   if (event.hoursPurchased <= 0 || event.hourlyRate <= 0) {
@@ -490,6 +489,45 @@ export function parseNormalizedContent(content: string) {
   };
 }
 
+function stableProviderEventId(provider: string, from: string, subject: string, body: string): string {
+  const hash = createHash("sha256")
+    .update(`${provider}\n${from}\n${subject}\n${body}`)
+    .digest("hex");
+  return `generated-${hash.slice(0, 32)}`;
+}
+
+function parseIsoTimestamp(value: string): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+function extractEventTimestamp(root: Record<string, unknown>, source: Record<string, unknown>): string {
+  const timestampCandidates = [
+    toStringOrEmpty(root.created_at),
+    toStringOrEmpty(root.createdAt),
+    toStringOrEmpty(root.timestamp),
+    toStringOrEmpty(source.created_at),
+    toStringOrEmpty(source.createdAt),
+    toStringOrEmpty(source.timestamp),
+    toStringOrEmpty(source.date),
+    nestedString(root, ["data", "created_at"]),
+    nestedString(source, ["headers", "date"]),
+  ];
+  for (const candidate of timestampCandidates) {
+    const iso = parseIsoTimestamp(candidate);
+    if (iso) {
+      return iso;
+    }
+  }
+  return new Date().toISOString();
+}
+
 export function parseInbound(payload: unknown, provider = "generic"): NormalizedEmailEvent {
   const root = toObject(payload);
   const source = pickSource(root);
@@ -500,55 +538,38 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
     toStringOrEmpty(source.id) ||
     toStringOrEmpty(source.messageId) ||
     toStringOrEmpty(source["Message-Id"]) ||
-    toStringOrEmpty(source.email_id) ||
-    crypto.randomUUID();
+    toStringOrEmpty(source.email_id);
 
   if (!senderRaw) {
     throw new InboundParseError("Inbound payload is missing sender email.");
   }
 
   const senderEmail = extractEmailAddress(senderRaw);
+  const fromDisplayName = extractDisplayNameFromSenderRaw(senderRaw, senderEmail);
   const rawBody = extractBodyContent(source);
   if (!rawBody) {
     throw new InboundParseError("Inbound payload is missing email body content.");
   }
 
-  const cleanedBody = normalizeWhitespace(stripSignatureAndQuoted(rawBody));
-  const to = (() => {
-    const fromStrings = toStringArray(source.to);
-    if (fromStrings.length > 0) {
-      return fromStrings;
-    }
-    const fromObjects = extractRecipientEmails(source.to);
-    if (fromObjects.length > 0) {
-      return fromObjects;
-    }
-    return splitEmails(toStringOrEmpty(source.to));
-  })();
-
-  const cc = (() => {
-    const fromStrings = toStringArray(source.cc);
-    if (fromStrings.length > 0) {
-      return fromStrings;
-    }
-    const fromObjects = extractRecipientEmails(source.cc);
-    if (fromObjects.length > 0) {
-      return fromObjects;
-    }
-    return splitEmails(toStringOrEmpty(source.cc));
-  })();
+  const cleanedBody = normalizeWhitespace(stripQuotedReply(rawBody));
+  const to = normalizeRecipientList(source.to);
+  const cc = normalizeRecipientList(source.cc);
+  const timestamp = extractEventTimestamp(root, source);
+  const providerEventId = messageId || stableProviderEventId(provider, senderEmail, subject, cleanedBody);
   const parsed = parseNormalizedContent(cleanedBody);
 
   if (parsed.rpmSuggestion) {
     parsed.rpmSuggestion.from = senderEmail;
+    parsed.rpmSuggestion.timestamp = timestamp;
   }
 
   return {
     eventId: crypto.randomUUID(),
     provider,
-    providerEventId: messageId,
-    timestamp: new Date().toISOString(),
+    providerEventId,
+    timestamp,
     from: senderEmail,
+    fromDisplayName,
     to,
     cc,
     subject,

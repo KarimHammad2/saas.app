@@ -2,6 +2,8 @@ export type Tier = "freemium" | "solopreneur" | "agency";
 
 export type ActorRole = "user" | "rpm" | "master";
 
+export type RPMSuggestionSource = "inbound" | "system";
+
 export interface RPMSuggestion {
   id: string;
   userId: string;
@@ -10,6 +12,7 @@ export interface RPMSuggestion {
   content: string;
   status: "pending" | "approved" | "rejected";
   createdAt: string;
+  source: RPMSuggestionSource;
 }
 
 export interface TransactionEvent {
@@ -21,6 +24,14 @@ export interface TransactionEvent {
   projectRemainder: number;
 }
 
+/** SOW-aligned structured profile (stored in user_profiles.context jsonb). */
+export interface UserProfileStructuredContext {
+  business_type?: string;
+  goals_style?: string;
+  preferences?: Record<string, unknown>;
+  tone?: string;
+}
+
 export interface UserProfileContext {
   communicationStyle: string;
   preferences: Record<string, unknown>;
@@ -29,12 +40,15 @@ export interface UserProfileContext {
   salesCallTranscripts: string[];
   longTermInstructions: string;
   behaviorModifiers: Record<string, unknown>;
+  structuredContext: UserProfileStructuredContext;
 }
 
 export interface ProjectContext {
   projectId: string;
   userId: string;
   summary: string;
+  /** First kickoff overview text; used for rule-based overview regeneration (Phase 2). */
+  initialSummary: string;
   /** Short line for “where we are now” (from Status: in email or stored state). */
   currentStatus: string;
   goals: string[];
@@ -44,6 +58,10 @@ export interface ProjectContext {
   recommendations: string[];
   notes: string[];
   remainderBalance: number;
+  /** Mocked reminder credits (distinct from financial remainder_balance). */
+  reminderBalance: number;
+  usageCount: number;
+  tier: Tier;
   transactionHistory: TransactionRecord[];
 }
 
@@ -65,6 +83,8 @@ export interface NormalizedEmailEvent {
   providerEventId: string;
   timestamp: string;
   from: string;
+  /** Display name from `Name <email>` when present. */
+  fromDisplayName: string | null;
   to: string[];
   cc: string[];
   subject: string;

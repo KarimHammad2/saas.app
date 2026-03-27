@@ -13,6 +13,7 @@ interface RuntimeConfig {
   llmInstruction: string;
   projectUpdateTemplate: EmailTemplate;
   projectWelcomeTemplate: EmailTemplate;
+  projectReminderTemplate: EmailTemplate;
 }
 
 const DEFAULT_PROJECT_TEMPLATE: EmailTemplate = {
@@ -29,6 +30,14 @@ const DEFAULT_PROJECT_WELCOME_TEMPLATE: EmailTemplate = {
     "Welcome to SaaS² — Your Project Started\n\nHi,\n\nYour project has been initialized.\n\nAttached is your project document.\n\nUse this document inside ChatGPT / Gemini.\n\nWhenever you update your project, send an email back here.\n\nBest,\nFrank",
   htmlBody:
     "<!doctype html><html><body><h2>Welcome to SaaS² — Your Project Started</h2><p>Hi,</p><p>Your project has been initialized.</p><p>Attached is your project document.</p><p>Use this document inside ChatGPT / Gemini.</p><p>Whenever you update your project, send an email back here.</p><p>Best,<br/>Frank</p></body></html>",
+};
+
+const DEFAULT_PROJECT_REMINDER_TEMPLATE: EmailTemplate = {
+  subject: "Checking in on your project",
+  textBody:
+    "Checking in\n\n{{summary}}\n\nJust checking in — any updates on your project? Reply when you can.\n\nAttached is the latest project memory document.",
+  htmlBody:
+    "<!doctype html><html><body><h2>Checking in</h2><p>{{summary}}</p><p>Just checking in — any updates on your project? Reply when you can.</p><p>Attached is the latest project memory document.</p></body></html>",
 };
 
 const DEFAULT_INSTRUCTION = "Use the attached project document as authoritative context for your external LLM.";
@@ -72,20 +81,26 @@ export function renderProjectUpdateTemplate(template: EmailTemplate, summary: st
 export async function getRuntimeConfig(): Promise<RuntimeConfig> {
   const supabase = getSupabaseAdminClient();
 
-  const [settingsResult, projectUpdateTemplateResult, projectWelcomeTemplateResult, instructionResult] = await Promise.all([
-    supabase.from("system_settings").select("key, value_json").in("key", ["email.admin_bcc.enabled", "email.admin_bcc.address"]),
-    supabase
-      .from("email_templates")
-      .select("subject, text_body, html_body")
-      .eq("key", "project_update")
-      .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
-    supabase
-      .from("email_templates")
-      .select("subject, text_body, html_body")
-      .eq("key", "project_welcome")
-      .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
-    supabase.from("instructions").select("content").eq("key", "llm_document_usage").maybeSingle<{ content: string }>(),
-  ]);
+  const [settingsResult, projectUpdateTemplateResult, projectWelcomeTemplateResult, projectReminderTemplateResult, instructionResult] =
+    await Promise.all([
+      supabase.from("system_settings").select("key, value_json").in("key", ["email.admin_bcc.enabled", "email.admin_bcc.address"]),
+      supabase
+        .from("email_templates")
+        .select("subject, text_body, html_body")
+        .eq("key", "project_update")
+        .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
+      supabase
+        .from("email_templates")
+        .select("subject, text_body, html_body")
+        .eq("key", "project_welcome")
+        .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
+      supabase
+        .from("email_templates")
+        .select("subject, text_body, html_body")
+        .eq("key", "project_reminder")
+        .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
+      supabase.from("instructions").select("content").eq("key", "llm_document_usage").maybeSingle<{ content: string }>(),
+    ]);
 
   const settingRows = settingsResult.error ? [] : settingsResult.data ?? [];
   const enabledRow = settingRows.find((row) => row.key === "email.admin_bcc.enabled");
@@ -117,11 +132,21 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
           htmlBody: projectWelcomeTemplateResult.data.html_body || DEFAULT_PROJECT_WELCOME_TEMPLATE.htmlBody,
         };
 
+  const projectReminderTemplate =
+    projectReminderTemplateResult.error || !projectReminderTemplateResult.data
+      ? DEFAULT_PROJECT_REMINDER_TEMPLATE
+      : {
+          subject: projectReminderTemplateResult.data.subject || DEFAULT_PROJECT_REMINDER_TEMPLATE.subject,
+          textBody: projectReminderTemplateResult.data.text_body || DEFAULT_PROJECT_REMINDER_TEMPLATE.textBody,
+          htmlBody: projectReminderTemplateResult.data.html_body || DEFAULT_PROJECT_REMINDER_TEMPLATE.htmlBody,
+        };
+
   return {
     adminBccEnabled,
     adminBccAddress,
     llmInstruction,
     projectUpdateTemplate: projectUpdateTemplate,
     projectWelcomeTemplate,
+    projectReminderTemplate,
   };
 }

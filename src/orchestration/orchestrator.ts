@@ -1,7 +1,6 @@
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 import { parseInbound } from "@/modules/email/parseInbound";
-import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
-import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
+import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 function cleanBody(value: string): string {
   return value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -14,13 +13,7 @@ export interface HandleIncomingEmailResult {
 }
 
 async function processCanonicalEvent(event: NormalizedEmailEvent): Promise<HandleIncomingEmailResult> {
-  const result = await processInboundEmail(event);
-  await sendProjectEmail(result.recipients, result.payload);
-  return {
-    userId: result.context.userId,
-    projectId: result.context.projectId,
-    duplicate: result.context.duplicate,
-  };
+  return handleInboundEmailEvent(event);
 }
 
 export async function handleIncomingEmail(emailPayload: {

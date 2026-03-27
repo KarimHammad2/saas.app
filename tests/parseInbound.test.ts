@@ -45,6 +45,7 @@ Approve suggestion abc-123
 
     const parsed = parseInbound(payload, "resend");
     expect(parsed.from).toBe("user@example.com");
+    expect(parsed.fromDisplayName).toBe("User");
     expect(parsed.parsed.summary).toContain("Refined project scope");
     expect(parsed.parsed.goals).toEqual(["Launch MVP"]);
     expect(parsed.parsed.actionItems).toEqual(["Draft architecture"]);
@@ -202,5 +203,68 @@ Notes:
     const parsed = parseInbound(payload, "resend");
     expect(parsed.to).toEqual(["a@example.com", "b@example.com"]);
     expect(parsed.cc).toEqual(["c@example.com", "d@example.com"]);
+  });
+
+  it("normalizes to/cc string arrays that include display names", () => {
+    const payload = {
+      from: "owner@example.com",
+      to: ["Owner Team <owner.team@example.com>", "support@example.com"],
+      cc: ["Advisor <advisor@example.com>"],
+      text: "Summary:\nRecipient normalization",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.to).toEqual(["owner.team@example.com", "support@example.com"]);
+    expect(parsed.cc).toEqual(["advisor@example.com"]);
+  });
+
+  it("uses deterministic providerEventId fallback when inbound ids are missing", () => {
+    const payload = {
+      from: "Owner <owner@example.com>",
+      subject: "Fallback id test",
+      text: "Summary:\nStable content for fallback",
+    };
+
+    const first = parseInbound(payload, "resend");
+    const second = parseInbound(payload, "resend");
+
+    expect(first.providerEventId).toBe(second.providerEventId);
+    expect(first.providerEventId.startsWith("generated-")).toBe(true);
+  });
+
+  it("uses payload created_at for event and suggestion timestamps", () => {
+    const payload = {
+      id: "evt_999",
+      created_at: "2026-03-01T10:00:00.000Z",
+      data: {
+        from: "Owner <owner@example.com>",
+        text: "Summary:\nTimestamp source\n\nUserProfile Suggestion:\nUse concise updates.",
+      },
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.timestamp).toBe("2026-03-01T10:00:00.000Z");
+    expect(parsed.parsed.rpmSuggestion?.timestamp).toBe("2026-03-01T10:00:00.000Z");
+  });
+
+  it("parses SaaS fee labels without alternation side effects", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      text: `Summary:
+Tx check
+
+Transaction:
+Hours Purchased: 10
+Hourly Rate: 100
+Allocated to Freelancer: 8
+Buffer: 1
+Please include SaaS2 Fee in your notes before finalization.
+SaaS² Fee: 1
+Project Remainder: 1`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(1);
+    expect(parsed.parsed.transactionEvent?.projectRemainder).toBe(1);
   });
 });

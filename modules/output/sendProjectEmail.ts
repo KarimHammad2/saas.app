@@ -3,7 +3,14 @@ import { sendEmail } from "@/modules/email/sendEmail";
 import { getRuntimeConfig, renderProjectUpdateTemplate } from "@/modules/config/runtimeConfig";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
 import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
-import type { ProjectEmailPayload } from "@/modules/output/types";
+import type { ProjectEmailKind, ProjectEmailPayload } from "@/modules/output/types";
+
+function resolveEmailKind(payload: ProjectEmailPayload): ProjectEmailKind {
+  if (payload.emailKind) {
+    return payload.emailKind;
+  }
+  return payload.isWelcome ? "welcome" : "update";
+}
 
 export async function sendProjectEmail(recipients: string[], payload: ProjectEmailPayload): Promise<void> {
   const to = Array.from(new Set(recipients.map((entry) => entry.trim().toLowerCase()).filter(Boolean)));
@@ -15,7 +22,13 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
   const document = generateProjectDocument(payload);
   const projectHtml = formatProjectEmail(payload);
   const summary = payload.context.summary || "Latest project memory regenerated.";
-  const template = payload.isWelcome ? runtime.projectWelcomeTemplate : runtime.projectUpdateTemplate;
+  const kind = resolveEmailKind(payload);
+  const template =
+    kind === "welcome"
+      ? runtime.projectWelcomeTemplate
+      : kind === "reminder"
+        ? runtime.projectReminderTemplate
+        : runtime.projectUpdateTemplate;
   const rendered = renderProjectUpdateTemplate(template, summary, document, runtime.llmInstruction);
   const introHtml = extractBodyInner(rendered.html);
   const footerHtml = [
@@ -34,6 +47,8 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     runtime.llmInstruction,
   ].join("\n");
 
+  const messageType = kind === "reminder" ? "project-reminder" : kind === "welcome" ? "project-welcome" : "project-update";
+
   await sendEmail({
     to: to.join(","),
     bcc,
@@ -42,7 +57,7 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     html,
     headers: {
       "X-SaaS2-System": "true",
-      "X-SaaS2-Message-Type": "project-update",
+      "X-SaaS2-Message-Type": messageType,
     },
     attachments: [
       {

@@ -76,6 +76,10 @@ export function getResendWebhookSecret(): string {
   return requireEnv("RESEND_WEBHOOK_SECRET");
 }
 
+export function getSesWebhookSecret(): string {
+  return requireEnv("SES_WEBHOOK_SECRET");
+}
+
 export function getEnableAdminBcc(): boolean {
   return (process.env.ENABLE_ADMIN_BCC ?? "").trim().toLowerCase() === "true";
 }
@@ -83,4 +87,36 @@ export function getEnableAdminBcc(): boolean {
 export function getAdminBccEmail(): string | null {
   const value = process.env.ADMIN_BCC_EMAIL?.trim().toLowerCase();
   return value ? value : null;
+}
+
+/** Secret for `/api/cron/*` (Authorization: Bearer …). */
+export function getCronSecret(): string {
+  return requireEnv("CRON_SECRET");
+}
+
+/** Days without inbound activity before a reminder is eligible (default 7). */
+export function getReminderIdleDays(): number {
+  const raw = process.env.REMINDER_IDLE_DAYS?.trim();
+  if (!raw) {
+    return 7;
+  }
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 7;
+}
+
+/** `minimal` = Overview/Goals/Tasks/Risks/Notes only. `full` = Status, decisions, RPM, account, etc. */
+export function getProjectDocumentMode(): "minimal" | "full" {
+  const raw = (process.env.PROJECT_DOCUMENT_MODE ?? "minimal").trim().toLowerCase();
+  return raw === "full" ? "full" : "minimal";
+}
+
+/** `frozen` = overview only from kickoff (default). `rules` = regenerate from initial + goals + notes. */
+export function getOverviewRegenerationMode(): "frozen" | "rules" {
+  const raw = (process.env.OVERVIEW_REGENERATION_MODE ?? "frozen").trim().toLowerCase();
+  return raw === "rules" ? "rules" : "frozen";
+}
+
+/** When true, inbound `Summary:` / `Overview:` sections may replace stored overview (default false). */
+export function getAllowOverviewOverride(): boolean {
+  return (process.env.ALLOW_OVERVIEW_OVERRIDE ?? "").trim().toLowerCase() === "true";
 }

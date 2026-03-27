@@ -9,6 +9,7 @@ function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEma
     providerEventId: "p1",
     timestamp: new Date().toISOString(),
     from: "user@external.com",
+    fromDisplayName: null,
     to: [],
     cc: [],
     subject: "S",

@@ -1,6 +1,15 @@
 import { getMasterUserEmail } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase";
-import type { ProjectContext, RPMSuggestion, Tier, TransactionEvent, TransactionRecord, UserProfileContext } from "@/modules/contracts/types";
+import type {
+  ProjectContext,
+  RPMSuggestion,
+  RPMSuggestionSource,
+  Tier,
+  TransactionEvent,
+  TransactionRecord,
+  UserProfileContext,
+  UserProfileStructuredContext,
+} from "@/modules/contracts/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 function formatNoteDatePrefix(iso?: string): string {
@@ -16,6 +25,7 @@ function noteHasDatePrefix(line: string): boolean {
 export interface UserRecord {
   id: string;
   email: string;
+  display_name: string | null;
   tier: Tier;
   created_at: string;
 }
@@ -25,6 +35,8 @@ export interface ProjectRecord {
   user_id: string;
   name: string;
   remainder_balance: number;
+  reminder_balance: number;
+  usage_count: number;
   created_at: string;
 }
 
@@ -37,6 +49,22 @@ function emptyProfile(): UserProfileContext {
     salesCallTranscripts: [],
     longTermInstructions: "",
     behaviorModifiers: {},
+    structuredContext: {},
+  };
+}
+
+function parseStructuredContextJson(value: unknown): UserProfileStructuredContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const o = value as Record<string, unknown>;
+  const prefs = o.preferences;
+  return {
+    business_type: typeof o.business_type === "string" ? o.business_type : undefined,
+    goals_style: typeof o.goals_style === "string" ? o.goals_style : undefined,
+    tone: typeof o.tone === "string" ? o.tone : undefined,
+    preferences:
+      prefs && typeof prefs === "object" && !Array.isArray(prefs) ? (prefs as Record<string, unknown>) : undefined,
   };
 }
 
@@ -92,7 +120,7 @@ export class MemoryRepository {
     if (existing?.user_id) {
       const { data: user, error: userError } = await this.supabase
         .from("users")
-        .select("id, email, tier, created_at")
+        .select("id, email, display_name, tier, created_at")
         .eq("id", existing.user_id)
         .single<UserRecord>();
 
@@ -106,7 +134,7 @@ export class MemoryRepository {
     const { data: createdUser, error: createUserError } = await this.supabase
       .from("users")
       .insert({ email: normalized, master_email: getMasterUserEmail() })
-      .select("id, email, tier, created_at")
+      .select("id, email, display_name, tier, created_at")
       .single<UserRecord>();
 
     if (createUserError || !createdUser) {
@@ -173,12 +201,16 @@ export class MemoryRepository {
     }
   }
 
-  async getOrCreateProject(userId: string, projectName = "Primary Project"): Promise<{ project: ProjectRecord; created: boolean }> {
+  /**
+   * One project per user (Phase 1): reuse the oldest project row for this user, or create "Primary Project".
+   * The project name argument on `getOrCreateProject` is ignored — kept for API compatibility.
+   */
+  async getOrCreatePrimaryProject(userId: string): Promise<{ project: ProjectRecord; created: boolean }> {
     const { data: existing, error: findError } = await this.supabase
       .from("projects")
-      .select("id, user_id, name, remainder_balance, created_at")
+      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, created_at")
       .eq("user_id", userId)
-      .eq("name", projectName)
+      .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle<ProjectRecord>();
 
@@ -192,8 +224,8 @@ export class MemoryRepository {
 
     const { data: created, error: createError } = await this.supabase
       .from("projects")
-      .insert({ user_id: userId, name: projectName })
-      .select("id, user_id, name, remainder_balance, created_at")
+      .insert({ user_id: userId, name: "Primary Project" })
+      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, created_at")
       .single<ProjectRecord>();
 
     if (createError || !created) {
@@ -217,6 +249,11 @@ export class MemoryRepository {
     );
 
     return { project: created, created: true };
+  }
+
+  /** @deprecated Use {@link getOrCreatePrimaryProject}. Name is ignored — one project per user. */
+  async getOrCreateProject(userId: string, _projectName = "Primary Project"): Promise<{ project: ProjectRecord; created: boolean }> {
+    return this.getOrCreatePrimaryProject(userId);
   }
 
   async assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void> {
@@ -278,11 +315,36 @@ export class MemoryRepository {
 
   async storeSummary(projectId: string, summary: string): Promise<void> {
     const compact = compactOverviewForDocument(summary);
-    const { error } = await this.supabase
+    const { data: row, error: fetchError } = await this.supabase
       .from("project_states")
-      .upsert({ project_id: projectId, summary: compact }, { onConflict: "project_id" });
+      .select("initial_summary")
+      .eq("project_id", projectId)
+      .maybeSingle<{ initial_summary: string | null }>();
+
+    if (fetchError) {
+      throw new Error(`Failed to read project state for summary: ${fetchError.message}`);
+    }
+
+    const payload: { project_id: string; summary: string; initial_summary?: string } = {
+      project_id: projectId,
+      summary: compact,
+    };
+    if (!row?.initial_summary?.trim()) {
+      payload.initial_summary = compact;
+    }
+
+    const { error } = await this.supabase.from("project_states").upsert(payload, { onConflict: "project_id" });
     if (error) {
       throw new Error(`Failed to store summary: ${error.message}`);
+    }
+  }
+
+  /** Updates displayed overview only (does not change `initial_summary`). Used for rule-based regeneration. */
+  async updateSummaryDisplay(projectId: string, summary: string): Promise<void> {
+    const compact = compactOverviewForDocument(summary);
+    const { error } = await this.supabase.from("project_states").update({ summary: compact }).eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to update summary: ${error.message}`);
     }
   }
 
@@ -419,7 +481,97 @@ export class MemoryRepository {
     }
   }
 
-  async storeRPMSuggestion(userId: string, projectId: string, fromEmail: string, content: string): Promise<RPMSuggestion> {
+  async replaceStructuredUserProfileContext(userId: string, next: UserProfileStructuredContext): Promise<void> {
+    const { error } = await this.supabase.from("user_profiles").upsert(
+      {
+        user_id: userId,
+        context: next as unknown as Record<string, unknown>,
+      },
+      { onConflict: "user_id" },
+    );
+    if (error) {
+      throw new Error(`Failed to store structured user profile: ${error.message}`);
+    }
+  }
+
+  async updateUserDisplayNameIfEmpty(userId: string, displayName: string | null): Promise<void> {
+    const trimmed = displayName?.trim();
+    if (!trimmed) {
+      return;
+    }
+    const { data: row, error: fetchError } = await this.supabase
+      .from("users")
+      .select("display_name")
+      .eq("id", userId)
+      .maybeSingle<{ display_name: string | null }>();
+
+    if (fetchError) {
+      throw new Error(`Failed to read user display name: ${fetchError.message}`);
+    }
+
+    if (row?.display_name?.trim()) {
+      return;
+    }
+
+    const { error } = await this.supabase
+      .from("users")
+      .update({ display_name: trimmed.slice(0, 200) })
+      .eq("id", userId);
+
+    if (error) {
+      throw new Error(`Failed to update display name: ${error.message}`);
+    }
+  }
+
+  async incrementProjectUsageCount(projectId: string): Promise<void> {
+    const { data: row, error: fetchError } = await this.supabase
+      .from("projects")
+      .select("usage_count")
+      .eq("id", projectId)
+      .maybeSingle<{ usage_count: number }>();
+
+    if (fetchError) {
+      throw new Error(`Failed to read usage count: ${fetchError.message}`);
+    }
+
+    const next = (row?.usage_count ?? 0) + 1;
+    const { error } = await this.supabase.from("projects").update({ usage_count: next }).eq("id", projectId);
+    if (error) {
+      throw new Error(`Failed to increment usage count: ${error.message}`);
+    }
+  }
+
+  async setKickoffCompleted(projectId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from("projects")
+      .update({ kickoff_completed_at: new Date().toISOString() })
+      .eq("id", projectId);
+
+    if (error) {
+      throw new Error(`Failed to record kickoff completion: ${error.message}`);
+    }
+  }
+
+  async deletePendingSystemSuggestionsForProject(projectId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from("rpm_suggestions")
+      .delete()
+      .eq("project_id", projectId)
+      .eq("source", "system")
+      .eq("status", "pending");
+
+    if (error) {
+      throw new Error(`Failed to clear system RPM suggestions: ${error.message}`);
+    }
+  }
+
+  async storeRPMSuggestion(
+    userId: string,
+    projectId: string,
+    fromEmail: string,
+    content: string,
+    source: RPMSuggestionSource = "inbound",
+  ): Promise<RPMSuggestion> {
     const { data, error } = await this.supabase
       .from("rpm_suggestions")
       .insert({
@@ -427,8 +579,9 @@ export class MemoryRepository {
         project_id: projectId,
         from_email: normalizeEmail(fromEmail),
         content,
+        source,
       })
-      .select("id, user_id, project_id, from_email, content, status, created_at")
+      .select("id, user_id, project_id, from_email, content, status, created_at, source")
       .single<{
         id: string;
         user_id: string;
@@ -437,6 +590,7 @@ export class MemoryRepository {
         content: string;
         status: "pending" | "approved" | "rejected";
         created_at: string;
+        source: RPMSuggestionSource;
       }>();
 
     if (error || !data) {
@@ -451,6 +605,7 @@ export class MemoryRepository {
       content: data.content,
       status: data.status,
       createdAt: data.created_at,
+      source: data.source,
     };
   }
 
@@ -519,7 +674,7 @@ export class MemoryRepository {
   async getPendingSuggestions(userId: string): Promise<RPMSuggestion[]> {
     const { data, error } = await this.supabase
       .from("rpm_suggestions")
-      .select("id, user_id, project_id, from_email, content, status, created_at")
+      .select("id, user_id, project_id, from_email, content, status, created_at, source")
       .eq("user_id", userId)
       .eq("status", "pending")
       .order("created_at", { ascending: true });
@@ -536,7 +691,160 @@ export class MemoryRepository {
       content: row.content,
       status: row.status,
       createdAt: row.created_at,
+      source: (row.source as RPMSuggestionSource) ?? "inbound",
     }));
+  }
+
+  async listProjectsForReminder(idleDays: number): Promise<
+    Array<{ projectId: string; userId: string; userEmail: string; projectName: string; reminderBalance: number }>
+  > {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await this.supabase.rpc("list_projects_for_reminder", {
+      p_idle_days: idleDays,
+      p_now: nowIso,
+    });
+
+    if (error) {
+      throw new Error(`Failed to list reminder projects: ${error.message}`);
+    }
+
+    const rows = (data ?? []) as Array<{
+      project_id: string;
+      user_id: string;
+      user_email: string;
+      project_name: string;
+      reminder_balance: number;
+    }>;
+
+    return rows.map((row) => ({
+      projectId: row.project_id,
+      userId: row.user_id,
+      userEmail: row.user_email,
+      projectName: row.project_name,
+      reminderBalance: row.reminder_balance,
+    }));
+  }
+
+  async reserveReminderSlot(projectId: string, idleDays: number): Promise<string | null> {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const idleThresholdIso = new Date(now.getTime() - Math.max(1, idleDays) * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: project, error: projectError } = await this.supabase
+      .from("projects")
+      .select("reminder_balance, last_reminder_sent_at, kickoff_completed_at, created_at")
+      .eq("id", projectId)
+      .maybeSingle<{
+        reminder_balance: number;
+        last_reminder_sent_at: string | null;
+        kickoff_completed_at: string | null;
+        created_at: string;
+      }>();
+
+    if (projectError) {
+      throw new Error(`Failed to read project reminder state: ${projectError.message}`);
+    }
+    if (!project || !project.kickoff_completed_at || project.reminder_balance <= 0) {
+      return null;
+    }
+
+    const { data: latestUpdate, error: updateError } = await this.supabase
+      .from("project_updates")
+      .select("created_at")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{ created_at: string }>();
+    if (updateError) {
+      throw new Error(`Failed to read latest project update for reminder: ${updateError.message}`);
+    }
+
+    const lastMeaningfulActivity = latestUpdate?.created_at ?? project.created_at;
+    if (new Date(lastMeaningfulActivity).toISOString() > idleThresholdIso) {
+      return null;
+    }
+
+    if (project.last_reminder_sent_at && new Date(project.last_reminder_sent_at).toISOString() > idleThresholdIso) {
+      return null;
+    }
+
+    const nextBalance = Math.max(0, project.reminder_balance - 1);
+    let updateQuery = this.supabase
+      .from("projects")
+      .update({
+        reminder_balance: nextBalance,
+        last_reminder_sent_at: nowIso,
+      })
+      .eq("id", projectId)
+      .eq("reminder_balance", project.reminder_balance);
+
+    if (project.last_reminder_sent_at) {
+      updateQuery = updateQuery.eq("last_reminder_sent_at", project.last_reminder_sent_at);
+    } else {
+      updateQuery = updateQuery.is("last_reminder_sent_at", null);
+    }
+
+    const { data: reservedProject, error: reserveError } = await updateQuery.select("id").maybeSingle<{ id: string }>();
+    if (reserveError) {
+      throw new Error(`Failed to reserve reminder slot: ${reserveError.message}`);
+    }
+    if (!reservedProject) {
+      return null;
+    }
+
+    return nowIso;
+  }
+
+  async releaseReminderSlot(projectId: string, reservationTimestamp: string): Promise<void> {
+    const { data: project, error: projectError } = await this.supabase
+      .from("projects")
+      .select("reminder_balance, last_reminder_sent_at")
+      .eq("id", projectId)
+      .maybeSingle<{ reminder_balance: number; last_reminder_sent_at: string | null }>();
+    if (projectError) {
+      throw new Error(`Failed to read reminder reservation: ${projectError.message}`);
+    }
+    if (!project || project.last_reminder_sent_at !== reservationTimestamp) {
+      return;
+    }
+
+    const { error } = await this.supabase
+      .from("projects")
+      .update({
+        reminder_balance: Math.max(0, (project.reminder_balance ?? 0) + 1),
+        last_reminder_sent_at: null,
+      })
+      .eq("id", projectId)
+      .eq("reminder_balance", project.reminder_balance)
+      .eq("last_reminder_sent_at", reservationTimestamp);
+    if (error) {
+      throw new Error(`Failed to release reminder reservation: ${error.message}`);
+    }
+  }
+
+  async recordReminderSent(projectId: string): Promise<void> {
+    const { data: row, error: fetchError } = await this.supabase
+      .from("projects")
+      .select("reminder_balance")
+      .eq("id", projectId)
+      .maybeSingle<{ reminder_balance: number }>();
+
+    if (fetchError) {
+      throw new Error(`Failed to read reminder balance: ${fetchError.message}`);
+    }
+
+    const next = Math.max(0, (row?.reminder_balance ?? 0) - 1);
+    const { error } = await this.supabase
+      .from("projects")
+      .update({
+        reminder_balance: next,
+        last_reminder_sent_at: new Date().toISOString(),
+      })
+      .eq("id", projectId);
+
+    if (error) {
+      throw new Error(`Failed to record reminder send: ${error.message}`);
+    }
   }
 
   async storeTransactionEvent(projectId: string, fromEmail: string, event: TransactionEvent): Promise<void> {
@@ -572,7 +880,7 @@ export class MemoryRepository {
     const { data, error } = await this.supabase
       .from("user_profiles")
       .select(
-        "communication_style, preferences, constraints, onboarding_data, sales_call_transcripts, long_term_instructions, behavior_modifiers",
+        "communication_style, preferences, constraints, onboarding_data, sales_call_transcripts, long_term_instructions, behavior_modifiers, context",
       )
       .eq("user_id", userId)
       .maybeSingle<{
@@ -583,6 +891,7 @@ export class MemoryRepository {
         sales_call_transcripts: unknown;
         long_term_instructions: string;
         behavior_modifiers: Record<string, unknown> | null;
+        context: unknown;
       }>();
 
     if (error) {
@@ -601,17 +910,21 @@ export class MemoryRepository {
       salesCallTranscripts: asStringArray(data.sales_call_transcripts),
       longTermInstructions: data.long_term_instructions ?? "",
       behaviorModifiers: data.behavior_modifiers ?? {},
+      structuredContext: parseStructuredContextJson(data.context),
     };
   }
 
   async getProjectState(projectId: string): Promise<ProjectContext> {
     const { data: state, error: stateError } = await this.supabase
       .from("project_states")
-      .select("project_id, summary, current_status, goals, action_items, decisions, risks, recommendations, notes")
+      .select(
+        "project_id, summary, initial_summary, current_status, goals, action_items, decisions, risks, recommendations, notes",
+      )
       .eq("project_id", projectId)
       .maybeSingle<{
         project_id: string;
         summary: string;
+        initial_summary: string;
         current_status: string;
         goals: unknown;
         action_items: unknown;
@@ -627,12 +940,28 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, remainder_balance")
+      .select("id, user_id, remainder_balance, reminder_balance, usage_count")
       .eq("id", projectId)
-      .single<{ id: string; user_id: string; remainder_balance: number }>();
+      .single<{
+        id: string;
+        user_id: string;
+        remainder_balance: number;
+        reminder_balance: number;
+        usage_count: number;
+      }>();
 
     if (projectError || !project) {
       throw new Error(`Failed to load project: ${projectError?.message ?? "Unknown error"}`);
+    }
+
+    const { data: userRow, error: userTierError } = await this.supabase
+      .from("users")
+      .select("tier")
+      .eq("id", project.user_id)
+      .maybeSingle<{ tier: Tier }>();
+
+    if (userTierError) {
+      throw new Error(`Failed to load user tier: ${userTierError.message}`);
     }
 
     const { data: transactions, error: txError } = await this.supabase
@@ -661,6 +990,7 @@ export class MemoryRepository {
       projectId: project.id,
       userId: project.user_id,
       summary: state?.summary ?? "",
+      initialSummary: typeof state?.initial_summary === "string" ? state.initial_summary : "",
       currentStatus: typeof state?.current_status === "string" ? state.current_status : "",
       goals: asStringArray(state?.goals),
       actionItems: asStringArray(state?.action_items),
@@ -669,6 +999,9 @@ export class MemoryRepository {
       recommendations: asStringArray(state?.recommendations),
       notes: asStringArray(state?.notes),
       remainderBalance: Number(project.remainder_balance ?? 0),
+      reminderBalance: Number(project.reminder_balance ?? 0),
+      usageCount: Number(project.usage_count ?? 0),
+      tier: userRow?.tier ?? "freemium",
       transactionHistory,
     };
   }
@@ -686,6 +1019,14 @@ export class MemoryRepository {
     });
     if (error) {
       throw new Error(`Failed to snapshot project context: ${error.message}`);
+    }
+
+    const { error: versionError } = await this.supabase.from("project_versions").insert({
+      project_id: projectId,
+      snapshot: context as unknown as Record<string, unknown>,
+    });
+    if (versionError) {
+      throw new Error(`Failed to record project version: ${versionError.message}`);
     }
   }
 }

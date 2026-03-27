@@ -1,13 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 
+const emptyUserProfile = {
+  communicationStyle: "",
+  preferences: {},
+  constraints: {},
+  onboardingData: "",
+  salesCallTranscripts: [] as string[],
+  longTermInstructions: "",
+  behaviorModifiers: {},
+  structuredContext: {},
+};
+
 const repoState = {
   registerInboundEvent: vi.fn(),
   getOrCreateUserByEmail: vi.fn(),
-  getOrCreateProject: vi.fn(),
+  getOrCreatePrimaryProject: vi.fn(),
   storeRawProjectUpdate: vi.fn(),
   getActiveRpm: vi.fn(),
   storeSummary: vi.fn(),
+  updateSummaryDisplay: vi.fn(),
   updateGoals: vi.fn(),
   appendActionItems: vi.fn(),
   updateDecisions: vi.fn(),
@@ -16,7 +28,13 @@ const repoState = {
   updateNotes: vi.fn(),
   updateCurrentStatus: vi.fn(),
   storeUserProfileContext: vi.fn(),
+  getUserProfile: vi.fn(),
+  replaceStructuredUserProfileContext: vi.fn(),
+  updateUserDisplayNameIfEmpty: vi.fn(),
   storeRPMSuggestion: vi.fn(),
+  deletePendingSystemSuggestionsForProject: vi.fn(),
+  incrementProjectUsageCount: vi.fn(),
+  setKickoffCompleted: vi.fn(),
   approveSuggestion: vi.fn(),
   rejectSuggestion: vi.fn(),
   addAdditionalEmails: vi.fn(),
@@ -33,10 +51,11 @@ vi.mock("@/modules/memory/repository", () => {
     MemoryRepository: class {
       registerInboundEvent = repoState.registerInboundEvent;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
-      getOrCreateProject = repoState.getOrCreateProject;
+      getOrCreatePrimaryProject = repoState.getOrCreatePrimaryProject;
       storeRawProjectUpdate = repoState.storeRawProjectUpdate;
       getActiveRpm = repoState.getActiveRpm;
       storeSummary = repoState.storeSummary;
+      updateSummaryDisplay = repoState.updateSummaryDisplay;
       updateGoals = repoState.updateGoals;
       appendActionItems = repoState.appendActionItems;
       updateDecisions = repoState.updateDecisions;
@@ -45,7 +64,13 @@ vi.mock("@/modules/memory/repository", () => {
       updateNotes = repoState.updateNotes;
       updateCurrentStatus = repoState.updateCurrentStatus;
       storeUserProfileContext = repoState.storeUserProfileContext;
+      getUserProfile = repoState.getUserProfile;
+      replaceStructuredUserProfileContext = repoState.replaceStructuredUserProfileContext;
+      updateUserDisplayNameIfEmpty = repoState.updateUserDisplayNameIfEmpty;
       storeRPMSuggestion = repoState.storeRPMSuggestion;
+      deletePendingSystemSuggestionsForProject = repoState.deletePendingSystemSuggestionsForProject;
+      incrementProjectUsageCount = repoState.incrementProjectUsageCount;
+      setKickoffCompleted = repoState.setKickoffCompleted;
       approveSuggestion = repoState.approveSuggestion;
       rejectSuggestion = repoState.rejectSuggestion;
       addAdditionalEmails = repoState.addAdditionalEmails;
@@ -64,11 +89,25 @@ describe("processInboundEmail", () => {
     vi.resetAllMocks();
     repoState.registerInboundEvent.mockResolvedValue(true);
     repoState.getOrCreateUserByEmail.mockResolvedValue({
-      user: { id: "u1", email: "user@example.com", tier: "freemium", created_at: new Date().toISOString() },
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
       created: false,
     });
-    repoState.getOrCreateProject.mockResolvedValue({
-      project: { id: "p1", user_id: "u1", name: "Primary Project", remainder_balance: 0, created_at: new Date().toISOString() },
+    repoState.getOrCreatePrimaryProject.mockResolvedValue({
+      project: {
+        id: "p1",
+        user_id: "u1",
+        name: "Primary Project",
+        remainder_balance: 0,
+        reminder_balance: 3,
+        usage_count: 0,
+        created_at: new Date().toISOString(),
+      },
       created: false,
     });
     repoState.getActiveRpm.mockResolvedValue("rpm@example.com");
@@ -77,6 +116,7 @@ describe("processInboundEmail", () => {
       projectId: "p1",
       userId: "u1",
       summary: "summary",
+      initialSummary: "summary",
       currentStatus: "",
       goals: [],
       actionItems: [],
@@ -85,9 +125,23 @@ describe("processInboundEmail", () => {
       recommendations: [],
       notes: [],
       remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
       transactionHistory: [],
     });
     repoState.getPendingSuggestions.mockResolvedValue([]);
+    repoState.getUserProfile.mockResolvedValue(emptyUserProfile);
+    repoState.storeRPMSuggestion.mockImplementation(async (userId, projectId, _from, content, source) => ({
+      id: "s1",
+      userId,
+      projectId,
+      fromEmail: "system@saas2.app",
+      content,
+      status: "pending" as const,
+      createdAt: new Date().toISOString(),
+      source: source ?? "inbound",
+    }));
   });
 
   it("returns recipients and state payload", async () => {
@@ -99,6 +153,7 @@ describe("processInboundEmail", () => {
       providerEventId: "m1",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
+      fromDisplayName: null,
       to: [],
       cc: [],
       subject: "Update",
@@ -123,7 +178,7 @@ describe("processInboundEmail", () => {
     const result = await processInboundEmail(event);
     expect(result.recipients).toEqual(["user@example.com", "rpm@example.com"]);
     expect(result.context.projectId).toBe("p1");
-    expect(repoState.storeSummary).toHaveBeenCalledWith("p1", "hello");
+    expect(repoState.updateSummaryDisplay).not.toHaveBeenCalled();
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
   });
 
@@ -136,6 +191,7 @@ describe("processInboundEmail", () => {
       providerEventId: "m1",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
+      fromDisplayName: null,
       to: [],
       cc: [],
       subject: "Update",
@@ -170,6 +226,7 @@ describe("processInboundEmail", () => {
       providerEventId: "m2",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
+      fromDisplayName: null,
       to: [],
       cc: [],
       subject: "Approvals",
@@ -201,17 +258,32 @@ describe("processInboundEmail", () => {
 
   it("marks first inbound as welcome and stores parsed notes", async () => {
     repoState.getOrCreateUserByEmail.mockResolvedValue({
-      user: { id: "u1", email: "user@example.com", tier: "freemium", created_at: new Date().toISOString() },
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
       created: true,
     });
-    repoState.getOrCreateProject.mockResolvedValue({
-      project: { id: "p1", user_id: "u1", name: "Primary Project", remainder_balance: 0, created_at: new Date().toISOString() },
+    repoState.getOrCreatePrimaryProject.mockResolvedValue({
+      project: {
+        id: "p1",
+        user_id: "u1",
+        name: "Primary Project",
+        remainder_balance: 0,
+        reminder_balance: 3,
+        usage_count: 0,
+        created_at: new Date().toISOString(),
+      },
       created: true,
     });
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
       summary: "",
+      initialSummary: "",
       currentStatus: "",
       goals: [],
       actionItems: [],
@@ -220,6 +292,9 @@ describe("processInboundEmail", () => {
       recommendations: [],
       notes: ["RAW NOTES"],
       remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
       transactionHistory: [],
     });
 
@@ -230,6 +305,7 @@ describe("processInboundEmail", () => {
       providerEventId: "m_welcome",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
+      fromDisplayName: null,
       to: [],
       cc: [],
       subject: "New Project",

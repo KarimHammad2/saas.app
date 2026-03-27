@@ -2,14 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import type { EmailProvider } from "@/modules/email/providers/types";
 import { POST } from "@/app/api/inbound/route";
+import { NonRetryableInboundError } from "@/modules/orchestration/errors";
 import { getEmailProvider } from "@/modules/email/providers";
-import { handleInboundEmailEvent } from "@/src/orchestration/emailHandler";
+import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 vi.mock("@/modules/email/providers", () => ({
   getEmailProvider: vi.fn(),
 }));
 
-vi.mock("@/src/orchestration/emailHandler", () => ({
+vi.mock("@/modules/orchestration/handleInboundEmail", () => ({
   handleInboundEmailEvent: vi.fn(),
 }));
 
@@ -31,6 +32,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
     providerEventId: "provider_evt_1",
     timestamp: new Date().toISOString(),
     from: "user@example.com",
+    fromDisplayName: null,
     to: ["frank@inbound.test"],
     cc: [],
     subject: "Hello",
@@ -113,6 +115,7 @@ describe("POST /api/inbound", () => {
       providerEventId: "provider_evt_1",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
+      fromDisplayName: null,
       to: ["daniel@inbound.test"],
       cc: [],
       subject: "Hello",
@@ -208,8 +211,8 @@ describe("POST /api/inbound", () => {
       retryable: false,
     });
     expect(validateSignature).toHaveBeenCalledOnce();
-    const envelope = validateSignature.mock.calls[0]?.[0];
-    expect(envelope.rawBody).toBe('{"from":"user@example.com","text":"Summary:\\nHi"}');
+    const signatureCalls = validateSignature.mock.calls as unknown as Array<[{ rawBody: string }]>;
+    expect(signatureCalls[0]?.[0].rawBody).toBe('{"from":"user@example.com","text":"Summary:\\nHi"}');
   });
 
   it("returns 400 when payload parsing fails", async () => {
@@ -277,6 +280,35 @@ describe("POST /api/inbound", () => {
       code: "PROCESSING_FAILED",
       error: "Internal server error.",
       retryable: true,
+    });
+  });
+
+  it("returns non-retryable response for deterministic inbound rejections", async () => {
+    mockedGetEmailProvider.mockReturnValue(buildProvider());
+    mockedHandleInboundEmailEvent.mockRejectedValue(
+      new NonRetryableInboundError("Transactions require user approval.", {
+        code: "TRANSACTION_APPROVAL_REQUIRED",
+        status: 403,
+      }),
+    );
+
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(403);
+    expect(json).toMatchObject({
+      ok: false,
+      code: "TRANSACTION_APPROVAL_REQUIRED",
+      error: "Transactions require user approval.",
+      retryable: false,
     });
   });
 

@@ -4,7 +4,8 @@ import { log } from "@/lib/log";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import { shouldProcessInboundEmail } from "@/modules/email/inboundPolicy";
 import { getEmailProvider } from "@/modules/email/providers";
-import { handleInboundEmailEvent } from "@/src/orchestration/emailHandler";
+import { NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 function headersToObject(headers: Headers): Record<string, string> {
   const result: Record<string, string> = {};
@@ -179,6 +180,18 @@ export async function POST(request: Request) {
     }
 
     const err = error instanceof Error ? error : new Error("Unexpected server error.");
+    if (err instanceof NonRetryableInboundError) {
+      log.warn("inbound route rejected non-retryable event", {
+        requestId,
+        provider: providerName,
+        contentType,
+        payloadKeys,
+        code: err.code,
+        message: err.message,
+      });
+      return toErrorResponse(err.status, requestId, err.code, err.message, false);
+    }
+
     if (isConfigurationError(err)) {
       log.error("inbound route misconfigured", {
         requestId,
