@@ -15,7 +15,7 @@ export interface OutboundEmail {
   html?: string;
   attachments?: Array<{
     filename: string;
-    content: string;
+    content: string | Buffer;
   }>;
 }
 

@@ -124,3 +124,26 @@ describe("resendProvider.parseInbound", () => {
     expect(getReceivedEmail).toHaveBeenCalledOnce();
   });
 });
+
+describe("resendProvider.sendEmail", () => {
+  it("passes attachment content as UTF-8 Buffer", async () => {
+    const send = vi.fn().mockResolvedValue({ error: null });
+    const mockedGetResendClient = vi.mocked(getResendClient);
+    mockedGetResendClient.mockReturnValue({
+      emails: { send },
+    } as unknown as ReturnType<typeof getResendClient>);
+
+    await resendProvider.sendEmail({
+      to: ["user@example.com"],
+      subject: "Test",
+      text: "Body",
+      attachments: [{ filename: "doc.md", content: "café résumé" }],
+    });
+
+    expect(send).toHaveBeenCalledOnce();
+    const payload = send.mock.calls[0]?.[0] as { attachments?: Array<{ content: Buffer }> };
+    const attachmentContent = payload?.attachments?.[0]?.content;
+    expect(attachmentContent).toBeInstanceOf(Buffer);
+    expect(attachmentContent?.toString("utf-8")).toBe("café résumé");
+  });
+});

@@ -9,7 +9,7 @@ interface SendEmailInput {
   html?: string;
   attachments?: Array<{
     filename: string;
-    content: string;
+    content: string | Buffer;
   }>;
 }
 

@@ -1,17 +1,9 @@
+import { extractBodyInner, wrapEmailDocument } from "@/modules/email/buildHtmlEmail";
 import { sendEmail } from "@/modules/email/sendEmail";
 import { getRuntimeConfig, renderProjectUpdateTemplate } from "@/modules/config/runtimeConfig";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
 import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailPayload } from "@/modules/output/types";
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
 
 export async function sendProjectEmail(recipients: string[], payload: ProjectEmailPayload): Promise<void> {
   const to = Array.from(new Set(recipients.map((entry) => entry.trim().toLowerCase()).filter(Boolean)));
@@ -25,19 +17,28 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
   const summary = payload.context.summary || "Latest project memory regenerated.";
   const template = payload.isWelcome ? runtime.projectWelcomeTemplate : runtime.projectUpdateTemplate;
   const rendered = renderProjectUpdateTemplate(template, summary, document, runtime.llmInstruction);
-  const documentHtml = [
-    "<h2>Download full project document</h2>",
-    "<p>Included below in this email:</p>",
-    `<pre>${escapeHtml(document)}</pre>`,
-  ].join("\n");
-  const html = [rendered.html, "<hr/>", projectHtml, documentHtml].join("\n");
+  const introHtml = extractBodyInner(rendered.html);
+  const footerHtml = [
+    '<p class="email-footer">The full project document is attached as <strong>project-document.md</strong>.</p>',
+    '<p class="email-footer">Open it in ChatGPT or Gemini whenever you need full context for your project.</p>',
+  ].join("");
+  const innerHtml = [introHtml, '<hr class="email-divider" />', projectHtml, footerHtml].join("\n");
+  const html = wrapEmailDocument(innerHtml);
   const bcc = runtime.adminBccEnabled && runtime.adminBccAddress ? runtime.adminBccAddress : undefined;
+
+  const text = [
+    rendered.text,
+    "",
+    "Full project document: see attachment project-document.md",
+    "",
+    runtime.llmInstruction,
+  ].join("\n");
 
   await sendEmail({
     to: to.join(","),
     bcc,
     subject: rendered.subject,
-    text: `${rendered.text}\n\n${document}\n\n${runtime.llmInstruction}`,
+    text,
     html,
     attachments: [
       {

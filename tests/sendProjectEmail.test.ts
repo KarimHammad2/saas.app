@@ -76,6 +76,14 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("# Project Update");
     expect(attachment?.content).toContain("## Notes");
     expect(attachment?.content).toContain("- User wants lead gen + automation.");
+
+    expect(call?.html).toContain('charset="utf-8"');
+    expect(call?.html).toContain('class="email-root"');
+    expect(call?.html).toContain("project-document.md");
+    expect(call?.html).not.toContain("<pre>");
+    expect(call?.text).toContain("Full project document: see attachment project-document.md");
+    expect(call?.text).toContain("Use attached document.");
+    expect(call?.text).not.toContain("# Project Update");
   });
 
   it("uses update template when isWelcome=false", async () => {
@@ -85,6 +93,11 @@ describe("sendProjectEmail", () => {
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
     expect(call?.subject).toBe("Update Subject");
+    expect(call?.html).toContain('charset="utf-8"');
+    expect(call?.html).not.toContain("<pre>");
+    expect(call?.text).toContain("Update: AI SaaS for real estate");
+    expect(call?.text).toContain("Full project document: see attachment project-document.md");
+    expect(call?.text).not.toContain("## Goals");
   });
 });
 

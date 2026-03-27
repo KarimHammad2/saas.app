@@ -170,6 +170,10 @@ export const resendProvider: EmailProvider = {
   },
   async sendEmail(message: OutboundEmail): Promise<void> {
     const resend = getResendClient();
+    const attachments = message.attachments?.map((a) => ({
+      filename: a.filename,
+      content: Buffer.isBuffer(a.content) ? a.content : Buffer.from(a.content, "utf-8"),
+    }));
     const { error } = await resend.emails.send({
       from: getDefaultFromEmail(),
       to: message.to,
@@ -178,7 +182,7 @@ export const resendProvider: EmailProvider = {
       subject: message.subject,
       text: message.text,
       html: message.html,
-      attachments: message.attachments,
+      attachments,
     });
 
     if (error) {
