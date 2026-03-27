@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import type { EmailProvider } from "@/modules/email/providers/types";
 import { POST } from "@/app/api/inbound/route";
@@ -31,7 +31,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
     providerEventId: "provider_evt_1",
     timestamp: new Date().toISOString(),
     from: "user@example.com",
-    to: [],
+    to: ["frank@inbound.test"],
     cc: [],
     subject: "Hello",
     rawBody: "Summary:\nHello",
@@ -68,11 +68,17 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
 describe("POST /api/inbound", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.stubEnv("INBOUND_TRIGGER_EMAIL", "frank@inbound.test");
+    vi.stubEnv("MASTER_USER_EMAIL", "daniel@inbound.test");
     mockedHandleInboundEmailEvent.mockResolvedValue({
       userId: "user_1",
       projectId: "project_1",
       duplicate: false,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("returns 200 for valid inbound webhook", async () => {
@@ -98,6 +104,60 @@ describe("POST /api/inbound", () => {
     expect(json.requestId).toBeTypeOf("string");
     expect(response.headers.get("x-request-id")).toBe(json.requestId);
     expect(mockedHandleInboundEmailEvent).toHaveBeenCalledOnce();
+  });
+
+  it("returns 200 ignored and does not orchestrate when Frank is not in To", async () => {
+    const ignoredEvent = {
+      eventId: "evt_1",
+      provider: "resend",
+      providerEventId: "provider_evt_1",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      to: ["daniel@inbound.test"],
+      cc: [],
+      subject: "Hello",
+      rawBody: "Summary:\nHello",
+      parsed: {
+        summary: "Hello",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    mockedGetEmailProvider.mockReturnValue(
+      buildProvider({
+        parseInbound: vi.fn(() => ignoredEvent),
+      }),
+    );
+
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: "evt_123",
+        data: { from: "user@example.com", text: "Summary:\nHi" },
+      }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.ignored).toBe(true);
+    expect(json.reason).toBe("not_addressed_to_frank");
+    expect(mockedHandleInboundEmailEvent).not.toHaveBeenCalled();
   });
 
   it("returns duplicate=true when idempotency detects replay", async () => {

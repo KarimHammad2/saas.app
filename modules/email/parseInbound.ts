@@ -1,4 +1,5 @@
 import type { NormalizedEmailEvent, TransactionEvent } from "@/modules/contracts/types";
+import { tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
 
 export class InboundParseError extends Error {
   constructor(message: string) {
@@ -170,11 +171,8 @@ function stripSignatureAndQuoted(content: string): string {
 }
 
 function extractEmailAddress(value: string): string {
-  const angleMatch = value.match(/<([^>]+)>/);
-  const candidate = angleMatch?.[1] ?? value;
-  const normalized = candidate.trim().toLowerCase();
-  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
-  if (!isEmail) {
+  const normalized = tryNormalizeEmailAddress(value);
+  if (!normalized) {
     throw new InboundParseError("Could not extract a valid sender email.");
   }
   return normalized;

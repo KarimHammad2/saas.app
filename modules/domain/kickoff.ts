@@ -31,7 +31,7 @@ export function buildKickoffSummary(event: NormalizedEmailEvent): KickoffSummary
   const nextSteps = [
     'Reply to this email with any updates.',
     'Ask Frank for help by starting your message with "Frank...".',
-    "Forward or CC emails to frank@saas2.app to save your project state.",
+    "Send email to frank@saas2.app to save your project state.",
   ];
 
   return { summary, goals, constraints, nextSteps };

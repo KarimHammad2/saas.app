@@ -40,6 +40,10 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     subject: rendered.subject,
     text,
     html,
+    headers: {
+      "X-SaaS2-System": "true",
+      "X-SaaS2-Message-Type": "project-update",
+    },
     attachments: [
       {
         filename: "project-document.md",

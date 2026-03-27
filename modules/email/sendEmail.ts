@@ -7,6 +7,7 @@ interface SendEmailInput {
   subject: string;
   text?: string;
   html?: string;
+  headers?: Record<string, string>;
   attachments?: Array<{
     filename: string;
     content: string | Buffer;
@@ -14,7 +15,7 @@ interface SendEmailInput {
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<void> {
-  const { to, cc, bcc, subject, text, html, attachments } = input;
+  const { to, cc, bcc, subject, text, html, headers, attachments } = input;
 
   if (!to.trim()) {
     throw new Error("Recipient email is required.");
@@ -45,6 +46,7 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     subject,
     text: text?.trim() ?? "",
     html: html?.trim(),
+    headers,
     attachments,
   });
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { log } from "@/lib/log";
 import { InboundParseError } from "@/modules/email/parseInbound";
+import { shouldProcessInboundEmail } from "@/modules/email/inboundPolicy";
 import { getEmailProvider } from "@/modules/email/providers";
 import { handleInboundEmailEvent } from "@/src/orchestration/emailHandler";
 
@@ -120,6 +121,32 @@ export async function POST(request: Request) {
     }
 
     const event = await provider.parseInbound(envelope);
+    const policy = shouldProcessInboundEmail(event);
+    if (!policy.ok) {
+      log.info("inbound email skipped by policy", {
+        requestId,
+        provider: provider.name,
+        reason: policy.reason,
+        eventId: event.eventId,
+      });
+      return NextResponse.json(
+        {
+          ok: true,
+          ignored: true,
+          reason: policy.reason,
+          provider: provider.name,
+          eventId: event.eventId,
+          requestId,
+        },
+        {
+          status: 200,
+          headers: {
+            "x-request-id": requestId,
+          },
+        },
+      );
+    }
+
     const processed = await handleInboundEmailEvent(event);
 
     return NextResponse.json(

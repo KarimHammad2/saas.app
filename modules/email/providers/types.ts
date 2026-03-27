@@ -13,6 +13,8 @@ export interface OutboundEmail {
   subject: string;
   text: string;
   html?: string;
+  /** Custom headers (e.g. system loop detection). */
+  headers?: Record<string, string>;
   attachments?: Array<{
     filename: string;
     content: string | Buffer;

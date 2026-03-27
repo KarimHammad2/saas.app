@@ -1,3 +1,5 @@
+import { tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -36,6 +38,34 @@ export function getMasterUserEmail(): string {
 
 export function getDefaultFromEmail(): string {
   return process.env.RESEND_FROM_EMAIL ?? "Frank <frank@domain.com>";
+}
+
+/** Bare address that must appear in inbound To for project workflow (defaults from RESEND_FROM_EMAIL or frank@saas2.app). */
+export function getInboundTriggerEmail(): string {
+  const explicit = process.env.INBOUND_TRIGGER_EMAIL?.trim().toLowerCase();
+  if (explicit) {
+    return explicit;
+  }
+  const parsed = tryNormalizeEmailAddress(getDefaultFromEmail());
+  return parsed ?? "frank@saas2.app";
+}
+
+/** Internal senders blocked from triggering inbound workflow (merged with domain aliases). */
+export function getInternalInboundSenderBlocklist(): string[] {
+  const trigger = getInboundTriggerEmail();
+  const domain = trigger.includes("@") ? trigger.split("@")[1]! : "saas2.app";
+
+  const builtIn = new Set<string>([trigger, getMasterUserEmail(), `message@${domain}`, `contact@${domain}`, `system@${domain}`]);
+
+  const extra = process.env.INTERNAL_INBOUND_SENDERS?.split(",") ?? [];
+  for (const raw of extra) {
+    const e = raw.trim().toLowerCase();
+    if (e) {
+      builtIn.add(e);
+    }
+  }
+
+  return Array.from(builtIn);
 }
 
 export function getResendApiKey(): string {
