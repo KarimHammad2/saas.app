@@ -73,7 +73,8 @@ describe("sendProjectEmail", () => {
     expect(call?.subject).toBe("Welcome Subject");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
-    expect(attachment?.content).toContain("# Notes");
+    expect(attachment?.content).toContain("# Project Update");
+    expect(attachment?.content).toContain("## Notes");
     expect(attachment?.content).toContain("- User wants lead gen + automation.");
   });
 
