@@ -78,9 +78,9 @@ function defaultKickoffGoals(summary: string): string[] {
 function defaultKickoffTasks(summary: string): string[] {
   const lowered = summary.toLowerCase();
   const tasks = [
-    'Reply with a "Goals:" section containing 2-3 concrete goals.',
-    'Reply with a "Tasks:" section listing the first 3 execution tasks.',
-    "Define a first timeline and milestone date.",
+    "Define your first 2-3 concrete goals.",
+    "List the first 3 tasks to get started.",
+    "Set an initial timeline and first milestone date.",
   ];
 
   if (/\bsaas\b/.test(lowered)) {
@@ -101,8 +101,8 @@ export function buildKickoffSummary(event: NormalizedEmailEvent): KickoffSummary
   const nextSteps = [
     "Great - your project is now initialized.",
     ...facts.map((line) => `Understood: ${line}`),
-    "To move forward, I recommend defining your goals and target users first.",
-    'Reply to this thread with sections like "Goals:", "Tasks:", "Risks:", and "Notes:".',
+    "To move forward, define your goals and target users first.",
+    "Then share your first tasks, biggest risks, and key notes.",
   ];
 
   return { summary, goals, actionItems, initialNotes, constraints, nextSteps };

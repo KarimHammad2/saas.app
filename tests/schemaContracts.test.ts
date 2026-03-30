@@ -73,6 +73,14 @@ describe("schema and persistence contracts", () => {
     expect(sql).toMatch(/on conflict \(key\) do update set/i);
   });
 
+  it("keeps kickoff tone refresh template aligned with conversational guidance", async () => {
+    const sql = await readRepoFile("supabase/migrations/20260330_000014_project_kickoff_template_tone_refresh.sql");
+    expect(sql).toMatch(/project_kickoff/i);
+    expect(sql).toMatch(/Define your first 2-3 goals/i);
+    expect(sql).toMatch(/List the first tasks to get started/i);
+    expect(sql).toMatch(/Clarify your target users and first milestone/i);
+  });
+
   it("defines inbound async dedupe ledger and worker cron SQL primitives", async () => {
     const sql = await readRepoFile("supabase/migrations/20260330_000013_inbound_async_dedupe.sql");
     expect(sql).toMatch(/create table if not exists public\.processed_emails/i);
@@ -82,5 +90,14 @@ describe("schema and persistence contracts", () => {
     expect(sql).toMatch(/create or replace function public\.claim_next_inbound_email_job/i);
     expect(sql).toMatch(/create or replace function public\.invoke_inbound_webhook/i);
     expect(sql).toMatch(/cron\.schedule\(\s*'inbound_worker_every_minute'/i);
+  });
+
+  it("patches cron webhook invokers to use portable pg_net lookup", async () => {
+    const sql = await readRepoFile("supabase/migrations/20260330_000015_fix_pg_net_http_post.sql");
+    expect(sql).toMatch(/create or replace function public\.call_pg_net_http_post/i);
+    expect(sql).toMatch(/pg_net http_post function not found/i);
+    expect(sql).toMatch(/create or replace function public\.invoke_inbound_webhook/i);
+    expect(sql).toMatch(/create or replace function public\.invoke_reminders_webhook/i);
+    expect(sql).toMatch(/call_pg_net_http_post\(/i);
   });
 });

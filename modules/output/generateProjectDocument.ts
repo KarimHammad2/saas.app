@@ -8,6 +8,13 @@ import {
   toHumanSuggestions,
 } from "@/modules/output/presentationHelpers";
 
+function isKickoffPayload(payload: ProjectEmailPayload): boolean {
+  if (payload.emailKind) {
+    return payload.emailKind === "kickoff";
+  }
+  return payload.isWelcome;
+}
+
 function formatBulletList(values: string[], emptyPlaceholder: string): string {
   const uniqueValues = dedupePreserveOrder(values);
   if (uniqueValues.length === 0) {
@@ -20,6 +27,26 @@ function formatBulletList(values: string[], emptyPlaceholder: string): string {
 
 function formatCurrency(value: number): string {
   return `$${value.toFixed(2)}`;
+}
+
+function buildKickoffNextSteps(payload: ProjectEmailPayload): string[] {
+  const steps: string[] = [];
+  const { context } = payload;
+
+  if (context.goals.length === 0) {
+    steps.push("Define your first 2-3 goals.");
+  } else {
+    steps.push("Confirm your top goals for this first phase.");
+  }
+
+  if (context.actionItems.length === 0) {
+    steps.push("List the first tasks to get started.");
+  } else {
+    steps.push("Start executing the first tasks and share updates.");
+  }
+
+  steps.push("Clarify your target users and first milestone.");
+  return dedupePreserveOrder(steps);
 }
 
 function formatTransactions(payload: ProjectEmailPayload): string | null {
@@ -48,15 +75,42 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet)";
   const progress = computeProjectProgress(context);
+  const isKickoff = isKickoffPayload(payload);
   const hasPendingSuggestions = payload.pendingSuggestions.length > 0;
   const pendingLines = hasPendingSuggestions
-    ? toHumanSuggestions(payload.pendingSuggestions)
-        .map((line, index) => `${index + 1}. ${line.label}\n   -> ${line.content}`)
-        .join("\n")
+    ? [
+        "Here are a few things to think about next:",
+        "",
+        ...toHumanSuggestions(payload.pendingSuggestions).map((line) => `- ${line}`),
+      ].join("\n")
     : null;
   const transactionSection = formatTransactions(payload);
 
   if (getProjectDocumentMode() === "minimal") {
+    if (isKickoff) {
+      const kickoffSteps = buildKickoffNextSteps(payload).map((step) => `- ${step}`).join("\n");
+      return [
+        "# Overview",
+        "",
+        overview,
+        "",
+        "# Getting Started",
+        "",
+        kickoffSteps,
+        "",
+        "# Initial Structure",
+        "",
+        "## Goals",
+        "",
+        formatBulletList(context.goals.slice(0, 3), getGuidedEmptyPlaceholder("goals")),
+        "",
+        "## First Tasks",
+        "",
+        formatBulletList(context.actionItems.slice(0, 3), getGuidedEmptyPlaceholder("tasks")),
+        "",
+      ].join("\n");
+    }
+
     const base = [
       "# Overview",
       "",
@@ -146,7 +200,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
   ];
 
-  if (pendingLines) {
+  if (pendingLines && !isKickoff) {
     rows.push("## Pending Suggestions", "", pendingLines, "");
   }
 

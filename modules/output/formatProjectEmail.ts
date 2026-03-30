@@ -11,6 +11,13 @@ import {
 const EMPTY_OVERVIEW_TEXT = "(No overview yet)";
 const EMPTY_STATUS_TEXT = '(No status yet - reply with "Status:" to define where things stand.)';
 
+function isKickoffPayload(payload: ProjectEmailPayload): boolean {
+  if (payload.emailKind) {
+    return payload.emailKind === "kickoff";
+  }
+  return payload.isWelcome;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -32,9 +39,9 @@ function formatListOrPlaceholder(values: string[], emptyPlaceholder: string): st
 
 function formatPendingSuggestions(payload: ProjectEmailPayload): string {
   const items = toHumanSuggestions(payload.pendingSuggestions)
-    .map((line, index) => `    <li><strong>${index + 1}. ${escapeHtml(line.label)}</strong><br/>&rarr; ${escapeHtml(line.content)}</li>`)
+    .map((line) => `    <li>${escapeHtml(line)}</li>`)
     .join("\n");
-  return `  <ol>\n${items}\n  </ol>`;
+  return [`<p>${escapeHtml("Here are a few things to think about next:")}</p>`, `  <ul>\n${items}\n  </ul>`].join("\n");
 }
 
 function formatNextSteps(payload: ProjectEmailPayload): string {
@@ -72,12 +79,50 @@ function formatProgressBlock(progress: { projectStatus: string; completeness: nu
   ].join("\n");
 }
 
+function buildKickoffNextSteps(payload: ProjectEmailPayload): string[] {
+  const steps: string[] = [];
+  const { context } = payload;
+
+  if (context.goals.length === 0) {
+    steps.push("Define your first 2-3 goals.");
+  } else {
+    steps.push("Confirm your top goals for this first phase.");
+  }
+
+  if (context.actionItems.length === 0) {
+    steps.push("List the first tasks to get started.");
+  } else {
+    steps.push("Start executing the first tasks and share updates.");
+  }
+
+  steps.push("Clarify your target users and first milestone.");
+  return dedupePreserveOrder(steps);
+}
+
 export function formatProjectEmail(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || EMPTY_OVERVIEW_TEXT;
   const progress = computeProjectProgress(context);
+  const isKickoff = isKickoffPayload(payload);
 
   if (getProjectDocumentMode() === "minimal") {
+    if (isKickoff) {
+      const kickoffSteps = buildKickoffNextSteps(payload);
+      const kickoffStepItems = kickoffSteps.map((s) => `    <li>${escapeHtml(s)}</li>`).join("\n");
+
+      return [
+        "<h1>Overview</h1>",
+        `<p>${escapeHtml(overview)}</p>`,
+        "<h1>Getting Started</h1>",
+        `  <ul>\n${kickoffStepItems}\n  </ul>`,
+        "<h1>Initial Structure</h1>",
+        "<h2>Goals</h2>",
+        formatListOrPlaceholder(context.goals.slice(0, 3), getGuidedEmptyPlaceholder("goals")),
+        "<h2>First Tasks</h2>",
+        formatListOrPlaceholder(context.actionItems.slice(0, 3), getGuidedEmptyPlaceholder("tasks")),
+      ].join("\n");
+    }
+
     const sections = [
       "<h1>Overview</h1>",
       `<p>${escapeHtml(overview)}</p>`,
@@ -130,7 +175,7 @@ export function formatProjectEmail(payload: ProjectEmailPayload): string {
     `<p>${escapeHtml(`Tier: ${context.tier} · Reminder balance: ${context.reminderBalance} · Usage count: ${context.usageCount}`)}</p>`,
   ];
 
-  if (payload.pendingSuggestions.length > 0) {
+  if (payload.pendingSuggestions.length > 0 && !isKickoff) {
     sections.splice(sections.length - 4, 0, "<h2>Pending Suggestions</h2>", formatPendingSuggestions(payload));
   }
   if (payload.context.transactionHistory.length > 0) {

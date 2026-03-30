@@ -27,17 +27,17 @@ export function dedupePreserveOrder(values: string[]): string[] {
 export function getGuidedEmptyPlaceholder(section: "goals" | "tasks" | "risks" | "notes" | "decisions" | "recommendations"): string {
   switch (section) {
     case "goals":
-      return '(No goals defined yet - reply with "Goals:" to add them.)';
+      return "(No goals yet. Define your first 2-3 goals.)";
     case "tasks":
-      return '(No tasks defined yet - reply with "Tasks:" or "Action Items:" to add them.)';
+      return "(No tasks yet. List the first tasks to get started.)";
     case "risks":
-      return '(No risks tracked yet - reply with "Risks:" to capture top concerns.)';
+      return "(No risks tracked yet. Note the main blockers to watch.)";
     case "notes":
-      return '(No notes yet - reply with "Notes:" to preserve important context.)';
+      return "(No notes yet. Add useful context from your latest thinking.)";
     case "decisions":
-      return '(No decisions logged yet - reply with "Decisions:" to record key choices.)';
+      return "(No decisions logged yet. Capture key choices as they happen.)";
     case "recommendations":
-      return '(No recommendations yet - reply with "Recommendations:" to capture advice.)';
+      return "(No recommendations yet. Add ideas worth considering next.)";
     default:
       return "(No updates yet)";
   }
@@ -45,16 +45,16 @@ export function getGuidedEmptyPlaceholder(section: "goals" | "tasks" | "risks" |
 
 function pickNextStep(context: ProjectContext): string {
   if (context.goals.length === 0) {
-    return 'Define 2-3 goals by replying with a "Goals:" section.';
+    return "Define your first 2-3 goals.";
   }
   if (context.actionItems.length === 0) {
-    return 'Define the first execution tasks by replying with a "Tasks:" section.';
+    return "List the first tasks to get started.";
   }
   if (context.risks.length === 0) {
-    return 'Add your top 2-3 risks by replying with a "Risks:" section.';
+    return "Call out the top risks that could slow you down.";
   }
   if (context.notes.length === 0) {
-    return 'Add notes from your latest thinking by replying with a "Notes:" section.';
+    return "Add notes from your latest thinking.";
   }
   return "Keep momentum by sending your next project update.";
 }
@@ -64,24 +64,33 @@ function deriveStatus(context: ProjectContext): string {
     return "Early Stage";
   }
   if (context.goals.length > 0 && context.actionItems.length === 0) {
-    return "Defining Scope";
+    return "Planning";
   }
-  if (context.actionItems.length > 0 && context.risks.length === 0) {
-    return "Planning Execution";
+  if (context.actionItems.length > 0) {
+    return "In Progress";
   }
-  return "Execution";
+  return "In Progress";
 }
 
 export function computeProjectProgress(context: ProjectContext): ProjectProgress {
-  const checkpoints = [
-    Boolean(context.summary.trim()),
-    context.goals.length > 0,
-    context.actionItems.length > 0,
-    context.risks.length > 0,
-    context.notes.length > 0,
-  ];
-  const completed = checkpoints.filter(Boolean).length;
-  const completeness = Math.round((completed / checkpoints.length) * 100);
+  let completeness = 10;
+
+  if (context.goals.length > 0) {
+    completeness = 30;
+  }
+
+  if (context.actionItems.length > 0) {
+    completeness = 50;
+  }
+
+  if (context.actionItems.length > 0 && context.risks.length > 0) {
+    completeness = 65;
+  }
+
+  if (context.actionItems.length > 0 && context.risks.length > 0 && context.notes.length > 0) {
+    completeness = 80;
+  }
+
   return {
     projectStatus: deriveStatus(context),
     completeness,
@@ -89,32 +98,6 @@ export function computeProjectProgress(context: ProjectContext): ProjectProgress
   };
 }
 
-function inferSuggestionCategory(content: string): string {
-  const text = content.toLowerCase();
-  if (/\brisk|blocker|concern\b/.test(text)) {
-    return "Risks";
-  }
-  if (/\bvalidate|validation|interview|users?\b/.test(text)) {
-    return "Validation";
-  }
-  if (/\bprice|pricing|plan|subscription|billing\b/.test(text)) {
-    return "Pricing";
-  }
-  if (/\bmvp|scope|feature\b/.test(text)) {
-    return "Scope";
-  }
-  return "Suggestion";
-}
-
-export interface HumanSuggestion {
-  label: string;
-  content: string;
-}
-
-export function toHumanSuggestions(pendingSuggestions: RPMSuggestion[]): HumanSuggestion[] {
-  const unique = dedupePreserveOrder(pendingSuggestions.map((item) => item.content));
-  return unique.map((content) => ({
-    label: inferSuggestionCategory(content),
-    content,
-  }));
+export function toHumanSuggestions(pendingSuggestions: RPMSuggestion[]): string[] {
+  return dedupePreserveOrder(pendingSuggestions.map((item) => item.content));
 }

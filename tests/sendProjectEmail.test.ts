@@ -90,10 +90,11 @@ describe("sendProjectEmail", () => {
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Overview");
-    expect(attachment?.content).toContain("# Project Progress");
-    expect(attachment?.content).toContain("# Goals");
-    expect(attachment?.content).toContain("# Notes");
-    expect(attachment?.content).toContain("- User wants lead gen + automation.");
+    expect(attachment?.content).toContain("# Getting Started");
+    expect(attachment?.content).toContain("# Initial Structure");
+    expect(attachment?.content).toContain("## Goals");
+    expect(attachment?.content).toContain("## First Tasks");
+    expect(attachment?.content).not.toContain("# Project Progress");
 
     expect(call?.html).toContain('charset="utf-8"');
     expect(call?.html).toContain('class="email-root"');
@@ -163,18 +164,19 @@ describe("sendProjectEmail", () => {
     const call = mockedSendEmail.mock.calls[0]?.[0];
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Pending Suggestions");
-    expect(attachment?.content).toContain("1. Validation");
-    expect(attachment?.content).toContain("-> User prefers short answers");
+    expect(attachment?.content).toContain("Here are a few things to think about next:");
+    expect(attachment?.content).toContain("- User prefers short answers");
     expect(attachment?.content).not.toContain("s1");
     expect(attachment?.content).toContain("# Transactions");
     expect(attachment?.content).toContain("User share: $450.00");
     expect(attachment?.content).toContain("Platform share: $50.00");
     expect(call?.html).toContain("<h1>Pending Suggestions</h1>");
-    expect(call?.html).toContain("<ol>");
+    expect(call?.html).toContain("Here are a few things to think about next:");
+    expect(call?.html).toContain("<ul>");
     expect(call?.html).toContain("<h1>Transactions</h1>");
   });
 
-  it("shows guided placeholders when sections are empty", async () => {
+  it("shows conversational guided placeholders and realistic early completeness", async () => {
     const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
     const payload = buildPayload(false);
     payload.context.goals = [];
@@ -185,10 +187,12 @@ describe("sendProjectEmail", () => {
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
-    expect(attachment?.content).toContain('reply with "Goals:" to add them');
-    expect(attachment?.content).toContain('reply with "Tasks:" or "Action Items:" to add them');
-    expect(attachment?.content).toContain('reply with "Risks:" to capture top concerns');
-    expect(call?.html).toContain('reply with &quot;Goals:&quot; to add them');
+    expect(attachment?.content).toContain("(No goals yet. Define your first 2-3 goals.)");
+    expect(attachment?.content).toContain("(No tasks yet. List the first tasks to get started.)");
+    expect(attachment?.content).toContain("(No risks tracked yet. Note the main blockers to watch.)");
+    expect(attachment?.content).toContain("- Completeness: 10%");
+    expect(attachment?.content).not.toContain("Planning Execution");
+    expect(call?.html).toContain("(No goals yet. Define your first 2-3 goals.)");
   });
 });
 
