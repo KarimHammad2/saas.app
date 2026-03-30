@@ -12,7 +12,6 @@ import { runKickoffFlow } from "@/modules/domain/kickoffService";
 import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
-import { enrichUserProfileFromEmailSignals } from "@/modules/domain/userProfileEnrichment";
 import { MemoryRepository } from "@/modules/memory/repository";
 import { NonRetryableInboundError } from "@/modules/orchestration/errors";
 import type { ProjectEmailPayload } from "@/modules/output/types";
@@ -114,10 +113,6 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  const profileAfterInbound = await repo.getUserProfile(user.id);
-  const enrichedProfile = enrichUserProfileFromEmailSignals(profileAfterInbound.structuredContext, event);
-  await repo.replaceStructuredUserProfileContext(user.id, enrichedProfile);
-
   const emailCount = await repo.addAdditionalEmails(user.id, event.parsed.additionalEmails);
   const nextTier = getNextTier({
     currentTier: user.tier,
@@ -183,7 +178,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       pendingSuggestions,
       nextSteps,
       isWelcome,
-      emailKind: isWelcome ? "welcome" : "update",
+      emailKind: isWelcome ? "kickoff" : "update",
     },
     context: {
       userId: user.id,

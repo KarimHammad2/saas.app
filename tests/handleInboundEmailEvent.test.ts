@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboundProcessingResult } from "@/modules/orchestration/processInboundEmail";
+import { OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
@@ -102,5 +103,45 @@ describe("handleInboundEmailEvent", () => {
 
     expect(response).toMatchObject({ userId: "u1", projectId: "p1", duplicate: true });
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+  });
+
+  it("throws typed outbound error when send fails", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com"],
+      payload: {
+        context: {
+          projectId: "p1",
+          userId: "u1",
+          summary: "s",
+          initialSummary: "s",
+          currentStatus: "",
+          goals: [],
+          actionItems: [],
+          decisions: [],
+          risks: [],
+          recommendations: [],
+          notes: [],
+          remainderBalance: 0,
+          reminderBalance: 3,
+          usageCount: 0,
+          tier: "freemium",
+          transactionHistory: [],
+        },
+        pendingSuggestions: [],
+        nextSteps: [],
+        isWelcome: false,
+        emailKind: "update",
+      },
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_1",
+        duplicate: false,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+    mockedSendProjectEmail.mockRejectedValue(new Error("provider unavailable"));
+
+    await expect(handleInboundEmailEvent({} as never)).rejects.toBeInstanceOf(OutboundEmailDeliveryError);
   });
 });

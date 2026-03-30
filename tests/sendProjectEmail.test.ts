@@ -60,6 +60,11 @@ describe("sendProjectEmail", () => {
         textBody: "Update: {{summary}}",
         htmlBody: "<p>Update</p>",
       },
+      projectKickoffTemplate: {
+        subject: "Kickoff Subject",
+        textBody: "Kickoff: {{summary}}",
+        htmlBody: "<p>Kickoff</p>",
+      },
       projectWelcomeTemplate: {
         subject: "Welcome Subject",
         textBody: "Welcome!",
@@ -73,14 +78,15 @@ describe("sendProjectEmail", () => {
     });
   });
 
-  it("uses welcome template when isWelcome=true", async () => {
+  it("uses kickoff template when isWelcome=true", async () => {
     const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
     const payload = buildPayload(true);
     await sendProjectEmail(["user@example.com"], payload);
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Welcome Subject");
+    expect(call?.subject).toBe("Kickoff Subject");
+    expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Overview");
@@ -156,10 +162,10 @@ describe("sendProjectEmail", () => {
     const call = mockedSendEmail.mock.calls[0]?.[0];
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Pending Suggestions");
-    expect(attachment?.content).toContain("User prefers short answers (pending)");
+    expect(attachment?.content).toContain("[PENDING s1] User prefers short answers");
     expect(attachment?.content).toContain("# Transactions");
-    expect(attachment?.content).toContain("Freelancer (90%): $450.00");
-    expect(attachment?.content).toContain("Platform (10%): $50.00");
+    expect(attachment?.content).toContain("User share: $450.00");
+    expect(attachment?.content).toContain("Platform share: $50.00");
     expect(call?.html).toContain("<h1>Pending Suggestions</h1>");
     expect(call?.html).toContain("<h1>Transactions</h1>");
   });

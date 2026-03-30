@@ -183,6 +183,41 @@ describe("processInboundEmail", () => {
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
   });
 
+  it("does not infer profile updates from unlabeled content", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_profile",
+      provider: "resend",
+      providerEventId: "m_profile",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Plain update",
+      rawBody: "I'm a solo founder building SaaS and I prefer short answers.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["I'm a solo founder building SaaS and I prefer short answers."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.storeUserProfileContext).not.toHaveBeenCalled();
+    expect(repoState.replaceStructuredUserProfileContext).not.toHaveBeenCalled();
+  });
+
   it("marks duplicate events and skips mutating writes", async () => {
     repoState.registerInboundEvent.mockResolvedValue(false);
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");

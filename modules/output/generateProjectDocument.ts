@@ -2,13 +2,32 @@ import { getProjectDocumentMode } from "@/lib/env";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
+function dedupePreserveOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
+    if (!value) {
+      continue;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
 function formatBulletList(values: string[], emptyPlaceholder: string): string {
-  if (values.length === 0) {
+  const uniqueValues = dedupePreserveOrder(values);
+  if (uniqueValues.length === 0) {
     // Keep the document "paste into ChatGPT" friendly: placeholders are plain text,
     // not bullet rows like "- None".
     return emptyPlaceholder;
   }
-  return values.map((line) => `- ${line}`).join("\n");
+  return uniqueValues.map((line) => `- ${line}`).join("\n");
 }
 
 function formatCurrency(value: number): string {
@@ -22,15 +41,15 @@ function formatTransactions(payload: ProjectEmailPayload): string | null {
 
   const lines = payload.context.transactionHistory.map((tx) => {
     const total = tx.hoursPurchased * tx.hourlyRate;
-    const split90 = total * 0.9;
-    const split10 = total * 0.1;
+    const platformShare = Math.max(0, tx.saas2Fee);
+    const userShare = Math.max(0, total - platformShare);
     return [
       `- Transaction ${tx.id}:`,
       `  - Hours: ${tx.hoursPurchased}`,
       `  - Rate: ${formatCurrency(tx.hourlyRate)}`,
       `  - Total: ${formatCurrency(total)}`,
-      `  - Freelancer (90%): ${formatCurrency(split90)}`,
-      `  - Platform (10%): ${formatCurrency(split10)}`,
+      `  - User share: ${formatCurrency(userShare)}`,
+      `  - Platform share: ${formatCurrency(platformShare)}`,
     ].join("\n");
   });
 
@@ -42,7 +61,9 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet)";
   const hasPendingSuggestions = payload.pendingSuggestions.length > 0;
   const pendingLines = hasPendingSuggestions
-    ? payload.pendingSuggestions.map((s) => `- ${s.content} (${s.status})`).join("\n")
+    ? dedupePreserveOrder(payload.pendingSuggestions.map((s) => `[${s.status.toUpperCase()} ${s.id}] ${s.content}`))
+        .map((line) => `- ${line}`)
+        .join("\n")
     : null;
   const transactionSection = formatTransactions(payload);
 

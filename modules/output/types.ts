@@ -1,6 +1,6 @@
 import type { ProjectContext, RPMSuggestion } from "@/modules/contracts/types";
 
-export type ProjectEmailKind = "welcome" | "update" | "reminder";
+export type ProjectEmailKind = "kickoff" | "welcome" | "update" | "reminder";
 
 export interface ProjectEmailPayload {
   context: ProjectContext;

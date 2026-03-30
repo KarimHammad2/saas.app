@@ -5,6 +5,24 @@ import { compactOverviewForDocument } from "@/modules/output/overviewText";
 const EMPTY_OVERVIEW_TEXT = "(No overview yet)";
 const EMPTY_STATUS_TEXT = "(No status yet)";
 
+function dedupePreserveOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
+    if (!value) {
+      continue;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -15,17 +33,18 @@ function escapeHtml(value: string): string {
 }
 
 function formatListOrPlaceholder(values: string[], emptyPlaceholder: string): string {
-  if (values.length === 0) {
+  const uniqueValues = dedupePreserveOrder(values);
+  if (uniqueValues.length === 0) {
     return `<p>${escapeHtml(emptyPlaceholder)}</p>`;
   }
 
-  const listItems = values.map((item) => `    <li>${escapeHtml(item)}</li>`).join("\n");
+  const listItems = uniqueValues.map((item) => `    <li>${escapeHtml(item)}</li>`).join("\n");
   return `  <ul>\n${listItems}\n  </ul>`;
 }
 
 function formatPendingSuggestions(payload: ProjectEmailPayload): string {
-  const items = payload.pendingSuggestions
-    .map((s) => `    <li>${escapeHtml(`${s.content} (${s.status})`)}</li>`)
+  const items = dedupePreserveOrder(payload.pendingSuggestions.map((s) => `[${s.status.toUpperCase()} ${s.id}] ${s.content}`))
+    .map((line) => `    <li>${escapeHtml(line)}</li>`)
     .join("\n");
   return `  <ul>\n${items}\n  </ul>`;
 }
@@ -46,9 +65,9 @@ function formatTransactions(payload: ProjectEmailPayload): string {
   const items = payload.context.transactionHistory
     .map((tx) => {
       const total = tx.hoursPurchased * tx.hourlyRate;
-      const split90 = total * 0.9;
-      const split10 = total * 0.1;
-      const line = `Total: ${formatCurrency(total)} · Freelancer (90%): ${formatCurrency(split90)} · Platform (10%): ${formatCurrency(split10)}`;
+      const platformShare = Math.max(0, tx.saas2Fee);
+      const userShare = Math.max(0, total - platformShare);
+      const line = `Total: ${formatCurrency(total)} · User share: ${formatCurrency(userShare)} · Platform share: ${formatCurrency(platformShare)}`;
       return `    <li>${escapeHtml(line)}</li>`;
     })
     .join("\n");

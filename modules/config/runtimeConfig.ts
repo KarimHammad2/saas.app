@@ -12,6 +12,7 @@ interface RuntimeConfig {
   adminBccAddress: string | null;
   llmInstruction: string;
   projectUpdateTemplate: EmailTemplate;
+  projectKickoffTemplate: EmailTemplate;
   projectWelcomeTemplate: EmailTemplate;
   projectReminderTemplate: EmailTemplate;
 }
@@ -30,6 +31,14 @@ const DEFAULT_PROJECT_WELCOME_TEMPLATE: EmailTemplate = {
     "Welcome to SaaS² — Your Project Started\n\nHi,\n\nYour project has been initialized.\n\nAttached is your project document.\n\nUse this document inside ChatGPT / Gemini.\n\nWhenever you update your project, send an email back here.\n\nBest,\nFrank",
   htmlBody:
     "<!doctype html><html><body><h2>Welcome to SaaS² — Your Project Started</h2><p>Hi,</p><p>Your project has been initialized.</p><p>Attached is your project document.</p><p>Use this document inside ChatGPT / Gemini.</p><p>Whenever you update your project, send an email back here.</p><p>Best,<br/>Frank</p></body></html>",
+};
+
+const DEFAULT_PROJECT_KICKOFF_TEMPLATE: EmailTemplate = {
+  subject: "Project initialized - next steps",
+  textBody:
+    "Your project is initialized.\n\n{{summary}}\n\nAttached is your project document.\n\nReply to this thread with updates using sections like Goals, Tasks, Risks, and Notes.",
+  htmlBody:
+    "<!doctype html><html><body><h2>Project initialized</h2><p>{{summary}}</p><p>Attached is your project document.</p><p>Reply to this thread with updates using sections like Goals, Tasks, Risks, and Notes.</p></body></html>",
 };
 
 const DEFAULT_PROJECT_REMINDER_TEMPLATE: EmailTemplate = {
@@ -81,13 +90,25 @@ export function renderProjectUpdateTemplate(template: EmailTemplate, summary: st
 export async function getRuntimeConfig(): Promise<RuntimeConfig> {
   const supabase = getSupabaseAdminClient();
 
-  const [settingsResult, projectUpdateTemplateResult, projectWelcomeTemplateResult, projectReminderTemplateResult, instructionResult] =
+  const [
+    settingsResult,
+    projectUpdateTemplateResult,
+    projectKickoffTemplateResult,
+    projectWelcomeTemplateResult,
+    projectReminderTemplateResult,
+    instructionResult,
+  ] =
     await Promise.all([
       supabase.from("system_settings").select("key, value_json").in("key", ["email.admin_bcc.enabled", "email.admin_bcc.address"]),
       supabase
         .from("email_templates")
         .select("subject, text_body, html_body")
         .eq("key", "project_update")
+        .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
+      supabase
+        .from("email_templates")
+        .select("subject, text_body, html_body")
+        .eq("key", "project_kickoff")
         .maybeSingle<{ subject: string; text_body: string; html_body: string }>(),
       supabase
         .from("email_templates")
@@ -123,6 +144,15 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
 
   const llmInstruction = instructionResult.error ? DEFAULT_INSTRUCTION : instructionResult.data?.content?.trim() || DEFAULT_INSTRUCTION;
 
+  const projectKickoffTemplate =
+    projectKickoffTemplateResult.error || !projectKickoffTemplateResult.data
+      ? DEFAULT_PROJECT_KICKOFF_TEMPLATE
+      : {
+          subject: projectKickoffTemplateResult.data.subject || DEFAULT_PROJECT_KICKOFF_TEMPLATE.subject,
+          textBody: projectKickoffTemplateResult.data.text_body || DEFAULT_PROJECT_KICKOFF_TEMPLATE.textBody,
+          htmlBody: projectKickoffTemplateResult.data.html_body || DEFAULT_PROJECT_KICKOFF_TEMPLATE.htmlBody,
+        };
+
   const projectWelcomeTemplate =
     projectWelcomeTemplateResult.error || !projectWelcomeTemplateResult.data
       ? DEFAULT_PROJECT_WELCOME_TEMPLATE
@@ -146,6 +176,7 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
     adminBccAddress,
     llmInstruction,
     projectUpdateTemplate: projectUpdateTemplate,
+    projectKickoffTemplate,
     projectWelcomeTemplate,
     projectReminderTemplate,
   };

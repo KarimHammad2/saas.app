@@ -66,4 +66,10 @@ describe("schema and persistence contracts", () => {
   it("removes Vercel cron configuration", async () => {
     await expect(access(path.join(repoRoot, "vercel.json"))).rejects.toBeDefined();
   });
+
+  it("seeds dedicated kickoff email template key", async () => {
+    const sql = await readRepoFile("supabase/migrations/20260330_000012_project_kickoff_template.sql");
+    expect(sql).toMatch(/project_kickoff/i);
+    expect(sql).toMatch(/on conflict \(key\) do update set/i);
+  });
 });

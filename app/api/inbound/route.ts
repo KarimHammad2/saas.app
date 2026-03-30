@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { log } from "@/lib/log";
+import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { sendEmail } from "@/modules/email/sendEmail";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import { shouldProcessInboundEmail } from "@/modules/email/inboundPolicy";
 import { getEmailProvider } from "@/modules/email/providers";
-import { NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { NonRetryableInboundError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 function headersToObject(headers: Headers): Record<string, string> {
@@ -52,6 +54,22 @@ function toErrorResponse(
   );
 }
 
+async function sendProcessingFallbackEmail(event: NormalizedEmailEvent, requestId: string): Promise<void> {
+  const subjectPrefix = event.subject?.trim() ? `Re: ${event.subject.trim()}` : "Re: Project update";
+  await sendEmail({
+    to: event.from,
+    subject: `${subjectPrefix} (processing delayed)`,
+    text: [
+      "We received your email but could not process it fully right now.",
+      "",
+      "No action is needed yet. Please try replying again shortly.",
+      "For best results, use explicit sections: Goals, Tasks, Risks, and Notes.",
+      "",
+      `Request ID: ${requestId}`,
+    ].join("\n"),
+  });
+}
+
 async function parseRequestPayload(request: Request): Promise<ParsedRequestPayload> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -97,6 +115,7 @@ export async function POST(request: Request) {
   let providerName = "unknown";
   let contentType = request.headers.get("content-type") ?? "";
   let payloadKeys: string[] = [];
+  let parsedEvent: NormalizedEmailEvent | null = null;
   const rawBody = await request.clone().text();
 
   try {
@@ -122,6 +141,21 @@ export async function POST(request: Request) {
     }
 
     const event = await provider.parseInbound(envelope);
+    parsedEvent = event;
+    log.info("inbound email parsed", {
+      requestId,
+      provider: provider.name,
+      eventId: event.eventId,
+      hasSummary: Boolean(event.parsed.summary?.trim()),
+      goalsCount: event.parsed.goals.length,
+      tasksCount: event.parsed.actionItems.length,
+      risksCount: event.parsed.risks.length,
+      notesCount: event.parsed.notes.length,
+      approvalsCount: event.parsed.approvals.length,
+      hasTransaction: Boolean(event.parsed.transactionEvent),
+      hasUserProfileContext: Boolean(event.parsed.userProfileContext?.trim()),
+      hasRpmSuggestion: Boolean(event.parsed.rpmSuggestion),
+    });
     const policy = shouldProcessInboundEmail(event);
     if (!policy.ok) {
       log.info("inbound email skipped by policy", {
@@ -190,6 +224,23 @@ export async function POST(request: Request) {
         message: err.message,
       });
       return toErrorResponse(err.status, requestId, err.code, err.message, false);
+    }
+
+    if (parsedEvent) {
+      try {
+        await sendProcessingFallbackEmail(parsedEvent, requestId);
+      } catch (fallbackError) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        log.error("fallback email send failed", {
+          requestId,
+          provider: providerName,
+          fallbackMessage,
+        });
+      }
+    }
+
+    if (err instanceof OutboundEmailDeliveryError) {
+      return toErrorResponse(503, requestId, "OUTBOUND_DELIVERY_FAILED", "Processing succeeded but delivery failed.", true);
     }
 
     if (isConfigurationError(err)) {

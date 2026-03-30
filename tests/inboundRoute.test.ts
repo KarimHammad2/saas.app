@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import type { EmailProvider } from "@/modules/email/providers/types";
 import { POST } from "@/app/api/inbound/route";
-import { NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { NonRetryableInboundError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { getEmailProvider } from "@/modules/email/providers";
+import { sendEmail } from "@/modules/email/sendEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 vi.mock("@/modules/email/providers", () => ({
@@ -12,6 +13,10 @@ vi.mock("@/modules/email/providers", () => ({
 
 vi.mock("@/modules/orchestration/handleInboundEmail", () => ({
   handleInboundEmailEvent: vi.fn(),
+}));
+
+vi.mock("@/modules/email/sendEmail", () => ({
+  sendEmail: vi.fn(),
 }));
 
 vi.mock("@/lib/log", () => ({
@@ -23,6 +28,7 @@ vi.mock("@/lib/log", () => ({
 }));
 
 const mockedGetEmailProvider = vi.mocked(getEmailProvider);
+const mockedSendEmail = vi.mocked(sendEmail);
 const mockedHandleInboundEmailEvent = vi.mocked(handleInboundEmailEvent);
 
 function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
@@ -281,6 +287,44 @@ describe("POST /api/inbound", () => {
       error: "Internal server error.",
       retryable: true,
     });
+    expect(mockedSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "user@example.com",
+      }),
+    );
+  });
+
+  it("returns 503 when outbound delivery fails and sends fallback email", async () => {
+    mockedGetEmailProvider.mockReturnValue(buildProvider());
+    mockedHandleInboundEmailEvent.mockRejectedValue(
+      new OutboundEmailDeliveryError("Failed to deliver outbound project email.", {
+        recipients: ["user@example.com"],
+        causeMessage: "provider unavailable",
+      }),
+    );
+
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(503);
+    expect(json).toMatchObject({
+      ok: false,
+      code: "OUTBOUND_DELIVERY_FAILED",
+      retryable: true,
+    });
+    expect(mockedSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "user@example.com",
+      }),
+    );
   });
 
   it("returns non-retryable response for deterministic inbound rejections", async () => {

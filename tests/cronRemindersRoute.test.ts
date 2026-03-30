@@ -27,6 +27,7 @@ vi.mock("@/modules/config/runtimeConfig", () => ({
     adminBccAddress: null,
     llmInstruction: "x",
     projectUpdateTemplate: { subject: "U", textBody: "{{summary}}", htmlBody: "<p>x</p>" },
+    projectKickoffTemplate: { subject: "K", textBody: "k", htmlBody: "<p>k</p>" },
     projectWelcomeTemplate: { subject: "W", textBody: "w", htmlBody: "<p>w</p>" },
     projectReminderTemplate: { subject: "R", textBody: "{{summary}}", htmlBody: "<p>r</p>" },
   }),

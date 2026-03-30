@@ -9,7 +9,7 @@ function resolveEmailKind(payload: ProjectEmailPayload): ProjectEmailKind {
   if (payload.emailKind) {
     return payload.emailKind;
   }
-  return payload.isWelcome ? "welcome" : "update";
+  return payload.isWelcome ? "kickoff" : "update";
 }
 
 export async function sendProjectEmail(recipients: string[], payload: ProjectEmailPayload): Promise<void> {
@@ -24,7 +24,9 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
   const summary = payload.context.summary || "Latest project memory regenerated.";
   const kind = resolveEmailKind(payload);
   const template =
-    kind === "welcome"
+    kind === "kickoff"
+      ? runtime.projectKickoffTemplate
+      : kind === "welcome"
       ? runtime.projectWelcomeTemplate
       : kind === "reminder"
         ? runtime.projectReminderTemplate
@@ -47,7 +49,14 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     runtime.llmInstruction,
   ].join("\n");
 
-  const messageType = kind === "reminder" ? "project-reminder" : kind === "welcome" ? "project-welcome" : "project-update";
+  const messageType =
+    kind === "reminder"
+      ? "project-reminder"
+      : kind === "kickoff"
+        ? "project-kickoff"
+        : kind === "welcome"
+          ? "project-welcome"
+          : "project-update";
 
   await sendEmail({
     to: to.join(","),
