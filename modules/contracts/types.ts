@@ -33,6 +33,9 @@ export interface UserProfileStructuredContext {
   goals_style?: string;
   preferences?: Record<string, unknown>;
   tone?: string;
+  industry?: string;
+  project_type?: string;
+  project_stage?: string;
 }
 
 export interface UserProfileContext {

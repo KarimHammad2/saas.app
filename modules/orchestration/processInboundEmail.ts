@@ -9,6 +9,7 @@ import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
 import { runKickoffFlow } from "@/modules/domain/kickoffService";
+import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
@@ -95,6 +96,15 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   await repo.updateRisks(project.id, event.parsed.risks);
   await repo.updateRecommendations(project.id, event.parsed.recommendations);
   await repo.updateNotes(project.id, event.parsed.notes, event.timestamp);
+  await repo.mergeStructuredUserProfileContext(
+    user.id,
+    inferMemorySignals({
+      summary: event.parsed.summary ?? event.rawBody,
+      rawBody: event.rawBody,
+      goals: event.parsed.goals,
+      notes: event.parsed.notes,
+    }),
+  );
 
   if (event.parsed.userProfileContext && canModifyUserProfile(role)) {
     await repo.storeUserProfileContext(user.id, event.parsed.userProfileContext);

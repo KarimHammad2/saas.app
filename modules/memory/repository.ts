@@ -78,6 +78,9 @@ function parseStructuredContextJson(value: unknown): UserProfileStructuredContex
     business_type: typeof o.business_type === "string" ? o.business_type : undefined,
     goals_style: typeof o.goals_style === "string" ? o.goals_style : undefined,
     tone: typeof o.tone === "string" ? o.tone : undefined,
+    industry: typeof o.industry === "string" ? o.industry : undefined,
+    project_type: typeof o.project_type === "string" ? o.project_type : undefined,
+    project_stage: typeof o.project_stage === "string" ? o.project_stage : undefined,
     preferences:
       prefs && typeof prefs === "object" && !Array.isArray(prefs) ? (prefs as Record<string, unknown>) : undefined,
   };
@@ -158,6 +161,15 @@ function applyStructuredPatch(
   }
   if (patch.preferencesList && patch.preferencesList.length > 0) {
     next.preferencesList = dedupePreserveOrder([...(existing.preferencesList ?? []), ...patch.preferencesList]);
+  }
+  if (patch.industry) {
+    next.industry = patch.industry;
+  }
+  if (patch.project_type) {
+    next.project_type = patch.project_type;
+  }
+  if (patch.project_stage) {
+    next.project_stage = patch.project_stage;
   }
 
   return next;
@@ -716,6 +728,14 @@ export class MemoryRepository {
     if (error) {
       throw new Error(`Failed to store structured user profile: ${error.message}`);
     }
+  }
+
+  async mergeStructuredUserProfileContext(userId: string, patch: Partial<UserProfileStructuredContext>): Promise<void> {
+    if (Object.keys(patch).length === 0) {
+      return;
+    }
+    const profile = await this.getUserProfile(userId);
+    await this.replaceStructuredUserProfileContext(userId, applyStructuredPatch(profile.structuredContext, patch));
   }
 
   async updateUserDisplayNameIfEmpty(userId: string, displayName: string | null): Promise<void> {

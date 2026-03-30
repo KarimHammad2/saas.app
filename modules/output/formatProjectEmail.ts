@@ -1,27 +1,15 @@
 import { getProjectDocumentMode } from "@/lib/env";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
+import {
+  computeProjectProgress,
+  dedupePreserveOrder,
+  getGuidedEmptyPlaceholder,
+  toHumanSuggestions,
+} from "@/modules/output/presentationHelpers";
 
 const EMPTY_OVERVIEW_TEXT = "(No overview yet)";
-const EMPTY_STATUS_TEXT = "(No status yet)";
-
-function dedupePreserveOrder(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of values) {
-    const value = raw.trim();
-    if (!value) {
-      continue;
-    }
-    const key = value.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(value);
-  }
-  return out;
-}
+const EMPTY_STATUS_TEXT = '(No status yet - reply with "Status:" to define where things stand.)';
 
 function escapeHtml(value: string): string {
   return value
@@ -43,10 +31,10 @@ function formatListOrPlaceholder(values: string[], emptyPlaceholder: string): st
 }
 
 function formatPendingSuggestions(payload: ProjectEmailPayload): string {
-  const items = dedupePreserveOrder(payload.pendingSuggestions.map((s) => `[${s.status.toUpperCase()} ${s.id}] ${s.content}`))
-    .map((line) => `    <li>${escapeHtml(line)}</li>`)
+  const items = toHumanSuggestions(payload.pendingSuggestions)
+    .map((line, index) => `    <li><strong>${index + 1}. ${escapeHtml(line.label)}</strong><br/>&rarr; ${escapeHtml(line.content)}</li>`)
     .join("\n");
-  return `  <ul>\n${items}\n  </ul>`;
+  return `  <ol>\n${items}\n  </ol>`;
 }
 
 function formatNextSteps(payload: ProjectEmailPayload): string {
@@ -74,22 +62,35 @@ function formatTransactions(payload: ProjectEmailPayload): string {
   return `  <ul>\n${items}\n  </ul>`;
 }
 
+function formatProgressBlock(progress: { projectStatus: string; completeness: number; nextStep: string }): string {
+  return [
+    "  <ul>",
+    `    <li><strong>Project Status:</strong> ${escapeHtml(progress.projectStatus)}</li>`,
+    `    <li><strong>Completeness:</strong> ${escapeHtml(`${progress.completeness}%`)}</li>`,
+    `    <li><strong>Next Step:</strong> ${escapeHtml(progress.nextStep)}</li>`,
+    "  </ul>",
+  ].join("\n");
+}
+
 export function formatProjectEmail(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || EMPTY_OVERVIEW_TEXT;
+  const progress = computeProjectProgress(context);
 
   if (getProjectDocumentMode() === "minimal") {
     const sections = [
       "<h1>Overview</h1>",
       `<p>${escapeHtml(overview)}</p>`,
+      "<h1>Project Progress</h1>",
+      formatProgressBlock(progress),
       "<h1>Goals</h1>",
-      formatListOrPlaceholder(context.goals, "(No goals yet)"),
+      formatListOrPlaceholder(context.goals, getGuidedEmptyPlaceholder("goals")),
       "<h1>Tasks</h1>",
-      formatListOrPlaceholder(context.actionItems, "(No tasks yet)"),
+      formatListOrPlaceholder(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
       "<h1>Risks</h1>",
-      formatListOrPlaceholder(context.risks, "(No risks yet)"),
+      formatListOrPlaceholder(context.risks, getGuidedEmptyPlaceholder("risks")),
       "<h1>Notes</h1>",
-      formatListOrPlaceholder(context.notes, "(No notes yet)"),
+      formatListOrPlaceholder(context.notes, getGuidedEmptyPlaceholder("notes")),
     ];
 
     if (payload.pendingSuggestions.length > 0) {
@@ -107,20 +108,22 @@ export function formatProjectEmail(payload: ProjectEmailPayload): string {
   const sections = [
     "<h2>Overview</h2>",
     `<p>${escapeHtml(overview)}</p>`,
+    "<h2>Project Progress</h2>",
+    formatProgressBlock(progress),
     "<h2>Status</h2>",
     `<p>${escapeHtml(statusLine)}</p>`,
     "<h2>Goals</h2>",
-    formatListOrPlaceholder(context.goals, "(No goals yet)"),
+    formatListOrPlaceholder(context.goals, getGuidedEmptyPlaceholder("goals")),
     "<h2>Tasks</h2>",
-    formatListOrPlaceholder(context.actionItems, "(No tasks yet)"),
+    formatListOrPlaceholder(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
     "<h2>Decisions</h2>",
-    formatListOrPlaceholder(context.decisions, "(No decisions yet)"),
+    formatListOrPlaceholder(context.decisions, getGuidedEmptyPlaceholder("decisions")),
     "<h2>Risks</h2>",
-    formatListOrPlaceholder(context.risks, "(No risks yet)"),
+    formatListOrPlaceholder(context.risks, getGuidedEmptyPlaceholder("risks")),
     "<h2>Recommendations</h2>",
-    formatListOrPlaceholder(context.recommendations, "(No recommendations yet)"),
+    formatListOrPlaceholder(context.recommendations, getGuidedEmptyPlaceholder("recommendations")),
     "<h2>Notes</h2>",
-    formatListOrPlaceholder(context.notes, "(No notes yet)"),
+    formatListOrPlaceholder(context.notes, getGuidedEmptyPlaceholder("notes")),
     "<h2>Next steps</h2>",
     formatNextSteps(payload),
     "<h2>Account</h2>",

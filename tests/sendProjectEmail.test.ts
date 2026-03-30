@@ -90,6 +90,7 @@ describe("sendProjectEmail", () => {
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Overview");
+    expect(attachment?.content).toContain("# Project Progress");
     expect(attachment?.content).toContain("# Goals");
     expect(attachment?.content).toContain("# Notes");
     expect(attachment?.content).toContain("- User wants lead gen + automation.");
@@ -162,12 +163,32 @@ describe("sendProjectEmail", () => {
     const call = mockedSendEmail.mock.calls[0]?.[0];
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Pending Suggestions");
-    expect(attachment?.content).toContain("[PENDING s1] User prefers short answers");
+    expect(attachment?.content).toContain("1. Validation");
+    expect(attachment?.content).toContain("-> User prefers short answers");
+    expect(attachment?.content).not.toContain("s1");
     expect(attachment?.content).toContain("# Transactions");
     expect(attachment?.content).toContain("User share: $450.00");
     expect(attachment?.content).toContain("Platform share: $50.00");
     expect(call?.html).toContain("<h1>Pending Suggestions</h1>");
+    expect(call?.html).toContain("<ol>");
     expect(call?.html).toContain("<h1>Transactions</h1>");
+  });
+
+  it("shows guided placeholders when sections are empty", async () => {
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(false);
+    payload.context.goals = [];
+    payload.context.actionItems = [];
+    payload.context.risks = [];
+    payload.context.notes = [];
+    await sendProjectEmail(["user@example.com"], payload);
+
+    const call = mockedSendEmail.mock.calls[0]?.[0];
+    const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
+    expect(attachment?.content).toContain('reply with "Goals:" to add them');
+    expect(attachment?.content).toContain('reply with "Tasks:" or "Action Items:" to add them');
+    expect(attachment?.content).toContain('reply with "Risks:" to capture top concerns');
+    expect(call?.html).toContain('reply with &quot;Goals:&quot; to add them');
   });
 });
 

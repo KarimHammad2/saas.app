@@ -1,24 +1,12 @@
 import { getProjectDocumentMode } from "@/lib/env";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
-
-function dedupePreserveOrder(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of values) {
-    const value = raw.trim();
-    if (!value) {
-      continue;
-    }
-    const key = value.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(value);
-  }
-  return out;
-}
+import {
+  computeProjectProgress,
+  dedupePreserveOrder,
+  getGuidedEmptyPlaceholder,
+  toHumanSuggestions,
+} from "@/modules/output/presentationHelpers";
 
 function formatBulletList(values: string[], emptyPlaceholder: string): string {
   const uniqueValues = dedupePreserveOrder(values);
@@ -59,10 +47,11 @@ function formatTransactions(payload: ProjectEmailPayload): string | null {
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet)";
+  const progress = computeProjectProgress(context);
   const hasPendingSuggestions = payload.pendingSuggestions.length > 0;
   const pendingLines = hasPendingSuggestions
-    ? dedupePreserveOrder(payload.pendingSuggestions.map((s) => `[${s.status.toUpperCase()} ${s.id}] ${s.content}`))
-        .map((line) => `- ${line}`)
+    ? toHumanSuggestions(payload.pendingSuggestions)
+        .map((line, index) => `${index + 1}. ${line.label}\n   -> ${line.content}`)
         .join("\n")
     : null;
   const transactionSection = formatTransactions(payload);
@@ -73,21 +62,27 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
       "",
       overview,
       "",
+      "# Project Progress",
+      "",
+      `- Project Status: ${progress.projectStatus}`,
+      `- Completeness: ${progress.completeness}%`,
+      `- Next Step: ${progress.nextStep}`,
+      "",
       "# Goals",
       "",
-      formatBulletList(context.goals, "(No goals yet)"),
+      formatBulletList(context.goals, getGuidedEmptyPlaceholder("goals")),
       "",
       "# Tasks",
       "",
-      formatBulletList(context.actionItems, "(No tasks yet)"),
+      formatBulletList(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
       "",
       "# Risks",
       "",
-      formatBulletList(context.risks, "(No risks yet)"),
+      formatBulletList(context.risks, getGuidedEmptyPlaceholder("risks")),
       "",
       "# Notes",
       "",
-      formatBulletList(context.notes, "(No notes yet)"),
+      formatBulletList(context.notes, getGuidedEmptyPlaceholder("notes")),
       "",
     ];
 
@@ -101,7 +96,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     return base.join("\n");
   }
 
-  const statusLine = context.currentStatus?.trim() || "(No status yet)";
+  const statusLine = context.currentStatus?.trim() || '(No status yet - reply with "Status:" to define where things stand.)';
   const nextLines =
     payload.nextSteps.length === 0 ? "(No next steps)" : payload.nextSteps.map((s) => `- ${s}`).join("\n");
   const rows = [
@@ -111,33 +106,39 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     overview,
     "",
+    "## Project Progress",
+    "",
+    `- Project Status: ${progress.projectStatus}`,
+    `- Completeness: ${progress.completeness}%`,
+    `- Next Step: ${progress.nextStep}`,
+    "",
     "## Status",
     "",
     statusLine,
     "",
     "## Goals",
     "",
-    formatBulletList(context.goals, "(No goals yet)"),
+    formatBulletList(context.goals, getGuidedEmptyPlaceholder("goals")),
     "",
     "## Tasks",
     "",
-    formatBulletList(context.actionItems, "(No tasks yet)"),
+    formatBulletList(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
     "",
     "## Decisions",
     "",
-    formatBulletList(context.decisions, "(No decisions yet)"),
+    formatBulletList(context.decisions, getGuidedEmptyPlaceholder("decisions")),
     "",
     "## Risks",
     "",
-    formatBulletList(context.risks, "(No risks yet)"),
+    formatBulletList(context.risks, getGuidedEmptyPlaceholder("risks")),
     "",
     "## Recommendations",
     "",
-    formatBulletList(context.recommendations, "(No recommendations yet)"),
+    formatBulletList(context.recommendations, getGuidedEmptyPlaceholder("recommendations")),
     "",
     "## Notes",
     "",
-    formatBulletList(context.notes, "(No notes yet)"),
+    formatBulletList(context.notes, getGuidedEmptyPlaceholder("notes")),
     "",
     "## Next steps",
     "",

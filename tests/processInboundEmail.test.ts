@@ -30,6 +30,7 @@ const repoState = {
   storeUserProfileContext: vi.fn(),
   getUserProfile: vi.fn(),
   replaceStructuredUserProfileContext: vi.fn(),
+  mergeStructuredUserProfileContext: vi.fn(),
   updateUserDisplayNameIfEmpty: vi.fn(),
   storeRPMSuggestion: vi.fn(),
   deletePendingSystemSuggestionsForProject: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock("@/modules/memory/repository", () => {
       storeUserProfileContext = repoState.storeUserProfileContext;
       getUserProfile = repoState.getUserProfile;
       replaceStructuredUserProfileContext = repoState.replaceStructuredUserProfileContext;
+      mergeStructuredUserProfileContext = repoState.mergeStructuredUserProfileContext;
       updateUserDisplayNameIfEmpty = repoState.updateUserDisplayNameIfEmpty;
       storeRPMSuggestion = repoState.storeRPMSuggestion;
       deletePendingSystemSuggestionsForProject = repoState.deletePendingSystemSuggestionsForProject;
@@ -133,6 +135,7 @@ describe("processInboundEmail", () => {
     });
     repoState.getPendingSuggestions.mockResolvedValue([]);
     repoState.getUserProfile.mockResolvedValue(emptyUserProfile);
+    repoState.mergeStructuredUserProfileContext.mockResolvedValue(undefined);
     repoState.storeRPMSuggestion.mockImplementation(async (userId, projectId, _from, content, source) => ({
       id: "s1",
       userId,
@@ -181,6 +184,7 @@ describe("processInboundEmail", () => {
     expect(result.context.projectId).toBe("p1");
     expect(repoState.updateSummaryDisplay).not.toHaveBeenCalled();
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
+    expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalled();
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
   });
 
@@ -217,6 +221,47 @@ describe("processInboundEmail", () => {
     await processInboundEmail(event);
     expect(repoState.storeUserProfileContext).not.toHaveBeenCalled();
     expect(repoState.replaceStructuredUserProfileContext).not.toHaveBeenCalled();
+  });
+
+  it("infers memory signals from plain inbound content", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_infer",
+      provider: "resend",
+      providerEventId: "m_infer",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Project idea",
+      rawBody: "I want to build a SaaS for restaurants and start with an MVP.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["I want to build a SaaS for restaurants and start with an MVP."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({
+        industry: "restaurants",
+        project_type: "SaaS",
+        project_stage: "building",
+      }),
+    );
   });
 
   it("marks duplicate events and skips mutating writes", async () => {
