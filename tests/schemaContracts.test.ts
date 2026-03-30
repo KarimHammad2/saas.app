@@ -72,4 +72,15 @@ describe("schema and persistence contracts", () => {
     expect(sql).toMatch(/project_kickoff/i);
     expect(sql).toMatch(/on conflict \(key\) do update set/i);
   });
+
+  it("defines inbound async dedupe ledger and worker cron SQL primitives", async () => {
+    const sql = await readRepoFile("supabase/migrations/20260330_000013_inbound_async_dedupe.sql");
+    expect(sql).toMatch(/create table if not exists public\.processed_emails/i);
+    expect(sql).toMatch(/create table if not exists public\.inbound_email_jobs/i);
+    expect(sql).toMatch(/email_id text not null unique/i);
+    expect(sql).toMatch(/create or replace function public\.enqueue_inbound_email_job/i);
+    expect(sql).toMatch(/create or replace function public\.claim_next_inbound_email_job/i);
+    expect(sql).toMatch(/create or replace function public\.invoke_inbound_webhook/i);
+    expect(sql).toMatch(/cron\.schedule\(\s*'inbound_worker_every_minute'/i);
+  });
 });

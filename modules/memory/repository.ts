@@ -37,7 +37,16 @@ export interface ProjectRecord {
   remainder_balance: number;
   reminder_balance: number;
   usage_count: number;
+  kickoff_completed_at: string | null;
   created_at: string;
+}
+
+export interface ClaimedInboundEmailJob {
+  id: string;
+  emailId: string;
+  provider: string;
+  payload: Record<string, unknown>;
+  attempts: number;
 }
 
 function emptyProfile(): UserProfileContext {
@@ -175,6 +184,150 @@ export class MemoryRepository {
     throw new Error(`Failed to register inbound event: ${error.message}`);
   }
 
+  async enqueueInboundEmailJob(emailId: string, provider: string, payload: Record<string, unknown>): Promise<boolean> {
+    const dedupeKey = emailId.trim();
+    if (!dedupeKey) {
+      throw new Error("Inbound email id is required.");
+    }
+    const normalizedProvider = provider.trim();
+    if (!normalizedProvider) {
+      throw new Error("Inbound provider is required.");
+    }
+
+    const { data, error } = await this.supabase.rpc("enqueue_inbound_email_job", {
+      p_email_id: dedupeKey,
+      p_provider: normalizedProvider,
+      p_payload: payload,
+    });
+    if (error) {
+      throw new Error(`Failed to enqueue inbound email job: ${error.message}`);
+    }
+    return Boolean(data);
+  }
+
+  async claimNextInboundEmailJob(): Promise<ClaimedInboundEmailJob | null> {
+    const { data, error } = await this.supabase.rpc("claim_next_inbound_email_job");
+    if (error) {
+      throw new Error(`Failed to claim inbound email job: ${error.message}`);
+    }
+
+    const row = Array.isArray(data) ? data[0] : null;
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: String(row.id),
+      emailId: String(row.email_id),
+      provider: String(row.provider),
+      payload:
+        row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+          ? (row.payload as Record<string, unknown>)
+          : {},
+      attempts: Number(row.attempts ?? 0),
+    };
+  }
+
+  async markInboundEmailProcessed(jobId: string, emailId: string): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const { error: jobError } = await this.supabase
+      .from("inbound_email_jobs")
+      .update({
+        status: "processed",
+        processed_at: nowIso,
+        available_at: nowIso,
+        last_error: null,
+      })
+      .eq("id", jobId);
+    if (jobError) {
+      throw new Error(`Failed to mark inbound job processed: ${jobError.message}`);
+    }
+
+    const { error: ledgerError } = await this.supabase
+      .from("processed_emails")
+      .update({
+        status: "processed",
+        processed_at: nowIso,
+        last_error: null,
+      })
+      .eq("email_id", emailId);
+    if (ledgerError) {
+      throw new Error(`Failed to mark processed email complete: ${ledgerError.message}`);
+    }
+  }
+
+  async rescheduleInboundEmailJob(jobId: string, emailId: string, errorMessage: string, delaySeconds: number): Promise<void> {
+    const safeDelaySeconds = Number.isFinite(delaySeconds) ? Math.max(1, Math.floor(delaySeconds)) : 1;
+    const availableAtIso = new Date(Date.now() + safeDelaySeconds * 1000).toISOString();
+    const normalizedError = errorMessage.trim().slice(0, 2000);
+    const { error: jobError } = await this.supabase
+      .from("inbound_email_jobs")
+      .update({
+        status: "queued",
+        available_at: availableAtIso,
+        last_error: normalizedError || null,
+      })
+      .eq("id", jobId);
+    if (jobError) {
+      throw new Error(`Failed to reschedule inbound job: ${jobError.message}`);
+    }
+
+    const { error: ledgerError } = await this.supabase
+      .from("processed_emails")
+      .update({
+        status: "queued",
+        last_error: normalizedError || null,
+      })
+      .eq("email_id", emailId);
+    if (ledgerError) {
+      throw new Error(`Failed to reschedule processed email: ${ledgerError.message}`);
+    }
+  }
+
+  async markInboundEmailFailed(jobId: string, emailId: string, errorMessage: string): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const normalizedError = errorMessage.trim().slice(0, 2000);
+    const { error: jobError } = await this.supabase
+      .from("inbound_email_jobs")
+      .update({
+        status: "failed",
+        processed_at: nowIso,
+        available_at: nowIso,
+        last_error: normalizedError || null,
+      })
+      .eq("id", jobId);
+    if (jobError) {
+      throw new Error(`Failed to mark inbound job failed: ${jobError.message}`);
+    }
+
+    const { error: ledgerError } = await this.supabase
+      .from("processed_emails")
+      .update({
+        status: "failed",
+        last_error: normalizedError || null,
+      })
+      .eq("email_id", emailId);
+    if (ledgerError) {
+      throw new Error(`Failed to mark processed email failed: ${ledgerError.message}`);
+    }
+  }
+
+  async markFallbackEmailSent(emailId: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("processed_emails")
+      .update({
+        fallback_sent_at: new Date().toISOString(),
+      })
+      .eq("email_id", emailId)
+      .is("fallback_sent_at", null)
+      .select("email_id")
+      .maybeSingle<{ email_id: string }>();
+    if (error) {
+      throw new Error(`Failed to mark fallback email sent: ${error.message}`);
+    }
+    return Boolean(data?.email_id);
+  }
+
   async getOrCreateUserByEmail(email: string): Promise<{ user: UserRecord; created: boolean }> {
     const normalized = normalizeEmail(email);
     if (!isEmail(normalized)) {
@@ -279,7 +432,7 @@ export class MemoryRepository {
   async getOrCreatePrimaryProject(userId: string): Promise<{ project: ProjectRecord; created: boolean }> {
     const { data: existing, error: findError } = await this.supabase
       .from("projects")
-      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, created_at")
+      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: true })
       .limit(1)
@@ -296,7 +449,7 @@ export class MemoryRepository {
     const { data: created, error: createError } = await this.supabase
       .from("projects")
       .insert({ user_id: userId, name: "Primary Project" })
-      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, created_at")
+      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .single<ProjectRecord>();
 
     if (createError || !created) {

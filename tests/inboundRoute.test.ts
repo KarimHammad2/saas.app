@@ -2,21 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import type { EmailProvider } from "@/modules/email/providers/types";
 import { POST } from "@/app/api/inbound/route";
-import { NonRetryableInboundError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { getEmailProvider } from "@/modules/email/providers";
-import { sendEmail } from "@/modules/email/sendEmail";
-import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 vi.mock("@/modules/email/providers", () => ({
   getEmailProvider: vi.fn(),
 }));
 
-vi.mock("@/modules/orchestration/handleInboundEmail", () => ({
-  handleInboundEmailEvent: vi.fn(),
-}));
-
-vi.mock("@/modules/email/sendEmail", () => ({
-  sendEmail: vi.fn(),
+const enqueueInboundEmailJob = vi.fn();
+vi.mock("@/modules/memory/repository", () => ({
+  MemoryRepository: class {
+    enqueueInboundEmailJob = enqueueInboundEmailJob;
+  },
 }));
 
 vi.mock("@/lib/log", () => ({
@@ -28,8 +24,6 @@ vi.mock("@/lib/log", () => ({
 }));
 
 const mockedGetEmailProvider = vi.mocked(getEmailProvider);
-const mockedSendEmail = vi.mocked(sendEmail);
-const mockedHandleInboundEmailEvent = vi.mocked(handleInboundEmailEvent);
 
 function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
   const baseEvent = {
@@ -78,11 +72,7 @@ describe("POST /api/inbound", () => {
     vi.resetAllMocks();
     vi.stubEnv("INBOUND_TRIGGER_EMAIL", "frank@inbound.test");
     vi.stubEnv("MASTER_USER_EMAIL", "daniel@inbound.test");
-    mockedHandleInboundEmailEvent.mockResolvedValue({
-      userId: "user_1",
-      projectId: "project_1",
-      duplicate: false,
-    });
+    enqueueInboundEmailJob.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -108,10 +98,65 @@ describe("POST /api/inbound", () => {
 
     expect(response.status).toBe(200);
     expect(json.ok).toBe(true);
+    expect(json.queued).toBe(true);
+    expect(json.skipped).toBe(false);
     expect(json.duplicate).toBe(false);
+    expect(json.emailId).toBe("provider_evt_1");
     expect(json.requestId).toBeTypeOf("string");
     expect(response.headers.get("x-request-id")).toBe(json.requestId);
-    expect(mockedHandleInboundEmailEvent).toHaveBeenCalledOnce();
+    expect(enqueueInboundEmailJob).toHaveBeenCalledWith("provider_evt_1", "resend", expect.any(Object));
+  });
+
+  it("returns fast queued acknowledgement for plain-text kickoff emails", async () => {
+    const plainTextEvent = {
+      eventId: "evt_plain_1",
+      provider: "resend",
+      providerEventId: "provider_evt_plain_1",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: ["frank@inbound.test"],
+      cc: [],
+      subject: "new",
+      rawBody: "Hi, I want to build a SaaS for restaurants.",
+      parsed: {
+        summary: "Hi, I want to build a SaaS for restaurants.",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["Hi, I want to build a SaaS for restaurants."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    mockedGetEmailProvider.mockReturnValue(
+      buildProvider({
+        parseInbound: vi.fn(() => plainTextEvent),
+      }),
+    );
+
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ from: "user@example.com", text: "Hi, I want to build a SaaS for restaurants." }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.queued).toBe(true);
+    expect(json.skipped).toBe(false);
+    expect(json.duplicate).toBe(false);
   });
 
   it("returns 200 ignored and does not orchestrate when Frank is not in To", async () => {
@@ -166,16 +211,12 @@ describe("POST /api/inbound", () => {
     expect(json.ok).toBe(true);
     expect(json.ignored).toBe(true);
     expect(json.reason).toBe("not_addressed_to_frank");
-    expect(mockedHandleInboundEmailEvent).not.toHaveBeenCalled();
+    expect(enqueueInboundEmailJob).not.toHaveBeenCalled();
   });
 
   it("returns duplicate=true when idempotency detects replay", async () => {
     mockedGetEmailProvider.mockReturnValue(buildProvider());
-    mockedHandleInboundEmailEvent.mockResolvedValue({
-      userId: "user_1",
-      projectId: "project_1",
-      duplicate: true,
-    });
+    enqueueInboundEmailJob.mockResolvedValue(false);
 
     const request = new Request("http://localhost/api/inbound", {
       method: "POST",
@@ -188,7 +229,35 @@ describe("POST /api/inbound", () => {
     const response = await POST(request);
     const json = (await response.json()) as Record<string, unknown>;
     expect(response.status).toBe(200);
+    expect(json.queued).toBe(false);
+    expect(json.skipped).toBe(true);
     expect(json.duplicate).toBe(true);
+  });
+
+  it("returns queued on first webhook and skipped on replay", async () => {
+    mockedGetEmailProvider.mockReturnValue(buildProvider());
+    enqueueInboundEmailJob.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    const firstRequest = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
+    });
+    const secondRequest = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
+    });
+
+    const firstResponse = await POST(firstRequest);
+    const secondResponse = await POST(secondRequest);
+    const firstJson = (await firstResponse.json()) as Record<string, unknown>;
+    const secondJson = (await secondResponse.json()) as Record<string, unknown>;
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(firstJson).toMatchObject({ ok: true, queued: true, skipped: false, duplicate: false });
+    expect(secondJson).toMatchObject({ ok: true, queued: false, skipped: true, duplicate: true });
   });
 
   it("returns 401 when signature validation fails", async () => {
@@ -265,9 +334,9 @@ describe("POST /api/inbound", () => {
     });
   });
 
-  it("returns 500 when downstream processing fails", async () => {
+  it("returns 500 when enqueue fails", async () => {
     mockedGetEmailProvider.mockReturnValue(buildProvider());
-    mockedHandleInboundEmailEvent.mockRejectedValue(new Error("database unavailable"));
+    enqueueInboundEmailJob.mockRejectedValue(new Error("database unavailable"));
 
     const request = new Request("http://localhost/api/inbound", {
       method: "POST",
@@ -286,73 +355,6 @@ describe("POST /api/inbound", () => {
       code: "PROCESSING_FAILED",
       error: "Internal server error.",
       retryable: true,
-    });
-    expect(mockedSendEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "user@example.com",
-      }),
-    );
-  });
-
-  it("returns 503 when outbound delivery fails and sends fallback email", async () => {
-    mockedGetEmailProvider.mockReturnValue(buildProvider());
-    mockedHandleInboundEmailEvent.mockRejectedValue(
-      new OutboundEmailDeliveryError("Failed to deliver outbound project email.", {
-        recipients: ["user@example.com"],
-        causeMessage: "provider unavailable",
-      }),
-    );
-
-    const request = new Request("http://localhost/api/inbound", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
-    });
-
-    const response = await POST(request);
-    const json = (await response.json()) as Record<string, unknown>;
-
-    expect(response.status).toBe(503);
-    expect(json).toMatchObject({
-      ok: false,
-      code: "OUTBOUND_DELIVERY_FAILED",
-      retryable: true,
-    });
-    expect(mockedSendEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "user@example.com",
-      }),
-    );
-  });
-
-  it("returns non-retryable response for deterministic inbound rejections", async () => {
-    mockedGetEmailProvider.mockReturnValue(buildProvider());
-    mockedHandleInboundEmailEvent.mockRejectedValue(
-      new NonRetryableInboundError("Transactions require user approval.", {
-        code: "TRANSACTION_APPROVAL_REQUIRED",
-        status: 403,
-      }),
-    );
-
-    const request = new Request("http://localhost/api/inbound", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ from: "user@example.com", text: "Summary:\nHi" }),
-    });
-
-    const response = await POST(request);
-    const json = (await response.json()) as Record<string, unknown>;
-
-    expect(response.status).toBe(403);
-    expect(json).toMatchObject({
-      ok: false,
-      code: "TRANSACTION_APPROVAL_REQUIRED",
-      error: "Transactions require user approval.",
-      retryable: false,
     });
   });
 

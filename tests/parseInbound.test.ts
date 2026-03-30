@@ -163,7 +163,7 @@ Decisions:
 
     const parsed = parseInbound(payload, "resend");
     expect(parsed.from).toBe("user@example.com");
-    expect(parsed.parsed.summary).toBeNull();
+    expect(parsed.parsed.summary).toBe("I want to build an AI SaaS for real estate agents.");
     expect(parsed.parsed.goals).toEqual([]);
     expect(parsed.parsed.actionItems).toEqual([]);
     expect(parsed.parsed.risks).toEqual([]);

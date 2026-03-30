@@ -71,7 +71,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await repo.updateUserDisplayNameIfEmpty(user.id, event.fromDisplayName);
   }
 
-  if (userCreated || projectCreated) {
+  const shouldRunKickoff = !project.kickoff_completed_at;
+  if (shouldRunKickoff) {
     await runKickoffFlow(repo, event, user.id, project.id);
   }
 
@@ -168,7 +169,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const userRpm = await repo.getActiveRpm(project.id);
   const recipients = [user.email, userRpm].filter((entry): entry is string => Boolean(entry));
 
-  const isWelcome = userCreated || projectCreated;
+  const isWelcome = shouldRunKickoff;
   const nextSteps = isWelcome ? [...getKickoffFollowUpQuestions(), ...defaultNextSteps()] : defaultNextSteps();
 
   return {

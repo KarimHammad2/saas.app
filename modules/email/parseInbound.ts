@@ -142,6 +142,24 @@ function normalizeWhitespace(content: string): string {
     .trim();
 }
 
+function extractSummaryFromText(content: string): string | null {
+  const compact = content.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return null;
+  }
+
+  const sentenceMatch = compact.match(/^(.{1,240}?[.!?])(?:\s|$)/);
+  if (sentenceMatch?.[1]) {
+    return sentenceMatch[1].trim();
+  }
+
+  if (compact.length <= 240) {
+    return compact;
+  }
+
+  return `${compact.slice(0, 237).trimEnd()}...`;
+}
+
 function stripHtml(content: string): string {
   return content
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -468,14 +486,16 @@ export function parseNormalizedContent(content: string) {
     Boolean(transactionEvent) ||
     approvals.length > 0;
 
+  const fallbackSummary = !hasMeaning ? extractSummaryFromText(content) : null;
+  const normalizedSummary = summary?.trim() || fallbackSummary;
   let notes = hasMeaning ? notesSection : [content];
-  if (summary?.trim()) {
-    const summaryKey = normalizeForDedup(summary);
+  if (hasMeaning && normalizedSummary) {
+    const summaryKey = normalizeForDedup(normalizedSummary);
     notes = notes.filter((entry) => normalizeForDedup(entry) !== summaryKey);
   }
 
   return {
-    summary: summary || null,
+    summary: normalizedSummary || null,
     currentStatus: currentStatus || null,
     goals,
     actionItems,

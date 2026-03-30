@@ -15,11 +15,12 @@ export function parseEmailToStructuredData(text: string): StructuredProjectData 
   if (!normalized) return createEmptyStructuredData();
   const parsed = parseNormalizedContent(normalized);
   const notes = extractNotes(normalized);
+  const resolvedNotes = notes.length > 0 ? notes : parsed.notes.length > 0 ? parsed.notes : parsed.summary ? [parsed.summary] : [normalized];
   return {
     goals: parsed.goals,
     tasks: parsed.actionItems,
     risks: parsed.risks,
-    notes: notes.length > 0 ? notes : parsed.summary ? [parsed.summary] : [normalized],
+    notes: resolvedNotes,
     decisions: parsed.decisions,
   };
 }

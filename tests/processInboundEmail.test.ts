@@ -106,6 +106,7 @@ describe("processInboundEmail", () => {
         remainder_balance: 0,
         reminder_balance: 3,
         usage_count: 0,
+        kickoff_completed_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
       },
       created: false,
@@ -301,7 +302,7 @@ describe("processInboundEmail", () => {
         tier: "freemium",
         created_at: new Date().toISOString(),
       },
-      created: true,
+      created: false,
     });
     repoState.getOrCreatePrimaryProject.mockResolvedValue({
       project: {
@@ -311,9 +312,10 @@ describe("processInboundEmail", () => {
         remainder_balance: 0,
         reminder_balance: 3,
         usage_count: 0,
+        kickoff_completed_at: null,
         created_at: new Date().toISOString(),
       },
-      created: true,
+      created: false,
     });
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
@@ -368,5 +370,64 @@ describe("processInboundEmail", () => {
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", ["RAW NOTES"], event.timestamp);
     expect(result.payload.nextSteps.some((step) => /timeline/i.test(step))).toBe(true);
     expect(result.payload.nextSteps.some((step) => /first milestone/i.test(step))).toBe(true);
+  });
+
+  it("does not mark welcome when kickoff is already completed", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: true,
+    });
+    repoState.getOrCreatePrimaryProject.mockResolvedValue({
+      project: {
+        id: "p1",
+        user_id: "u1",
+        name: "Primary Project",
+        remainder_balance: 0,
+        reminder_balance: 3,
+        usage_count: 0,
+        kickoff_completed_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_not_welcome",
+      provider: "resend",
+      providerEventId: "m_not_welcome",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Existing project update",
+      rawBody: "Summary: hello",
+      parsed: {
+        summary: "hello",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.payload.isWelcome).toBe(false);
+    expect(result.payload.emailKind).toBe("update");
   });
 });

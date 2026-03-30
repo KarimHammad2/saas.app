@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { log } from "@/lib/log";
-import type { NormalizedEmailEvent } from "@/modules/contracts/types";
-import { sendEmail } from "@/modules/email/sendEmail";
 import { InboundParseError } from "@/modules/email/parseInbound";
 import { shouldProcessInboundEmail } from "@/modules/email/inboundPolicy";
 import { getEmailProvider } from "@/modules/email/providers";
-import { NonRetryableInboundError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
-import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
+import { MemoryRepository } from "@/modules/memory/repository";
 
 function headersToObject(headers: Headers): Record<string, string> {
   const result: Record<string, string> = {};
@@ -54,22 +51,6 @@ function toErrorResponse(
   );
 }
 
-async function sendProcessingFallbackEmail(event: NormalizedEmailEvent, requestId: string): Promise<void> {
-  const subjectPrefix = event.subject?.trim() ? `Re: ${event.subject.trim()}` : "Re: Project update";
-  await sendEmail({
-    to: event.from,
-    subject: `${subjectPrefix} (processing delayed)`,
-    text: [
-      "We received your email but could not process it fully right now.",
-      "",
-      "No action is needed yet. Please try replying again shortly.",
-      "For best results, use explicit sections: Goals, Tasks, Risks, and Notes.",
-      "",
-      `Request ID: ${requestId}`,
-    ].join("\n"),
-  });
-}
-
 async function parseRequestPayload(request: Request): Promise<ParsedRequestPayload> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -112,10 +93,10 @@ async function parseRequestPayload(request: Request): Promise<ParsedRequestPaylo
 
 export async function POST(request: Request) {
   const requestId = request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
+  const repo = new MemoryRepository();
   let providerName = "unknown";
   let contentType = request.headers.get("content-type") ?? "";
   let payloadKeys: string[] = [];
-  let parsedEvent: NormalizedEmailEvent | null = null;
   const rawBody = await request.clone().text();
 
   try {
@@ -141,7 +122,6 @@ export async function POST(request: Request) {
     }
 
     const event = await provider.parseInbound(envelope);
-    parsedEvent = event;
     log.info("inbound email parsed", {
       requestId,
       provider: provider.name,
@@ -182,16 +162,21 @@ export async function POST(request: Request) {
       );
     }
 
-    const processed = await handleInboundEmailEvent(event);
+    const dedupeEmailId = event.providerEventId?.trim();
+    if (!dedupeEmailId) {
+      throw new InboundParseError("Inbound payload is missing provider event id.");
+    }
+    const queued = await repo.enqueueInboundEmailJob(dedupeEmailId, provider.name, event as unknown as Record<string, unknown>);
 
     return NextResponse.json(
       {
         ok: true,
         provider: provider.name,
-        userId: processed.userId,
-        projectId: processed.projectId,
         eventId: event.eventId,
-        duplicate: processed.duplicate,
+        emailId: dedupeEmailId,
+        queued,
+        skipped: !queued,
+        duplicate: !queued,
         requestId,
       },
       {
@@ -214,35 +199,6 @@ export async function POST(request: Request) {
     }
 
     const err = error instanceof Error ? error : new Error("Unexpected server error.");
-    if (err instanceof NonRetryableInboundError) {
-      log.warn("inbound route rejected non-retryable event", {
-        requestId,
-        provider: providerName,
-        contentType,
-        payloadKeys,
-        code: err.code,
-        message: err.message,
-      });
-      return toErrorResponse(err.status, requestId, err.code, err.message, false);
-    }
-
-    if (parsedEvent) {
-      try {
-        await sendProcessingFallbackEmail(parsedEvent, requestId);
-      } catch (fallbackError) {
-        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-        log.error("fallback email send failed", {
-          requestId,
-          provider: providerName,
-          fallbackMessage,
-        });
-      }
-    }
-
-    if (err instanceof OutboundEmailDeliveryError) {
-      return toErrorResponse(503, requestId, "OUTBOUND_DELIVERY_FAILED", "Processing succeeded but delivery failed.", true);
-    }
-
     if (isConfigurationError(err)) {
       log.error("inbound route misconfigured", {
         requestId,
