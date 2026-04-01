@@ -52,6 +52,11 @@ export interface UserProfileContext {
 export interface ProjectContext {
   projectId: string;
   userId: string;
+  /** Short code for subjects and routing, e.g. pjt-a1b2c3d4 (display as [PJT-A1B2C3D4]). */
+  projectCode?: string;
+  projectName?: string;
+  ownerDisplayName?: string;
+  ownerEmail?: string;
   summary: string;
   /** First kickoff overview text; used for rule-based overview regeneration (Phase 2). */
   initialSummary: string;
@@ -94,6 +99,10 @@ export interface NormalizedEmailEvent {
   to: string[];
   cc: string[];
   subject: string;
+  /** First parent Message-ID from reply threading (normalized by parser). */
+  inReplyTo: string | null;
+  /** Additional Message-IDs from References header (normalized). */
+  references: string[];
   rawBody: string;
   parsed: {
     summary: string | null;

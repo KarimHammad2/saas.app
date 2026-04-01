@@ -13,6 +13,8 @@ function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEma
     to: [],
     cc: [],
     subject: "S",
+    inReplyTo: null,
+    references: [],
     rawBody: "Summary:\nHi",
     parsed: {
       summary: "Hi",

@@ -126,6 +126,18 @@ EMAIL_PROVIDER=resend
 # shared
 MASTER_USER_EMAIL=daniel@saas2.app
 
+# Inbound policy: bare address that must appear in the To header of incoming mail (not CC/Bcc).
+# If unset, derived from RESEND_FROM_EMAIL, else defaults to frank@saas2.app. Must match your
+# Resend inbound receiving address after normalization. See "Troubleshooting" below.
+INBOUND_TRIGGER_EMAIL=frank@your-verified-domain.com
+
+# Bearer secret for POST /api/cron/* (e.g. inbound worker). Must match Supabase system_settings
+# cron.inbound.secret when using pg_cron. See "Troubleshooting" below.
+CRON_SECRET=
+
+# Optional: comma-separated extra senders blocked from triggering inbound (merged with built-in aliases).
+# INTERNAL_INBOUND_SENDERS=
+
 # resend
 RESEND_API_KEY=
 RESEND_WEBHOOK_SECRET=
@@ -157,6 +169,59 @@ npm run lint
 #### Resend webhook secret (e.g. Vercel)
 
 If `/api/inbound` returns `CONFIGURATION_ERROR`, set `RESEND_WEBHOOK_SECRET` from Resend’s inbound webhook **Signing secret** (`whsec_…`), redeploy, and retest.
+
+### Troubleshooting: “success” in Resend/Vercel but no email
+
+Resend **webhook delivery success** and Vercel **HTTP 200** on `/api/inbound` only mean the notification reached your app. They do **not** guarantee that the message was accepted for processing or that a **reply** was sent.
+
+#### 1. Verify whether the inbound was ignored (policy)
+
+When the app skips a message by policy, the route still returns **200** with a JSON body like:
+
+```json
+{
+  "ok": true,
+  "ignored": true,
+  "reason": "not_addressed_to_frank",
+  "provider": "resend",
+  "eventId": "...",
+  "requestId": "..."
+}
+```
+
+**How to check:** Inspect that response (Resend’s webhook event detail often shows the response body), or in Vercel logs look for `inbound email skipped by policy` and the **`reason`** field in the structured log.
+
+| `reason` | Meaning | What to change |
+|----------|---------|----------------|
+| `not_addressed_to_frank` | The trigger address is not in **`To`**. CC/Bcc alone do not count. | Put **Frank’s inbound address in To**. Set **`INBOUND_TRIGGER_EMAIL`** on Vercel to the same **bare** address as your Resend inbound route (e.g. `frank@yourdomain.com`). |
+| `internal_sender` | Sender is treated as internal (Frank, master user, or `message@` / `contact@` / `system@` on the trigger domain, plus `INTERNAL_INBOUND_SENDERS`). | Send from a normal external mailbox when testing the full loop. |
+| `invalid_sender` | The From address could not be normalized to a valid email. | Fix the client’s From header. |
+
+Implementation: [`modules/email/inboundPolicy.ts`](modules/email/inboundPolicy.ts), [`app/api/inbound/route.ts`](app/api/inbound/route.ts).
+
+#### 2. Replies are sent asynchronously (after policy passes)
+
+Accepted mail is **queued** in Supabase; the **project reply** is sent when the **inbound worker** runs (`POST /api/cron/inbound`), triggered by **pg_cron** in Supabase (not inside the `/api/inbound` request).
+
+**Configure the worker once** in the Supabase SQL editor (same DB as your migrations), using your deployed app URL and the **same** secret as **`CRON_SECRET`** in Vercel:
+
+```sql
+select public.configure_inbound_webhook(
+  'https://YOUR_PROJECT.vercel.app/api/cron/inbound',
+  'YOUR_CRON_SECRET_MATCHING_VERCEL'
+);
+```
+
+Requirements:
+
+- Migrations that define `configure_inbound_webhook`, `invoke_inbound_webhook`, and the `inbound_worker_every_minute` job are applied.
+- `cron.inbound.webhook_url` and `cron.inbound.secret` in `system_settings` must be non-empty (the function above sets them).
+
+**How to verify:** After a non-ignored inbound, watch Vercel for **`POST /api/cron/inbound`** with **200**, not only `/api/inbound`. If the worker never runs or returns **401**, align the bearer token with `CRON_SECRET`.
+
+#### 3. Outbound sends via Resend API (different from inbound webhooks)
+
+If the problem is **sending** mail through the Resend API (dashboard “sent”, API 200) while the **recipient inbox** stays empty, that is **not** the `email.received` webhook path. Check domain verification and DNS for your sending domain, the **from** address, the recipient’s spam folder, and Resend **delivery / bounce** events (e.g. delivered, bounced), not only webhook success to Vercel.
 
 ### MVP scope traceability
 

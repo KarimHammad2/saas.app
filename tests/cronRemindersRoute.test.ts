@@ -5,6 +5,7 @@ const getProjectState = vi.fn();
 const getPendingSuggestions = vi.fn();
 const reserveReminderSlot = vi.fn();
 const releaseReminderSlot = vi.fn();
+const storeOutboundThreadMapping = vi.fn();
 const sendProjectEmail = vi.fn();
 
 vi.mock("@/modules/memory/repository", () => ({
@@ -14,6 +15,7 @@ vi.mock("@/modules/memory/repository", () => ({
     getPendingSuggestions = getPendingSuggestions;
     reserveReminderSlot = reserveReminderSlot;
     releaseReminderSlot = releaseReminderSlot;
+    storeOutboundThreadMapping = storeOutboundThreadMapping;
   },
 }));
 
@@ -40,6 +42,7 @@ describe("GET /api/cron/reminders", () => {
     vi.stubEnv("CRON_SECRET", "secret-test");
     listProjectsForReminder.mockResolvedValue([]);
     reserveReminderSlot.mockResolvedValue("2026-03-27T00:00:00.000Z");
+    sendProjectEmail.mockResolvedValue({ outboundMessageId: "reminder-out-id" });
   });
 
   it("returns 401 without bearer token", async () => {
@@ -90,6 +93,7 @@ describe("GET /api/cron/reminders", () => {
     expect(body.candidates).toBe(1);
     expect(sendProjectEmail).toHaveBeenCalledOnce();
     expect(sendProjectEmail).toHaveBeenCalledWith(["user@example.com"], expect.objectContaining({ emailKind: "reminder" }));
+    expect(storeOutboundThreadMapping).toHaveBeenCalledWith("reminder-out-id", "p1");
     expect(reserveReminderSlot).toHaveBeenCalledWith("p1", 7);
     expect(releaseReminderSlot).not.toHaveBeenCalled();
   });

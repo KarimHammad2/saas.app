@@ -1,5 +1,8 @@
 import type { NormalizedEmailEvent, TransactionEvent } from "@/modules/contracts/types";
+import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
+import { filterIgnoredNoteLines, isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { extractDisplayNameFromSenderRaw, tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
+import { normalizeMessageId } from "@/modules/email/messageId";
 import { stripQuotedReply } from "@/modules/email/stripQuotedReply";
 import { createHash } from "node:crypto";
 
@@ -132,6 +135,8 @@ function normalizeForDedup(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+export { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
+
 function normalizeWhitespace(content: string): string {
   return decodeHtmlEntities(content)
     .replace(/\r\n/g, "\n")
@@ -150,14 +155,14 @@ function extractSummaryFromText(content: string): string | null {
 
   const sentenceMatch = compact.match(/^(.{1,240}?[.!?])(?:\s|$)/);
   if (sentenceMatch?.[1]) {
-    return sentenceMatch[1].trim();
+    return cleanOverviewText(sentenceMatch[1].trim());
   }
 
   if (compact.length <= 240) {
-    return compact;
+    return cleanOverviewText(compact);
   }
 
-  return `${compact.slice(0, 237).trimEnd()}...`;
+  return cleanOverviewText(`${compact.slice(0, 237).trimEnd()}...`);
 }
 
 function stripHtml(content: string): string {
@@ -458,13 +463,13 @@ function extractBodyContent(source: Record<string, unknown>): string {
 }
 
 export function parseNormalizedContent(content: string) {
-  const summary = extractSection(content, "Summary") || extractSection(content, "Overview");
+  const summary = cleanOverviewText(extractSection(content, "Summary") || extractSection(content, "Overview"));
   const currentStatus = extractSection(content, "Status").trim();
   const goals = toBulletList(extractSection(content, "Goals"));
   const actionItems = toBulletList(extractSection(content, "Action Items") || extractSection(content, "Tasks"));
   const decisions = toBulletList(extractSection(content, "Decisions"));
   const risks = toBulletList(extractSection(content, "Risks"));
-  const notesSection = toBulletList(extractSection(content, "Notes"));
+  const notesSection = filterIgnoredNoteLines(toBulletList(extractSection(content, "Notes")));
   const recommendations = toBulletList(extractSection(content, "Recommendations"));
   const userProfileContext = extractSection(content, "UserProfile") || extractSection(content, "Context");
   const rpmSuggestionContent = extractSection(content, "UserProfile Suggestion");
@@ -488,11 +493,19 @@ export function parseNormalizedContent(content: string) {
 
   const fallbackSummary = !hasMeaning ? extractSummaryFromText(content) : null;
   const normalizedSummary = summary?.trim() || fallbackSummary;
-  let notes = hasMeaning ? notesSection : [content];
+  let notes: string[];
+  if (hasMeaning) {
+    notes = notesSection;
+  } else if (isIgnoredNoteInput(content)) {
+    notes = [];
+  } else {
+    notes = [content];
+  }
   if (hasMeaning && normalizedSummary) {
     const summaryKey = normalizeForDedup(normalizedSummary);
     notes = notes.filter((entry) => normalizeForDedup(entry) !== summaryKey);
   }
+  notes = filterIgnoredNoteLines(notes);
 
   return {
     summary: normalizedSummary || null,
@@ -515,6 +528,53 @@ export function parseNormalizedContent(content: string) {
     approvals,
     additionalEmails,
   };
+}
+
+/**
+ * Extract project routing token from subject, e.g. [PJT-A1B2C3D4] → pjt-a1b2c3d4 (DB form).
+ */
+export function parseProjectCodeFromSubject(subject: string): string | null {
+  const m = subject.match(/\[PJT-([A-F0-9]{6,10})\]/i);
+  if (!m?.[1]) {
+    return null;
+  }
+  return `pjt-${m[1].toLowerCase()}`;
+}
+
+function extractInReplyToRaw(source: Record<string, unknown>): string {
+  const candidates = [
+    toStringOrEmpty(source["In-Reply-To"]),
+    toStringOrEmpty(source["in-reply-to"]),
+    nestedString(source, ["headers", "In-Reply-To"]),
+    nestedString(source, ["headers", "in-reply-to"]),
+  ];
+  for (const c of candidates) {
+    if (c.trim()) {
+      return c;
+    }
+  }
+  return "";
+}
+
+function extractReferencesRaw(source: Record<string, unknown>): string {
+  return (
+    toStringOrEmpty(source.References) ||
+    toStringOrEmpty(source.references) ||
+    nestedString(source, ["headers", "References"]) ||
+    nestedString(source, ["headers", "references"]) ||
+    ""
+  );
+}
+
+function parseReferencesList(raw: string): string[] {
+  if (!raw.trim()) {
+    return [];
+  }
+  const ids = raw
+    .split(/\s+/)
+    .map((segment) => normalizeMessageId(segment))
+    .filter(Boolean);
+  return Array.from(new Set(ids));
 }
 
 function stableProviderEventId(provider: string, from: string, subject: string, body: string): string {
@@ -591,6 +651,10 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
     parsed.rpmSuggestion.timestamp = timestamp;
   }
 
+  const inReplyToRaw = extractInReplyToRaw(source);
+  const inReplyTo = inReplyToRaw.trim() ? normalizeMessageId(inReplyToRaw) : null;
+  const references = parseReferencesList(extractReferencesRaw(source));
+
   return {
     eventId: crypto.randomUUID(),
     provider,
@@ -601,6 +665,8 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
     to,
     cc,
     subject,
+    inReplyTo,
+    references,
     rawBody: cleanedBody,
     parsed,
   };

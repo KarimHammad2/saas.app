@@ -4,6 +4,12 @@ import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 const processInboundEmail = vi.fn();
 const sendProjectEmail = vi.fn();
 
+vi.mock("@/modules/memory/repository", () => ({
+  MemoryRepository: class {
+    storeOutboundThreadMapping = vi.fn();
+  },
+}));
+
 vi.mock("@/modules/orchestration/processInboundEmail", () => ({
   processInboundEmail,
 }));
@@ -47,7 +53,7 @@ describe("handleIncomingEmail", () => {
         duplicate: false,
       },
     });
-    sendProjectEmail.mockResolvedValue(undefined);
+    sendProjectEmail.mockResolvedValue({ outboundMessageId: "out-id" });
   });
 
   it("normalizes legacy payload and executes canonical loop", async () => {

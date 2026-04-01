@@ -5,6 +5,7 @@ import {
 } from "@/lib/env";
 import { log } from "@/lib/log";
 import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
+import { parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
@@ -13,7 +14,7 @@ import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
-import { MemoryRepository } from "@/modules/memory/repository";
+import { MemoryRepository, type ProjectRecord } from "@/modules/memory/repository";
 import { NonRetryableInboundError } from "@/modules/orchestration/errors";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 
@@ -26,6 +27,47 @@ export interface InboundProcessingResult {
     eventId: string;
     duplicate: boolean;
   };
+}
+
+function deriveProjectName(subject: string): string {
+  const withoutToken = subject.replace(/\[PJT-[A-F0-9]{6,10}\]/gi, "").trim();
+  const cleaned = withoutToken.replace(/^re:\s*/i, "").trim();
+  if (cleaned.length > 0) {
+    return cleaned.slice(0, 200);
+  }
+  return "New Project";
+}
+
+async function resolveInboundProject(
+  repo: MemoryRepository,
+  userId: string,
+  event: NormalizedEmailEvent,
+): Promise<{ project: ProjectRecord; created: boolean }> {
+  const code = parseProjectCodeFromSubject(event.subject);
+  let project: ProjectRecord | null = null;
+
+  if (code) {
+    project = await repo.findProjectByCodeAndUser(code, userId);
+  }
+
+  if (!project && event.inReplyTo) {
+    project = await repo.findProjectByThreadMessageIdForUser(event.inReplyTo, userId);
+  }
+
+  if (!project) {
+    for (const ref of event.references) {
+      project = await repo.findProjectByThreadMessageIdForUser(ref, userId);
+      if (project) {
+        break;
+      }
+    }
+  }
+
+  if (project) {
+    return { project, created: false };
+  }
+
+  return repo.createProjectForUser(userId, deriveProjectName(event.subject));
 }
 
 function defaultNextSteps(): string[] {
@@ -42,7 +84,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const inserted = await repo.registerInboundEvent(event.provider, event.providerEventId, event as unknown as Record<string, unknown>);
 
   const { user, created: userCreated } = await repo.getOrCreateUserByEmail(event.from);
-  const { project, created: projectCreated } = await repo.getOrCreatePrimaryProject(user.id);
+  const { project, created: projectCreated } = await resolveInboundProject(repo, user.id, event);
 
   if (!inserted) {
     log.info("duplicate inbound event ignored", { provider: event.provider, providerEventId: event.providerEventId });

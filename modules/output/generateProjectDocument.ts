@@ -2,6 +2,7 @@ import { getProjectDocumentMode } from "@/lib/env";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import {
+  buildKickoffNextSteps,
   computeProjectProgress,
   dedupePreserveOrder,
   getGuidedEmptyPlaceholder,
@@ -29,24 +30,19 @@ function formatCurrency(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-function buildKickoffNextSteps(payload: ProjectEmailPayload): string[] {
-  const steps: string[] = [];
-  const { context } = payload;
-
-  if (context.goals.length === 0) {
-    steps.push("Define your first 2-3 goals.");
-  } else {
-    steps.push("Confirm your top goals for this first phase.");
+function buildIdentityLines(payload: ProjectEmailPayload): string[] {
+  const lines: string[] = [];
+  if (payload.context.projectName) {
+    lines.push(`Project: ${payload.context.projectName}`);
   }
-
-  if (context.actionItems.length === 0) {
-    steps.push("List the first tasks to get started.");
-  } else {
-    steps.push("Start executing the first tasks and share updates.");
+  const ownerLabel =
+    payload.context.ownerDisplayName && payload.context.ownerEmail
+      ? `${payload.context.ownerDisplayName} <${payload.context.ownerEmail}>`
+      : payload.context.ownerDisplayName || payload.context.ownerEmail || "";
+  if (ownerLabel) {
+    lines.push(`Owner: ${ownerLabel}`);
   }
-
-  steps.push("Clarify your target users and first milestone.");
-  return dedupePreserveOrder(steps);
+  return lines;
 }
 
 function formatTransactions(payload: ProjectEmailPayload): string | null {
@@ -88,25 +84,38 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
 
   if (getProjectDocumentMode() === "minimal") {
     if (isKickoff) {
-      const kickoffSteps = buildKickoffNextSteps(payload).map((step) => `- ${step}`).join("\n");
+      const kickoffSteps = buildKickoffNextSteps(payload.context).map((step) => `- ${step}`).join("\n");
+      const identityLines = buildIdentityLines(payload);
+      const identityBlock = identityLines.length > 0 ? [...identityLines, ""].join("\n") : "";
       return [
         "# Overview",
         "",
+        identityBlock,
         overview,
         "",
-        "# Getting Started",
+        "# Next Steps",
         "",
         kickoffSteps,
         "",
-        "# Initial Structure",
+        "# Goals",
         "",
-        "## Goals",
+        formatBulletList(context.goals.slice(0, 3), getGuidedEmptyPlaceholder("goals", context)),
         "",
-        formatBulletList(context.goals.slice(0, 3), getGuidedEmptyPlaceholder("goals")),
+        "# Tasks",
         "",
-        "## First Tasks",
+        formatBulletList(context.actionItems.slice(0, 3), getGuidedEmptyPlaceholder("tasks", context)),
         "",
-        formatBulletList(context.actionItems.slice(0, 3), getGuidedEmptyPlaceholder("tasks")),
+        "# Risks",
+        "",
+        formatBulletList(context.risks.slice(0, 3), getGuidedEmptyPlaceholder("risks", context)),
+        "",
+        "# Decisions",
+        "",
+        formatBulletList(context.decisions.slice(0, 3), getGuidedEmptyPlaceholder("decisions", context)),
+        "",
+        "# Notes",
+        "",
+        formatBulletList(context.notes.slice(0, 3), getGuidedEmptyPlaceholder("notes", context)),
         "",
       ].join("\n");
     }
@@ -124,19 +133,23 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
       "",
       "# Goals",
       "",
-      formatBulletList(context.goals, getGuidedEmptyPlaceholder("goals")),
+      formatBulletList(context.goals, getGuidedEmptyPlaceholder("goals", context)),
       "",
       "# Tasks",
       "",
-      formatBulletList(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
+      formatBulletList(context.actionItems, getGuidedEmptyPlaceholder("tasks", context)),
       "",
       "# Risks",
       "",
-      formatBulletList(context.risks, getGuidedEmptyPlaceholder("risks")),
+      formatBulletList(context.risks, getGuidedEmptyPlaceholder("risks", context)),
+      "",
+      "# Decisions",
+      "",
+      formatBulletList(context.decisions, getGuidedEmptyPlaceholder("decisions", context)),
       "",
       "# Notes",
       "",
-      formatBulletList(context.notes, getGuidedEmptyPlaceholder("notes")),
+      formatBulletList(context.notes, getGuidedEmptyPlaceholder("notes", context)),
       "",
     ];
 
@@ -172,27 +185,27 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     "## Goals",
     "",
-    formatBulletList(context.goals, getGuidedEmptyPlaceholder("goals")),
+    formatBulletList(context.goals, getGuidedEmptyPlaceholder("goals", context)),
     "",
     "## Tasks",
     "",
-    formatBulletList(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
+    formatBulletList(context.actionItems, getGuidedEmptyPlaceholder("tasks", context)),
     "",
     "## Decisions",
     "",
-    formatBulletList(context.decisions, getGuidedEmptyPlaceholder("decisions")),
+    formatBulletList(context.decisions, getGuidedEmptyPlaceholder("decisions", context)),
     "",
     "## Risks",
     "",
-    formatBulletList(context.risks, getGuidedEmptyPlaceholder("risks")),
+    formatBulletList(context.risks, getGuidedEmptyPlaceholder("risks", context)),
     "",
     "## Recommendations",
     "",
-    formatBulletList(context.recommendations, getGuidedEmptyPlaceholder("recommendations")),
+    formatBulletList(context.recommendations, getGuidedEmptyPlaceholder("recommendations", context)),
     "",
     "## Notes",
     "",
-    formatBulletList(context.notes, getGuidedEmptyPlaceholder("notes")),
+    formatBulletList(context.notes, getGuidedEmptyPlaceholder("notes", context)),
     "",
     "## Next steps",
     "",

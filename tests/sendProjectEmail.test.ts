@@ -90,10 +90,14 @@ describe("sendProjectEmail", () => {
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# Overview");
-    expect(attachment?.content).toContain("# Getting Started");
-    expect(attachment?.content).toContain("# Initial Structure");
-    expect(attachment?.content).toContain("## Goals");
-    expect(attachment?.content).toContain("## First Tasks");
+    expect(attachment?.content).toContain("# Next Steps");
+    expect(attachment?.content).toContain("# Goals");
+    expect(attachment?.content).toContain("# Tasks");
+    expect(attachment?.content).toContain("# Risks");
+    expect(attachment?.content).toContain("# Decisions");
+    expect(attachment?.content).toContain("# Notes");
+    expect(attachment?.content).not.toContain("# Getting Started");
+    expect(attachment?.content).not.toContain("# Initial Structure");
     expect(attachment?.content).not.toContain("# Project Progress");
 
     expect(call?.html).toContain('charset="utf-8"');
@@ -190,9 +194,33 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("(No goals yet. Define your first 2-3 goals.)");
     expect(attachment?.content).toContain("(No tasks yet. List the first tasks to get started.)");
     expect(attachment?.content).toContain("(No risks tracked yet. Note the main blockers to watch.)");
-    expect(attachment?.content).toContain("- Completeness: 10%");
+    expect(attachment?.content).toContain("- Completeness: 0%");
     expect(attachment?.content).not.toContain("Planning Execution");
     expect(call?.html).toContain("(No goals yet. Define your first 2-3 goals.)");
+  });
+
+  it("uses restaurant-aware kickoff guidance and shows project identity", async () => {
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(true);
+    payload.context.summary = "SaaS platform for restaurants";
+    payload.context.goals = [];
+    payload.context.actionItems = [];
+    payload.context.risks = [];
+    payload.context.notes = [];
+    payload.context.projectName = "Restaurant SaaS";
+    payload.context.ownerDisplayName = "Karim";
+    payload.context.ownerEmail = "karim@example.com";
+
+    await sendProjectEmail(["user@example.com"], payload);
+
+    const call = mockedSendEmail.mock.calls[0]?.[0];
+    const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
+    expect(attachment?.content).toContain("Project: Restaurant SaaS");
+    expect(attachment?.content).toContain("Owner: Karim <karim@example.com>");
+    expect(attachment?.content).toContain("Define how restaurants will use your SaaS");
+    expect(attachment?.content).toContain("(No goals yet. Define how restaurants will use your SaaS");
+    expect(call?.html).toContain("<strong>Project:</strong> Restaurant SaaS");
+    expect(call?.html).toContain("<strong>Owner:</strong> Karim &lt;karim@example.com&gt;");
   });
 });
 

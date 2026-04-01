@@ -40,7 +40,11 @@ function parseNormalizedEmailEvent(payload: Record<string, unknown>): Normalized
       status: 422,
     });
   }
-  return event as NormalizedEmailEvent;
+  return {
+    ...event,
+    inReplyTo: event.inReplyTo ?? null,
+    references: Array.isArray(event.references) ? event.references : [],
+  } as NormalizedEmailEvent;
 }
 
 function retryDelaySeconds(attempts: number): number {

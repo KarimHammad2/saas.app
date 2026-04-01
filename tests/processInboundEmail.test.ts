@@ -12,10 +12,24 @@ const emptyUserProfile = {
   structuredContext: {},
 };
 
+const defaultMockProject = {
+  id: "p1",
+  user_id: "u1",
+  name: "Primary Project",
+  project_code: "pjt-a1b2c3d4",
+  remainder_balance: 0,
+  reminder_balance: 3,
+  usage_count: 0,
+  kickoff_completed_at: new Date().toISOString(),
+  created_at: new Date().toISOString(),
+};
+
 const repoState = {
   registerInboundEvent: vi.fn(),
   getOrCreateUserByEmail: vi.fn(),
-  getOrCreatePrimaryProject: vi.fn(),
+  findProjectByCodeAndUser: vi.fn(),
+  findProjectByThreadMessageIdForUser: vi.fn(),
+  createProjectForUser: vi.fn(),
   storeRawProjectUpdate: vi.fn(),
   getActiveRpm: vi.fn(),
   storeSummary: vi.fn(),
@@ -52,7 +66,9 @@ vi.mock("@/modules/memory/repository", () => {
     MemoryRepository: class {
       registerInboundEvent = repoState.registerInboundEvent;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
-      getOrCreatePrimaryProject = repoState.getOrCreatePrimaryProject;
+      findProjectByCodeAndUser = repoState.findProjectByCodeAndUser;
+      findProjectByThreadMessageIdForUser = repoState.findProjectByThreadMessageIdForUser;
+      createProjectForUser = repoState.createProjectForUser;
       storeRawProjectUpdate = repoState.storeRawProjectUpdate;
       getActiveRpm = repoState.getActiveRpm;
       storeSummary = repoState.storeSummary;
@@ -100,24 +116,18 @@ describe("processInboundEmail", () => {
       },
       created: false,
     });
-    repoState.getOrCreatePrimaryProject.mockResolvedValue({
-      project: {
-        id: "p1",
-        user_id: "u1",
-        name: "Primary Project",
-        remainder_balance: 0,
-        reminder_balance: 3,
-        usage_count: 0,
-        kickoff_completed_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      },
-      created: false,
+    repoState.findProjectByCodeAndUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValue({
+      project: { ...defaultMockProject },
+      created: true,
     });
     repoState.getActiveRpm.mockResolvedValue("rpm@example.com");
     repoState.addAdditionalEmails.mockResolvedValue(1);
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
       summary: "summary",
       initialSummary: "summary",
       currentStatus: "",
@@ -161,6 +171,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "Update",
+      inReplyTo: null,
+      references: [],
       rawBody: "Summary: hello",
       parsed: {
         summary: "hello",
@@ -200,6 +212,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "Plain update",
+      inReplyTo: null,
+      references: [],
       rawBody: "I'm a solo founder building SaaS and I prefer short answers.",
       parsed: {
         summary: null,
@@ -235,6 +249,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "Project idea",
+      inReplyTo: null,
+      references: [],
       rawBody: "I want to build a SaaS for restaurants and start with an MVP.",
       parsed: {
         summary: null,
@@ -277,6 +293,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "Update",
+      inReplyTo: null,
+      references: [],
       rawBody: "Summary: hello",
       parsed: {
         summary: "hello",
@@ -312,6 +330,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "Approvals",
+      inReplyTo: null,
+      references: [],
       rawBody: "approve suggestion abc123 reject suggestion def456",
       parsed: {
         summary: null,
@@ -349,22 +369,16 @@ describe("processInboundEmail", () => {
       },
       created: false,
     });
-    repoState.getOrCreatePrimaryProject.mockResolvedValue({
-      project: {
-        id: "p1",
-        user_id: "u1",
-        name: "Primary Project",
-        remainder_balance: 0,
-        reminder_balance: 3,
-        usage_count: 0,
-        kickoff_completed_at: null,
-        created_at: new Date().toISOString(),
-      },
-      created: false,
+    repoState.findProjectByCodeAndUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValue({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
     });
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
       summary: "",
       initialSummary: "",
       currentStatus: "",
@@ -392,6 +406,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "New Project",
+      inReplyTo: null,
+      references: [],
       rawBody: "This message has no labeled meaning; it should become notes.",
       parsed: {
         summary: null,
@@ -428,18 +444,11 @@ describe("processInboundEmail", () => {
       },
       created: true,
     });
-    repoState.getOrCreatePrimaryProject.mockResolvedValue({
-      project: {
-        id: "p1",
-        user_id: "u1",
-        name: "Primary Project",
-        remainder_balance: 0,
-        reminder_balance: 3,
-        usage_count: 0,
-        kickoff_completed_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      },
-      created: false,
+    repoState.findProjectByCodeAndUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValue({
+      project: { ...defaultMockProject },
+      created: true,
     });
 
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
@@ -453,6 +462,8 @@ describe("processInboundEmail", () => {
       to: [],
       cc: [],
       subject: "Existing project update",
+      inReplyTo: null,
+      references: [],
       rawBody: "Summary: hello",
       parsed: {
         summary: "hello",

@@ -1,7 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { InboundParseError, parseInbound } from "@/modules/email/parseInbound";
+import { InboundParseError, isIgnoredNoteInput, parseInbound, parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
+
+describe("parseProjectCodeFromSubject", () => {
+  it("extracts bracketed PJT code in lowercase db form", () => {
+    expect(parseProjectCodeFromSubject("Re: Hello [PJT-A1B2C3D4]")).toBe("pjt-a1b2c3d4");
+    expect(parseProjectCodeFromSubject("No token")).toBeNull();
+  });
+});
 
 describe("parseInbound", () => {
+  it("extracts In-Reply-To and References for threading", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Re: Update",
+      text: "Body line",
+      "In-Reply-To": "<AbC123@mail.com>",
+      References: "<prev@mail.com> <AbC123@mail.com>",
+    };
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.inReplyTo).toBe("abc123@mail.com");
+    expect(parsed.references).toContain("prev@mail.com");
+    expect(parsed.references).toContain("abc123@mail.com");
+  });
+
   it("extracts labeled sections and transaction fields", () => {
     const payload = {
       from: "User <user@example.com>",
@@ -154,6 +175,41 @@ Decisions:
     expect(parsed.parsed.goals).toEqual(["Parse TextBody and FromFull"]);
   });
 
+  it("does not treat punctuation-only or ultra-short bodies as notes", () => {
+    const dotPayload = {
+      from: "user@example.com",
+      subject: "Dots",
+      text: "....",
+    };
+    expect(parseInbound(dotPayload, "resend").parsed.notes).toEqual([]);
+
+    const shortPayload = {
+      from: "user@example.com",
+      subject: "Short",
+      text: "hi",
+    };
+    expect(parseInbound(shortPayload, "resend").parsed.notes).toEqual([]);
+  });
+
+  it("isIgnoredNoteInput matches plan rules", () => {
+    expect(isIgnoredNoteInput("....")).toBe(true);
+    expect(isIgnoredNoteInput(" - _ ")).toBe(true);
+    expect(isIgnoredNoteInput("hi")).toBe(true);
+    expect(isIgnoredNoteInput("hello")).toBe(false);
+  });
+
+  it("drops low-signal lines from Notes section", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "Notes filter",
+      text: `Notes:
+- ....
+- Real note with enough text here.`,
+    };
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.notes).toEqual(["Real note with enough text here."]);
+  });
+
   it("falls back to raw body in notes when meaning fields are empty", () => {
     const payload = {
       from: "user@example.com",
@@ -168,6 +224,17 @@ Decisions:
     expect(parsed.parsed.actionItems).toEqual([]);
     expect(parsed.parsed.risks).toEqual([]);
     expect(parsed.parsed.notes).toEqual(["I want to build an AI SaaS for real estate agents."]);
+  });
+
+  it("cleans conversational filler from messy overview input", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "Messy idea",
+      text: "Hey so yeah basically I'm thinking maybe something like a SaaS for restaurants idk...",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.summary).toBe("Potential SaaS platform for restaurants.");
   });
 
   it("parses Status and drops notes that duplicate Summary", () => {

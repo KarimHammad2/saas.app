@@ -14,7 +14,15 @@ export function generateRPMSuggestions(projectState: ProjectContext, userProfile
   }
 
   if (projectState.risks.length === 0) {
-    lines.push("List the top 2–3 risks you are worried about so we can track them explicitly.");
+    lines.push("You haven’t defined risks yet — add the top 2–3 risks under Risks.");
+  }
+
+  if (projectState.actionItems.length === 0) {
+    lines.push("Define your first 3 tasks under Tasks or Action Items.");
+  }
+
+  if (projectState.goals.length > 0) {
+    lines.push("Break your goals into milestones (order phases and ship one slice at a time).");
   }
 
   if (projectState.decisions.length === 0 && projectState.goals.length > 0) {

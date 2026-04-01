@@ -5,6 +5,16 @@ import { processInboundEmail } from "@/modules/orchestration/processInboundEmail
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
+const { storeOutboundThreadMapping } = vi.hoisted(() => ({
+  storeOutboundThreadMapping: vi.fn(),
+}));
+
+vi.mock("@/modules/memory/repository", () => ({
+  MemoryRepository: class {
+    storeOutboundThreadMapping = storeOutboundThreadMapping;
+  },
+}));
+
 vi.mock("@/modules/orchestration/processInboundEmail", () => ({
   processInboundEmail: vi.fn(),
 }));
@@ -19,6 +29,7 @@ const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
 describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mockedSendProjectEmail.mockResolvedValue({ outboundMessageId: "outbound-test-msg-id" });
   });
 
   it("sends project email for non-duplicate inbound events", async () => {
@@ -61,6 +72,7 @@ describe("handleInboundEmailEvent", () => {
 
     expect(response).toMatchObject({ userId: "u1", projectId: "p1", duplicate: false });
     expect(mockedSendProjectEmail).toHaveBeenCalledWith(result.recipients, result.payload);
+    expect(storeOutboundThreadMapping).toHaveBeenCalledWith("outbound-test-msg-id", "p1");
   });
 
   it("does not send project email for duplicate inbound events", async () => {

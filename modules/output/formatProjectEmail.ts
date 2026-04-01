@@ -2,6 +2,7 @@ import { getProjectDocumentMode } from "@/lib/env";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import {
+  buildKickoffNextSteps,
   computeProjectProgress,
   dedupePreserveOrder,
   getGuidedEmptyPlaceholder,
@@ -79,24 +80,22 @@ function formatProgressBlock(progress: { projectStatus: string; completeness: nu
   ].join("\n");
 }
 
-function buildKickoffNextSteps(payload: ProjectEmailPayload): string[] {
-  const steps: string[] = [];
-  const { context } = payload;
-
-  if (context.goals.length === 0) {
-    steps.push("Define your first 2-3 goals.");
-  } else {
-    steps.push("Confirm your top goals for this first phase.");
+function formatIdentityBlock(payload: ProjectEmailPayload): string {
+  const lines: string[] = [];
+  if (payload.context.projectName) {
+    lines.push(`<strong>Project:</strong> ${escapeHtml(payload.context.projectName)}`);
   }
-
-  if (context.actionItems.length === 0) {
-    steps.push("List the first tasks to get started.");
-  } else {
-    steps.push("Start executing the first tasks and share updates.");
+  const ownerLabel =
+    payload.context.ownerDisplayName && payload.context.ownerEmail
+      ? `${payload.context.ownerDisplayName} <${payload.context.ownerEmail}>`
+      : payload.context.ownerDisplayName || payload.context.ownerEmail || "";
+  if (ownerLabel) {
+    lines.push(`<strong>Owner:</strong> ${escapeHtml(ownerLabel)}`);
   }
-
-  steps.push("Clarify your target users and first milestone.");
-  return dedupePreserveOrder(steps);
+  if (lines.length === 0) {
+    return "";
+  }
+  return `<p>${lines.join(" · ")}</p>`;
 }
 
 export function formatProjectEmail(payload: ProjectEmailPayload): string {
@@ -107,19 +106,26 @@ export function formatProjectEmail(payload: ProjectEmailPayload): string {
 
   if (getProjectDocumentMode() === "minimal") {
     if (isKickoff) {
-      const kickoffSteps = buildKickoffNextSteps(payload);
+      const kickoffSteps = buildKickoffNextSteps(payload.context);
       const kickoffStepItems = kickoffSteps.map((s) => `    <li>${escapeHtml(s)}</li>`).join("\n");
+      const identityBlock = formatIdentityBlock(payload);
 
       return [
         "<h1>Overview</h1>",
         `<p>${escapeHtml(overview)}</p>`,
-        "<h1>Getting Started</h1>",
+        identityBlock,
+        "<h1>Next Steps</h1>",
         `  <ul>\n${kickoffStepItems}\n  </ul>`,
-        "<h1>Initial Structure</h1>",
-        "<h2>Goals</h2>",
-        formatListOrPlaceholder(context.goals.slice(0, 3), getGuidedEmptyPlaceholder("goals")),
-        "<h2>First Tasks</h2>",
-        formatListOrPlaceholder(context.actionItems.slice(0, 3), getGuidedEmptyPlaceholder("tasks")),
+        "<h1>Goals</h1>",
+        formatListOrPlaceholder(context.goals.slice(0, 3), getGuidedEmptyPlaceholder("goals", context)),
+        "<h1>Tasks</h1>",
+        formatListOrPlaceholder(context.actionItems.slice(0, 3), getGuidedEmptyPlaceholder("tasks", context)),
+        "<h1>Risks</h1>",
+        formatListOrPlaceholder(context.risks.slice(0, 3), getGuidedEmptyPlaceholder("risks", context)),
+        "<h1>Decisions</h1>",
+        formatListOrPlaceholder(context.decisions.slice(0, 3), getGuidedEmptyPlaceholder("decisions", context)),
+        "<h1>Notes</h1>",
+        formatListOrPlaceholder(context.notes.slice(0, 3), getGuidedEmptyPlaceholder("notes", context)),
       ].join("\n");
     }
 
@@ -129,13 +135,15 @@ export function formatProjectEmail(payload: ProjectEmailPayload): string {
       "<h1>Project Progress</h1>",
       formatProgressBlock(progress),
       "<h1>Goals</h1>",
-      formatListOrPlaceholder(context.goals, getGuidedEmptyPlaceholder("goals")),
+      formatListOrPlaceholder(context.goals, getGuidedEmptyPlaceholder("goals", context)),
       "<h1>Tasks</h1>",
-      formatListOrPlaceholder(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
+      formatListOrPlaceholder(context.actionItems, getGuidedEmptyPlaceholder("tasks", context)),
       "<h1>Risks</h1>",
-      formatListOrPlaceholder(context.risks, getGuidedEmptyPlaceholder("risks")),
+      formatListOrPlaceholder(context.risks, getGuidedEmptyPlaceholder("risks", context)),
+      "<h1>Decisions</h1>",
+      formatListOrPlaceholder(context.decisions, getGuidedEmptyPlaceholder("decisions", context)),
       "<h1>Notes</h1>",
-      formatListOrPlaceholder(context.notes, getGuidedEmptyPlaceholder("notes")),
+      formatListOrPlaceholder(context.notes, getGuidedEmptyPlaceholder("notes", context)),
     ];
 
     if (payload.pendingSuggestions.length > 0) {
@@ -158,17 +166,17 @@ export function formatProjectEmail(payload: ProjectEmailPayload): string {
     "<h2>Status</h2>",
     `<p>${escapeHtml(statusLine)}</p>`,
     "<h2>Goals</h2>",
-    formatListOrPlaceholder(context.goals, getGuidedEmptyPlaceholder("goals")),
+    formatListOrPlaceholder(context.goals, getGuidedEmptyPlaceholder("goals", context)),
     "<h2>Tasks</h2>",
-    formatListOrPlaceholder(context.actionItems, getGuidedEmptyPlaceholder("tasks")),
+    formatListOrPlaceholder(context.actionItems, getGuidedEmptyPlaceholder("tasks", context)),
     "<h2>Decisions</h2>",
-    formatListOrPlaceholder(context.decisions, getGuidedEmptyPlaceholder("decisions")),
+    formatListOrPlaceholder(context.decisions, getGuidedEmptyPlaceholder("decisions", context)),
     "<h2>Risks</h2>",
-    formatListOrPlaceholder(context.risks, getGuidedEmptyPlaceholder("risks")),
+    formatListOrPlaceholder(context.risks, getGuidedEmptyPlaceholder("risks", context)),
     "<h2>Recommendations</h2>",
-    formatListOrPlaceholder(context.recommendations, getGuidedEmptyPlaceholder("recommendations")),
+    formatListOrPlaceholder(context.recommendations, getGuidedEmptyPlaceholder("recommendations", context)),
     "<h2>Notes</h2>",
-    formatListOrPlaceholder(context.notes, getGuidedEmptyPlaceholder("notes")),
+    formatListOrPlaceholder(context.notes, getGuidedEmptyPlaceholder("notes", context)),
     "<h2>Next steps</h2>",
     formatNextSteps(payload),
     "<h2>Account</h2>",

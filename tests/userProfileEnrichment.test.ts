@@ -13,6 +13,8 @@ function baseEvent(rawBody: string): NormalizedEmailEvent {
     to: [],
     cc: [],
     subject: "S",
+    inReplyTo: null,
+    references: [],
     rawBody,
     parsed: {
       summary: null,

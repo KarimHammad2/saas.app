@@ -36,6 +36,8 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
     to: ["frank@inbound.test"],
     cc: [],
     subject: "Hello",
+    inReplyTo: null,
+    references: [],
     rawBody: "Summary:\nHello",
     parsed: {
       summary: "Hello",
@@ -118,6 +120,8 @@ describe("POST /api/inbound", () => {
       to: ["frank@inbound.test"],
       cc: [],
       subject: "new",
+      inReplyTo: null,
+      references: [],
       rawBody: "Hi, I want to build a SaaS for restaurants.",
       parsed: {
         summary: "Hi, I want to build a SaaS for restaurants.",
@@ -170,6 +174,8 @@ describe("POST /api/inbound", () => {
       to: ["daniel@inbound.test"],
       cc: [],
       subject: "Hello",
+      inReplyTo: null,
+      references: [],
       rawBody: "Summary:\nHello",
       parsed: {
         summary: "Hello",

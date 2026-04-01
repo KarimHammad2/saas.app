@@ -36,9 +36,9 @@ const DEFAULT_PROJECT_WELCOME_TEMPLATE: EmailTemplate = {
 const DEFAULT_PROJECT_KICKOFF_TEMPLATE: EmailTemplate = {
   subject: "Great start - your project is initialized",
   textBody:
-    "Great - your project is now initialized.\n\nHere is what I understood so far:\n{{summary}}\n\nNext, focus on:\n- Define your first 2-3 goals\n- List the first tasks to get started\n- Clarify your target users and first milestone\n\nAttached is your project document.",
+    "Great - your project is now initialized.\n\nHere is what I understood so far:\n{{summary}}\n\nYour kickoff document now includes:\n- Next Steps\n- Goals\n- Tasks\n- Risks\n- Notes\n\nAttached is your project document.",
   htmlBody:
-    "<!doctype html><html><body><h2>Great - your project is now initialized.</h2><p><strong>Here is what I understood so far:</strong></p><p>{{summary}}</p><p><strong>Next, focus on:</strong></p><ul><li>Define your first 2-3 goals</li><li>List the first tasks to get started</li><li>Clarify your target users and first milestone</li></ul><p>Attached is your project document.</p></body></html>",
+    "<!doctype html><html><body><h2>Great - your project is now initialized.</h2><p><strong>Here is what I understood so far:</strong></p><p>{{summary}}</p><p><strong>Your kickoff document now includes:</strong></p><ul><li>Next Steps</li><li>Goals</li><li>Tasks</li><li>Risks</li><li>Notes</li></ul><p>Attached is your project document.</p></body></html>",
 };
 
 const DEFAULT_PROJECT_REMINDER_TEMPLATE: EmailTemplate = {

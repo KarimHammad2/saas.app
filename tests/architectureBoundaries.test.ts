@@ -6,10 +6,9 @@ function read(path: string): string {
 }
 
 describe("architecture boundaries", () => {
-  it("inbound route does not import supabase or repositories", () => {
+  it("inbound route does not import supabase directly (repository ok for async enqueue)", () => {
     const source = read("app/api/inbound/route.ts");
     expect(source).not.toContain("@/lib/supabase");
-    expect(source).not.toContain("modules/memory/repository");
     expect(source).not.toContain("src/memory/");
   });
 

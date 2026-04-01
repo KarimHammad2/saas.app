@@ -10,6 +10,8 @@ import type {
   UserProfileContext,
   UserProfileStructuredContext,
 } from "@/modules/contracts/types";
+import { normalizeMessageId } from "@/modules/email/messageId";
+import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 function formatNoteDatePrefix(iso?: string): string {
@@ -34,6 +36,7 @@ export interface ProjectRecord {
   id: string;
   user_id: string;
   name: string;
+  project_code: string;
   remainder_balance: number;
   reminder_balance: number;
   usage_count: number;
@@ -103,6 +106,48 @@ function asStringArray(value: unknown): string[] {
 
 function dedupePreserveOrder(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => entry.trim()).filter(Boolean)));
+}
+
+/** Normalize for case-insensitive list dedupe; collapse internal whitespace. */
+function normalizeListItemKey(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Merge incoming into existing, preserving first-seen casing and skipping case-duplicates. */
+function mergeUniqueStringsPreserveOrder(existing: string[], incoming: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of existing) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = normalizeListItemKey(trimmed);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(trimmed);
+  }
+  for (const raw of incoming) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = normalizeListItemKey(trimmed);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function noteSemanticKey(line: string): string {
+  const t = line.trim();
+  const withoutDate = t.replace(/^\[\d{4}-\d{2}-\d{2}\]\s*/, "");
+  return normalizeListItemKey(withoutDate);
 }
 
 function parseSuggestionIntoStructuredContext(content: string): Partial<UserProfileStructuredContext> {
@@ -444,7 +489,7 @@ export class MemoryRepository {
   async getOrCreatePrimaryProject(userId: string): Promise<{ project: ProjectRecord; created: boolean }> {
     const { data: existing, error: findError } = await this.supabase
       .from("projects")
-      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: true })
       .limit(1)
@@ -461,7 +506,7 @@ export class MemoryRepository {
     const { data: created, error: createError } = await this.supabase
       .from("projects")
       .insert({ user_id: userId, name: "Primary Project" })
-      .select("id, user_id, name, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .single<ProjectRecord>();
 
     if (createError || !created) {
@@ -490,6 +535,109 @@ export class MemoryRepository {
   /** @deprecated Use {@link getOrCreatePrimaryProject}. Name is ignored — one project per user. */
   async getOrCreateProject(userId: string, _projectName = "Primary Project"): Promise<{ project: ProjectRecord; created: boolean }> {
     return this.getOrCreatePrimaryProject(userId);
+  }
+
+  /**
+   * Resolve a project by human-readable code for this user only (prevents cross-user routing).
+   */
+  async findProjectByCodeAndUser(code: string, userId: string): Promise<ProjectRecord | null> {
+    const normalized = code.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .eq("project_code", normalized)
+      .eq("user_id", userId)
+      .maybeSingle<ProjectRecord>();
+
+    if (error) {
+      throw new Error(`Failed to find project by code: ${error.message}`);
+    }
+    return data ?? null;
+  }
+
+  /**
+   * Resolve a project from a prior outbound Message-Id stored in email_thread_map, scoped to this user.
+   */
+  async findProjectByThreadMessageIdForUser(messageId: string, userId: string): Promise<ProjectRecord | null> {
+    const normalized = normalizeMessageId(messageId);
+    if (!normalized) {
+      return null;
+    }
+    const { data: mapRow, error: mapError } = await this.supabase
+      .from("email_thread_map")
+      .select("project_id")
+      .eq("message_id", normalized)
+      .maybeSingle<{ project_id: string }>();
+
+    if (mapError) {
+      throw new Error(`Failed to look up thread mapping: ${mapError.message}`);
+    }
+    if (!mapRow) {
+      return null;
+    }
+
+    const { data: project, error: projectError } = await this.supabase
+      .from("projects")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .eq("id", mapRow.project_id)
+      .eq("user_id", userId)
+      .maybeSingle<ProjectRecord>();
+
+    if (projectError) {
+      throw new Error(`Failed to load project for thread: ${projectError.message}`);
+    }
+    return project ?? null;
+  }
+
+  async storeOutboundThreadMapping(messageId: string, projectId: string): Promise<void> {
+    const normalized = normalizeMessageId(messageId);
+    if (!normalized) {
+      return;
+    }
+    const { error } = await this.supabase.from("email_thread_map").upsert(
+      { message_id: normalized, project_id: projectId },
+      { onConflict: "message_id" },
+    );
+    if (error) {
+      throw new Error(`Failed to store email thread mapping: ${error.message}`);
+    }
+  }
+
+  /**
+   * Always inserts a new project row (multi-project flow). Trigger assigns project_code if omitted.
+   */
+  async createProjectForUser(userId: string, name = "New Project"): Promise<{ project: ProjectRecord; created: boolean }> {
+    const trimmed = name.trim() || "New Project";
+    const { data: created, error: createError } = await this.supabase
+      .from("projects")
+      .insert({ user_id: userId, name: trimmed.slice(0, 200) })
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .single<ProjectRecord>();
+
+    if (createError || !created) {
+      throw new Error(`Failed to create project: ${createError?.message ?? "Unknown error"}`);
+    }
+
+    await this.supabase.from("project_members").upsert(
+      {
+        project_id: created.id,
+        user_id: userId,
+        role: "owner",
+      },
+      { onConflict: "project_id,user_id" },
+    );
+
+    await this.supabase.from("project_states").upsert(
+      {
+        project_id: created.id,
+      },
+      { onConflict: "project_id" },
+    );
+
+    return { project: created, created: true };
   }
 
   async assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void> {
@@ -603,7 +751,7 @@ export class MemoryRepository {
     }
 
     const context = await this.getProjectState(projectId);
-    const merged = Array.from(new Set([...context.actionItems, ...items]));
+    const merged = mergeUniqueStringsPreserveOrder(context.actionItems, items);
     const { error } = await this.supabase
       .from("project_states")
       .update({ action_items: merged, tasks: merged })
@@ -619,7 +767,7 @@ export class MemoryRepository {
     }
 
     const context = await this.getProjectState(projectId);
-    const merged = Array.from(new Set([...context.goals, ...goals]));
+    const merged = mergeUniqueStringsPreserveOrder(context.goals, goals);
     const { error } = await this.supabase.from("project_states").update({ goals: merged }).eq("project_id", projectId);
     if (error) {
       throw new Error(`Failed to update goals: ${error.message}`);
@@ -631,7 +779,7 @@ export class MemoryRepository {
       return;
     }
     const context = await this.getProjectState(projectId);
-    const merged = Array.from(new Set([...context.decisions, ...decisions]));
+    const merged = mergeUniqueStringsPreserveOrder(context.decisions, decisions);
     const { error } = await this.supabase.from("project_states").update({ decisions: merged }).eq("project_id", projectId);
     if (error) {
       throw new Error(`Failed to update decisions: ${error.message}`);
@@ -643,7 +791,7 @@ export class MemoryRepository {
       return;
     }
     const context = await this.getProjectState(projectId);
-    const merged = Array.from(new Set([...context.risks, ...risks]));
+    const merged = mergeUniqueStringsPreserveOrder(context.risks, risks);
     const { error } = await this.supabase
       .from("project_states")
       .update({ risks: merged })
@@ -658,7 +806,7 @@ export class MemoryRepository {
       return;
     }
     const context = await this.getProjectState(projectId);
-    const merged = Array.from(new Set([...context.recommendations, ...recommendations]));
+    const merged = mergeUniqueStringsPreserveOrder(context.recommendations, recommendations);
     const { error } = await this.supabase
       .from("project_states")
       .update({ recommendations: merged })
@@ -675,7 +823,7 @@ export class MemoryRepository {
 
     const context = await this.getProjectState(projectId);
     const existing = context.notes ?? [];
-    const seen = new Set(existing.map((entry) => entry.trim().toLowerCase()));
+    const seen = new Set(existing.map((entry) => noteSemanticKey(entry)));
 
     const datePrefix = formatNoteDatePrefix(receivedAtIso);
 
@@ -685,8 +833,11 @@ export class MemoryRepository {
       if (!trimmed) {
         continue;
       }
+      if (isIgnoredNoteInput(trimmed)) {
+        continue;
+      }
       const withPrefix = noteHasDatePrefix(trimmed) ? trimmed : `${datePrefix}${trimmed}`;
-      const key = withPrefix.trim().toLowerCase();
+      const key = noteSemanticKey(withPrefix);
       if (seen.has(key)) {
         continue;
       }
@@ -1204,11 +1355,13 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, remainder_balance, reminder_balance, usage_count")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count")
       .eq("id", projectId)
       .single<{
         id: string;
         user_id: string;
+        name: string;
+        project_code: string;
         remainder_balance: number;
         reminder_balance: number;
         usage_count: number;
@@ -1220,9 +1373,9 @@ export class MemoryRepository {
 
     const { data: userRow, error: userTierError } = await this.supabase
       .from("users")
-      .select("tier")
+      .select("tier, email, display_name")
       .eq("id", project.user_id)
-      .maybeSingle<{ tier: Tier }>();
+      .maybeSingle<{ tier: Tier; email: string | null; display_name: string | null }>();
 
     if (userTierError) {
       throw new Error(`Failed to load user tier: ${userTierError.message}`);
@@ -1253,6 +1406,10 @@ export class MemoryRepository {
     return {
       projectId: project.id,
       userId: project.user_id,
+      projectCode: typeof project.project_code === "string" ? project.project_code : undefined,
+      projectName: typeof project.name === "string" ? project.name : undefined,
+      ownerDisplayName: userRow?.display_name?.trim() ? userRow.display_name : undefined,
+      ownerEmail: userRow?.email?.trim() ? userRow.email.toLowerCase() : undefined,
       summary: state?.summary ?? "",
       initialSummary: typeof state?.initial_summary === "string" ? state.initial_summary : "",
       currentStatus: typeof state?.current_status === "string" ? state.current_status : "",
