@@ -761,6 +761,32 @@ export class MemoryRepository {
     }
   }
 
+  /** Replace one action item line in place (same index); used for UPDATE_TASK intent. */
+  async replaceActionItem(projectId: string, oldText: string, newText: string): Promise<void> {
+    const trimmedNew = newText.trim();
+    if (!trimmedNew) {
+      return;
+    }
+
+    const context = await this.getProjectState(projectId);
+    const items = context.actionItems;
+    const key = normalizeListItemKey(oldText);
+    const idx = items.findIndex((item) => normalizeListItemKey(item) === key);
+    if (idx === -1) {
+      return;
+    }
+
+    const next = [...items];
+    next[idx] = trimmedNew;
+    const { error } = await this.supabase
+      .from("project_states")
+      .update({ action_items: next, tasks: next })
+      .eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to replace action item: ${error.message}`);
+    }
+  }
+
   async markTasksCompleted(projectId: string, items: string[]): Promise<void> {
     if (items.length === 0) {
       return;

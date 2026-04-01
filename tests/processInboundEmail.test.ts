@@ -36,6 +36,7 @@ const repoState = {
   updateSummaryDisplay: vi.fn(),
   updateGoals: vi.fn(),
   appendActionItems: vi.fn(),
+  replaceActionItem: vi.fn(),
   markTasksCompleted: vi.fn(),
   updateDecisions: vi.fn(),
   updateRisks: vi.fn(),
@@ -84,6 +85,7 @@ vi.mock("@/modules/memory/repository", async () => {
       updateSummaryDisplay = repoState.updateSummaryDisplay;
       updateGoals = repoState.updateGoals;
       appendActionItems = repoState.appendActionItems;
+      replaceActionItem = repoState.replaceActionItem;
       markTasksCompleted = repoState.markTasksCompleted;
       updateDecisions = repoState.updateDecisions;
       updateRisks = repoState.updateRisks;

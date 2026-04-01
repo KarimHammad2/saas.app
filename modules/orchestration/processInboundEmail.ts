@@ -15,6 +15,7 @@ import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
 import { detectCompletedTasks, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
+import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
 import { MemoryRepository, mergeUniqueStringsPreserveOrder, type ProjectRecord } from "@/modules/memory/repository";
 import { ClarificationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
@@ -152,10 +153,27 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const fromSection = filterCompletedToKnownTasks(event.parsed.completedTasks, stateAfterTasks.actionItems);
   const allCompleted = mergeUniqueStringsPreserveOrder(fromSection, detectedCompleted);
   await repo.markTasksCompleted(project.id, allCompleted);
+
+  const taskIntentEvents = applyTaskIntents(event.rawBody, stateAfterTasks.actionItems);
+  const unknownNotesFromTaskIntents: string[] = [];
+  for (const ev of taskIntentEvents) {
+    if (ev.intent === "UPDATE_TASK" && ev.matchedTask && ev.updatedText) {
+      await repo.replaceActionItem(project.id, ev.matchedTask, ev.updatedText);
+    } else if (ev.intent === "CREATE_TASK" && !ev.matchedTask && ev.taskHint.trim()) {
+      await repo.appendActionItems(project.id, [ev.taskHint.trim()]);
+    } else if (ev.intent === "UNKNOWN" && ev.rawSentence.trim()) {
+      unknownNotesFromTaskIntents.push(ev.rawSentence.trim());
+    }
+  }
+
   await repo.updateDecisions(project.id, event.parsed.decisions);
   await repo.updateRisks(project.id, event.parsed.risks);
   await repo.updateRecommendations(project.id, event.parsed.recommendations);
-  await repo.updateNotes(project.id, event.parsed.notes, event.timestamp);
+  const mergedNotes =
+    unknownNotesFromTaskIntents.length > 0
+      ? [...event.parsed.notes, ...unknownNotesFromTaskIntents]
+      : event.parsed.notes;
+  await repo.updateNotes(project.id, mergedNotes, event.timestamp);
   await repo.mergeStructuredUserProfileContext(
     user.id,
     inferMemorySignals({
