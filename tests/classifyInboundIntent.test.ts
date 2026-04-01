@@ -77,6 +77,45 @@ describe("classifyInboundIntent", () => {
       );
       expect(result.isNewProjectIntent).toBe(true);
     });
+
+    it("short clear intent: SaaS for restaurants (regression — previously scored 0.50)", () => {
+      const result = classifyInboundIntent(
+        "new",
+        "I want to build a SaaS for restaurants",
+      );
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("short clear intent: I want to create an app for gyms", () => {
+      const result = classifyInboundIntent("no subject", "I want to create an app for gyms");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("short clear intent: I'm building a platform for freelancers", () => {
+      const result = classifyInboundIntent("no subject", "I'm building a platform for freelancers");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("short clear intent: We're building a marketplace for used cars", () => {
+      const result = classifyInboundIntent("no subject", "We're building a marketplace for used cars");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+  });
+
+  describe("strong override does not match vague messages", () => {
+    it("I have an idea — still insufficient without explicit build phrasing", () => {
+      const result = classifyInboundIntent("no subject", "I have an idea");
+      expect(result.isNewProjectIntent).toBe(false);
+    });
+
+    it("Something about fitness — too vague / too short", () => {
+      const result = classifyInboundIntent("no subject", "Something about fitness");
+      expect(result.isNewProjectIntent).toBe(false);
+    });
   });
 
   describe("confidence boundaries", () => {

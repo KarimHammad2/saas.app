@@ -25,6 +25,16 @@ const VAGUE_EXACT_PATTERNS: RegExp[] = [
   /^(can\s+you\s+hear\s+me|is\s+this\s+working|did\s+you\s+get\s+this)[\s.!?]*$/i,
 ];
 
+/**
+ * Unambiguous first-person declarations of intent to build — always treat as new project.
+ * Runs after vague checks so greetings/noise cannot match.
+ */
+const STRONG_OVERRIDE_PATTERNS: RegExp[] = [
+  /\bi\s+(?:want|would\s+like|need)\s+to\s+(?:build|create|make|develop|launch|start)\b/i,
+  /\bi(?:'?m|\s+am)\s+(?:building|creating|developing|launching|making)\b/i,
+  /\bwe(?:'?re|\s+are)\s+(?:building|creating|developing|launching)\b/i,
+];
+
 /** Positive signals that strongly suggest new project intent. */
 const PROJECT_INTENT_PATTERNS: RegExp[] = [
   /\bi\s+(?:want|need|would\s+like|am\s+looking)\s+to\s+(?:build|create|develop|make|design|start|launch|work\s+on)\b/i,
@@ -61,6 +71,16 @@ export function classifyInboundIntent(subject: string, rawBody: string): IntentC
   for (const pattern of VAGUE_EXACT_PATTERNS) {
     if (pattern.test(body)) {
       return { isNewProjectIntent: false, confidence: 0.1, reason: "matches known vague/greeting pattern" };
+    }
+  }
+
+  for (const pattern of STRONG_OVERRIDE_PATTERNS) {
+    if (pattern.test(body)) {
+      return {
+        isNewProjectIntent: true,
+        confidence: 0.9,
+        reason: "strong-override: explicit build/create intent",
+      };
     }
   }
 
