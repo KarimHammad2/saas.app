@@ -33,6 +33,7 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       currentStatus: "MVP in progress",
       goals: ["lead generation", "automation"],
       actionItems: ["launch landing page"],
+      completedTasks: [],
       decisions: ["Ship weekly"],
       risks: ["timeline slippage"],
       recommendations: [],

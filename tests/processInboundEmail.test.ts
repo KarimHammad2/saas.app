@@ -36,6 +36,7 @@ const repoState = {
   updateSummaryDisplay: vi.fn(),
   updateGoals: vi.fn(),
   appendActionItems: vi.fn(),
+  markTasksCompleted: vi.fn(),
   updateDecisions: vi.fn(),
   updateRisks: vi.fn(),
   updateRecommendations: vi.fn(),
@@ -61,8 +62,16 @@ const repoState = {
   getPendingSuggestions: vi.fn(),
 };
 
-vi.mock("@/modules/memory/repository", () => {
+// Intent classification is tested separately in classifyInboundIntent.test.ts.
+// Always allow project creation here so pipeline behaviour tests remain focused.
+vi.mock("@/modules/orchestration/classifyInboundIntent", () => ({
+  classifyInboundIntent: () => ({ isNewProjectIntent: true, confidence: 0.9, reason: "mock" }),
+}));
+
+vi.mock("@/modules/memory/repository", async () => {
+  const actual = await vi.importActual<typeof import("@/modules/memory/repository")>("@/modules/memory/repository");
   return {
+    ...actual,
     MemoryRepository: class {
       registerInboundEvent = repoState.registerInboundEvent;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
@@ -75,6 +84,7 @@ vi.mock("@/modules/memory/repository", () => {
       updateSummaryDisplay = repoState.updateSummaryDisplay;
       updateGoals = repoState.updateGoals;
       appendActionItems = repoState.appendActionItems;
+      markTasksCompleted = repoState.markTasksCompleted;
       updateDecisions = repoState.updateDecisions;
       updateRisks = repoState.updateRisks;
       updateRecommendations = repoState.updateRecommendations;
@@ -133,6 +143,7 @@ describe("processInboundEmail", () => {
       currentStatus: "",
       goals: [],
       actionItems: [],
+      completedTasks: [],
       decisions: [],
       risks: [],
       recommendations: [],
@@ -179,6 +190,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],
@@ -220,6 +232,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],
@@ -257,6 +270,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],
@@ -301,6 +315,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],
@@ -338,6 +353,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],
@@ -384,6 +400,7 @@ describe("processInboundEmail", () => {
       currentStatus: "",
       goals: [],
       actionItems: [],
+      completedTasks: [],
       decisions: [],
       risks: [],
       recommendations: [],
@@ -414,6 +431,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],
@@ -470,6 +488,7 @@ describe("processInboundEmail", () => {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],

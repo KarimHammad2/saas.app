@@ -14,8 +14,10 @@ import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
-import { MemoryRepository, type ProjectRecord } from "@/modules/memory/repository";
-import { NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { detectCompletedTasks, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
+import { MemoryRepository, mergeUniqueStringsPreserveOrder, type ProjectRecord } from "@/modules/memory/repository";
+import { ClarificationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 
 export interface InboundProcessingResult {
@@ -65,6 +67,17 @@ async function resolveInboundProject(
 
   if (project) {
     return { project, created: false };
+  }
+
+  // No existing project found — this would create a new one.
+  // Classify intent first: only create a project when the message clearly describes one.
+  const intent = classifyInboundIntent(event.subject, event.rawBody);
+  if (!intent.isNewProjectIntent) {
+    throw new ClarificationRequiredError("Inbound message lacks sufficient project intent.", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      intentReason: intent.reason,
+    });
   }
 
   return repo.createProjectForUser(userId, deriveProjectName(event.subject));
@@ -134,6 +147,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
   await repo.updateGoals(project.id, event.parsed.goals);
   await repo.appendActionItems(project.id, event.parsed.actionItems);
+  const stateAfterTasks = await repo.getProjectState(project.id);
+  const detectedCompleted = detectCompletedTasks(event.rawBody, stateAfterTasks.actionItems);
+  const fromSection = filterCompletedToKnownTasks(event.parsed.completedTasks, stateAfterTasks.actionItems);
+  const allCompleted = mergeUniqueStringsPreserveOrder(fromSection, detectedCompleted);
+  await repo.markTasksCompleted(project.id, allCompleted);
   await repo.updateDecisions(project.id, event.parsed.decisions);
   await repo.updateRisks(project.id, event.parsed.risks);
   await repo.updateRecommendations(project.id, event.parsed.recommendations);

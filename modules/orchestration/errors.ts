@@ -10,6 +10,24 @@ export class NonRetryableInboundError extends Error {
   }
 }
 
+/**
+ * Thrown when an inbound email lacks sufficient intent to create a new project.
+ * Caught by handleInboundEmailEvent to send a clarification reply instead.
+ */
+export class ClarificationRequiredError extends Error {
+  readonly senderEmail: string;
+  readonly senderSubject: string;
+  readonly intentReason: string;
+
+  constructor(message: string, options: { senderEmail: string; senderSubject: string; intentReason: string }) {
+    super(message);
+    this.name = "ClarificationRequiredError";
+    this.senderEmail = options.senderEmail;
+    this.senderSubject = options.senderSubject;
+    this.intentReason = options.intentReason;
+  }
+}
+
 export class OutboundEmailDeliveryError extends Error {
   readonly recipients: string[];
   readonly causeMessage: string;

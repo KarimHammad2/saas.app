@@ -21,6 +21,7 @@ function baseEvent(rawBody: string): NormalizedEmailEvent {
       currentStatus: null,
       goals: [],
       actionItems: [],
+      completedTasks: [],
       decisions: [],
       risks: [],
       recommendations: [],

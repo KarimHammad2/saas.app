@@ -31,6 +31,7 @@ describe("handleIncomingEmail", () => {
           currentStatus: "",
           goals: [],
           actionItems: [],
+          completedTasks: [],
           decisions: [],
           risks: [],
           recommendations: [],
@@ -70,6 +71,6 @@ describe("handleIncomingEmail", () => {
     expect(event.subject).toBe("Update");
     expect(event.parsed.goals).toContain("Launch MVP");
     expect(sendProjectEmail).toHaveBeenCalledOnce();
-    expect(result).toEqual({ userId: "u1", projectId: "p1", duplicate: false });
+    expect(result).toEqual({ userId: "u1", projectId: "p1", duplicate: false, clarificationSent: false });
   });
 });

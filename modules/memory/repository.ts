@@ -114,7 +114,7 @@ function normalizeListItemKey(value: string): string {
 }
 
 /** Merge incoming into existing, preserving first-seen casing and skipping case-duplicates. */
-function mergeUniqueStringsPreserveOrder(existing: string[], incoming: string[]): string[] {
+export function mergeUniqueStringsPreserveOrder(existing: string[], incoming: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of existing) {
@@ -761,6 +761,22 @@ export class MemoryRepository {
     }
   }
 
+  async markTasksCompleted(projectId: string, items: string[]): Promise<void> {
+    if (items.length === 0) {
+      return;
+    }
+
+    const context = await this.getProjectState(projectId);
+    const merged = mergeUniqueStringsPreserveOrder(context.completedTasks, items);
+    const { error } = await this.supabase
+      .from("project_states")
+      .update({ completed_tasks: merged })
+      .eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to mark tasks completed: ${error.message}`);
+    }
+  }
+
   async updateGoals(projectId: string, goals: string[]): Promise<void> {
     if (goals.length === 0) {
       return;
@@ -1333,7 +1349,7 @@ export class MemoryRepository {
     const { data: state, error: stateError } = await this.supabase
       .from("project_states")
       .select(
-        "project_id, summary, initial_summary, current_status, goals, action_items, decisions, risks, recommendations, notes",
+        "project_id, summary, initial_summary, current_status, goals, action_items, completed_tasks, decisions, risks, recommendations, notes",
       )
       .eq("project_id", projectId)
       .maybeSingle<{
@@ -1343,6 +1359,7 @@ export class MemoryRepository {
         current_status: string;
         goals: unknown;
         action_items: unknown;
+        completed_tasks: unknown;
         decisions: unknown;
         risks: unknown;
         recommendations: unknown;
@@ -1415,6 +1432,7 @@ export class MemoryRepository {
       currentStatus: typeof state?.current_status === "string" ? state.current_status : "",
       goals: asStringArray(state?.goals),
       actionItems: asStringArray(state?.action_items),
+      completedTasks: asStringArray(state?.completed_tasks),
       decisions: asStringArray(state?.decisions),
       risks: asStringArray(state?.risks),
       recommendations: asStringArray(state?.recommendations),

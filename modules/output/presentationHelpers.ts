@@ -154,24 +154,21 @@ function deriveStatus(context: ProjectContext): string {
   return "In Progress";
 }
 
+function normalizeProgressKey(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export function computeProjectProgress(context: ProjectContext): ProjectProgress {
-  let score = 0;
-  if (context.goals.length > 0) {
-    score += 25;
+  const total = context.actionItems.length;
+  const actionKeys = new Set(context.actionItems.map(normalizeProgressKey));
+  const doneCount = context.completedTasks.filter((t) => actionKeys.has(normalizeProgressKey(t))).length;
+
+  let completeness: number;
+  if (total === 0) {
+    completeness = context.goals.length > 0 ? 10 : 0;
+  } else {
+    completeness = Math.round((doneCount / total) * 100);
   }
-  if (context.actionItems.length > 0) {
-    score += 25;
-  }
-  if (context.risks.length > 0) {
-    score += 20;
-  }
-  if (context.notes.length > 0) {
-    score += 10;
-  }
-  if (context.usageCount > 2) {
-    score += 20;
-  }
-  const completeness = Math.min(100, score);
 
   return {
     projectStatus: deriveStatus(context),

@@ -21,6 +21,7 @@ function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEma
       currentStatus: null,
       goals: [],
       actionItems: [],
+      completedTasks: [],
       decisions: [],
       risks: [],
       recommendations: [],

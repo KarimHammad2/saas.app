@@ -10,6 +10,7 @@ const baseProject = (): ProjectContext => ({
   currentStatus: "",
   goals: [],
   actionItems: [],
+  completedTasks: [],
   decisions: [],
   risks: [],
   recommendations: [],

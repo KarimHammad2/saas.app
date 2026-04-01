@@ -64,6 +64,8 @@ export interface ProjectContext {
   currentStatus: string;
   goals: string[];
   actionItems: string[];
+  /** Subset of action items marked complete (same strings as in actionItems when possible). */
+  completedTasks: string[];
   decisions: string[];
   risks: string[];
   recommendations: string[];
@@ -109,6 +111,7 @@ export interface NormalizedEmailEvent {
     currentStatus: string | null;
     goals: string[];
     actionItems: string[];
+    completedTasks: string[];
     decisions: string[];
     risks: string[];
     recommendations: string[];

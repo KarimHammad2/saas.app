@@ -10,6 +10,7 @@ const emptyContext = (): ProjectContext => ({
   currentStatus: "",
   goals: [],
   actionItems: [],
+  completedTasks: [],
   decisions: [],
   risks: [],
   recommendations: [],
@@ -22,25 +23,35 @@ const emptyContext = (): ProjectContext => ({
 });
 
 describe("computeProjectProgress", () => {
-  it("scores 0 when nothing is filled and usageCount is low", () => {
+  it("scores 0 when nothing is filled", () => {
     const p = computeProjectProgress(emptyContext());
     expect(p.completeness).toBe(0);
   });
 
-  it("sums weighted parts and caps at 100", () => {
+  it("uses 10 when goals exist but no tasks are tracked yet", () => {
     const ctx = emptyContext();
     ctx.goals = ["g"];
-    ctx.actionItems = ["t"];
-    ctx.risks = ["r"];
-    ctx.notes = ["n"];
-    ctx.usageCount = 3;
+    expect(computeProjectProgress(ctx).completeness).toBe(10);
+  });
+
+  it("is completed_tasks / action_items when tasks exist", () => {
+    const ctx = emptyContext();
+    ctx.actionItems = ["a", "b", "c", "d"];
+    ctx.completedTasks = ["a", "c"];
+    expect(computeProjectProgress(ctx).completeness).toBe(50);
+  });
+
+  it("reaches 100 when every action item is completed", () => {
+    const ctx = emptyContext();
+    ctx.actionItems = ["a", "b"];
+    ctx.completedTasks = ["a", "b"];
     expect(computeProjectProgress(ctx).completeness).toBe(100);
   });
 
-  it("adds 20 when usageCount is greater than 2", () => {
+  it("ignores completed entries that are not current action items", () => {
     const ctx = emptyContext();
-    ctx.goals = ["g"];
-    ctx.usageCount = 3;
-    expect(computeProjectProgress(ctx).completeness).toBe(45);
+    ctx.actionItems = ["a"];
+    ctx.completedTasks = ["a", "orphan"];
+    expect(computeProjectProgress(ctx).completeness).toBe(100);
   });
 });

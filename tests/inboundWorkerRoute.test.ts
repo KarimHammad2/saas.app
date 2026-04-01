@@ -57,6 +57,7 @@ function buildJob(overrides: Record<string, unknown> = {}) {
         currentStatus: null,
         goals: [],
         actionItems: [],
+        completedTasks: [],
         decisions: [],
         risks: [],
         recommendations: [],

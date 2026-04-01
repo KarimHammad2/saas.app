@@ -20,6 +20,8 @@ const SECTION_LABELS = [
   "Goals",
   "Tasks",
   "Action Items",
+  "Completed Tasks",
+  "Completed",
   "Decisions",
   "Risks",
   "Notes",
@@ -467,6 +469,7 @@ export function parseNormalizedContent(content: string) {
   const currentStatus = extractSection(content, "Status").trim();
   const goals = toBulletList(extractSection(content, "Goals"));
   const actionItems = toBulletList(extractSection(content, "Action Items") || extractSection(content, "Tasks"));
+  const completedTasks = toBulletList(extractSection(content, "Completed Tasks") || extractSection(content, "Completed"));
   const decisions = toBulletList(extractSection(content, "Decisions"));
   const risks = toBulletList(extractSection(content, "Risks"));
   const notesSection = filterIgnoredNoteLines(toBulletList(extractSection(content, "Notes")));
@@ -482,6 +485,7 @@ export function parseNormalizedContent(content: string) {
     Boolean(currentStatus) ||
     goals.length > 0 ||
     actionItems.length > 0 ||
+    completedTasks.length > 0 ||
     decisions.length > 0 ||
     risks.length > 0 ||
     recommendations.length > 0 ||
@@ -512,6 +516,7 @@ export function parseNormalizedContent(content: string) {
     currentStatus: currentStatus || null,
     goals,
     actionItems,
+    completedTasks,
     decisions,
     risks,
     recommendations,
