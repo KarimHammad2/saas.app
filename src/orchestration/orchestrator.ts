@@ -7,9 +7,10 @@ function cleanBody(value: string): string {
 }
 
 export interface HandleIncomingEmailResult {
-  userId: string;
-  projectId: string;
+  userId: string | null;
+  projectId: string | null;
   duplicate?: boolean;
+  clarificationSent?: boolean;
 }
 
 async function processCanonicalEvent(event: NormalizedEmailEvent): Promise<HandleIncomingEmailResult> {
