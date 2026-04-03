@@ -28,6 +28,7 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
     context: {
       projectId: "p1",
       userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
       summary: "AI SaaS for real estate",
       initialSummary: "AI SaaS for real estate",
       currentStatus: "MVP in progress",
@@ -88,7 +89,7 @@ describe("sendProjectEmail", () => {
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update");
+    expect(call?.subject).toBe("Project Update [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
@@ -98,6 +99,7 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("## Decisions");
     expect(attachment?.content).toContain("### In Progress");
     expect(attachment?.content).toContain("### Completed");
+    expect(attachment?.content).toContain("## Pending Suggestions");
 
     expect(call?.html).toContain('charset="utf-8"');
     expect(call?.html).toContain('class="email-root"');
@@ -106,7 +108,9 @@ describe("sendProjectEmail", () => {
     expect(call?.html).not.toContain("<strong>Status:</strong>");
     expect(call?.html).not.toContain("<strong>Last Update:</strong>");
     expect(call?.html).not.toContain("You are working on:");
-    expect(call?.text).toContain("Here is your updated project file.");
+    expect(call?.text).toBe(
+      "Here is your updated project file.\n\nUpload it into your LLM and continue working on your project.\n\nAttachment: project-document.md",
+    );
     expect(call?.text).not.toContain("Project:");
     expect(call?.text).not.toContain("Status:");
     expect(call?.text).not.toContain("Last Update:");
@@ -121,7 +125,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update");
+    expect(call?.subject).toBe("Project Update [PJT-A1B2C3D4]");
     expect(call?.html).toContain("Here is your updated project file.");
     expect(call?.text).not.toContain("Project: AI SaaS for real estate");
   });
@@ -133,11 +137,11 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update");
+    expect(call?.subject).toBe("Project Update [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
   });
 
-  it("includes pending suggestions only inside RPM context when passed (document is LLM-first)", async () => {
+  it("renders pending suggestions in deterministic markdown section", async () => {
     const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
     const payload = buildPayload(false);
     payload.pendingSuggestions = [
@@ -171,7 +175,8 @@ describe("sendProjectEmail", () => {
     const call = mockedSendEmail.mock.calls[0]?.[0];
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# PROJECT FILE");
-    expect(attachment?.content).not.toContain("Pending Suggestions");
+    expect(attachment?.content).toContain("## Pending Suggestions");
+    expect(attachment?.content).toContain("- [s1] User prefers short answers");
     expect(attachment?.content).not.toContain("Transactions");
     expect(call?.html).not.toContain("Pending Suggestions");
   });
@@ -188,6 +193,8 @@ describe("sendProjectEmail", () => {
     const call = mockedSendEmail.mock.calls[0]?.[0];
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("(none)");
+    expect(attachment?.content).toContain("## Pending Suggestions");
+    expect(attachment?.content).toContain("## Recent Updates");
   });
 
   it("appends project code to subject when present", async () => {
@@ -200,33 +207,29 @@ describe("sendProjectEmail", () => {
     expect(call?.subject).toBe("Project Update [PJT-DEADBEEF]");
   });
 
-  it("uses minimal fallback subject and body when title metadata is missing", async () => {
+  it("throws when projectCode is missing from payload context", async () => {
     const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
     const payload = buildPayload(false);
-    payload.context.summary = "";
-    payload.context.projectName = "";
-    payload.context.actionItems = [];
-    payload.context.completedTasks = [];
-    payload.context.goals = [];
-    payload.context.recentUpdatesLog = [];
-    await sendProjectEmail(["user@example.com"], payload);
-
-    const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update");
-    expect(call?.text).toContain("Here is your updated project file.");
-    expect(call?.text).toContain("Attachment: project-document.md");
-    expect(call?.text).not.toContain("Project:");
-    expect(call?.text).not.toContain("Status:");
-    expect(call?.text).not.toContain("Last Update:");
+    delete payload.context.projectCode;
+    await expect(sendProjectEmail(["user@example.com"], payload)).rejects.toThrow(
+      "Project outbound email requires context.projectCode.",
+    );
   });
 
-  it("uses short project-name subject when project code is absent", async () => {
+  it("throws even when project-name metadata exists but projectCode is absent", async () => {
     const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
     const payload = buildPayload(false);
+    delete payload.context.projectCode;
     payload.context.projectName = "Meal Planning App for Busy Professionals";
-    await sendProjectEmail(["user@example.com"], payload);
+    await expect(sendProjectEmail(["user@example.com"], payload)).rejects.toThrow(
+      "Project outbound email requires context.projectCode.",
+    );
+  });
 
-    const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Meal Planning App for Busy — Update");
+  it("validates required document headings before attachment send", async () => {
+    const { validateProjectDocumentForAttachment } = await import("@/modules/output/sendProjectEmail");
+    expect(() => validateProjectDocumentForAttachment("# PROJECT FILE\n\nbroken")).toThrow(
+      "Generated project document is missing required section: ## Instructions to LLM",
+    );
   });
 });

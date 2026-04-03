@@ -1,23 +1,33 @@
 import type { Tier, TransactionEvent } from "@/modules/contracts/types";
-import { getSaasFeeRate } from "@/modules/domain/pricing";
 
 function round(value: number): number {
   return Number(value.toFixed(4));
 }
 
-export function applyTierFinancials(input: TransactionEvent, tier: Tier): TransactionEvent {
-  const feeRate = getSaasFeeRate(tier);
-  const bufferHours = input.bufferHours > 0 ? input.bufferHours : input.hoursPurchased * 0.1;
-  const allocatedHours = input.allocatedHours > 0 ? input.allocatedHours : input.hoursPurchased - bufferHours;
-  const saas2Fee = feeRate === 0 ? input.saas2Fee : input.hoursPurchased * feeRate;
-  const projectRemainder =
-    input.projectRemainder > 0 ? input.projectRemainder : Math.max(0, bufferHours - saas2Fee);
+function clampNonNegative(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+export function normalizeTransactionEvent(input: TransactionEvent): TransactionEvent {
+  const hoursPurchased = clampNonNegative(input.hoursPurchased);
+  const hourlyRate = clampNonNegative(input.hourlyRate);
+  const allocatedHours = clampNonNegative(input.allocatedHours);
+  const bufferHours = clampNonNegative(input.bufferHours);
+  const saas2Fee = clampNonNegative(input.saas2Fee);
+  const projectRemainder = clampNonNegative(input.projectRemainder);
 
   return {
     ...input,
-    bufferHours: round(bufferHours),
+    hoursPurchased: round(hoursPurchased),
+    hourlyRate: round(hourlyRate),
     allocatedHours: round(allocatedHours),
+    bufferHours: round(bufferHours),
     saas2Fee: round(saas2Fee),
     projectRemainder: round(projectRemainder),
   };
+}
+
+/** @deprecated Kept for compatibility; normalization is tier-agnostic in MVP scope. */
+export function applyTierFinancials(input: TransactionEvent, _tier: Tier): TransactionEvent {
+  return normalizeTransactionEvent(input);
 }

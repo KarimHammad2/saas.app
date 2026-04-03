@@ -12,6 +12,7 @@ import type {
 } from "@/modules/contracts/types";
 import { normalizeMessageId } from "@/modules/email/messageId";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
+import { resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
@@ -149,6 +150,75 @@ function noteSemanticKey(line: string): string {
   const t = line.trim();
   const withoutDate = t.replace(/^\[\d{4}-\d{2}-\d{2}\]\s*/, "");
   return normalizeListItemKey(withoutDate);
+}
+
+function normalizeSuggestionContentKey(content: string): string {
+  return content.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function buildProtectedTransactionSuggestionContent(proposerEmail: string, event: TransactionEvent): string {
+  return [
+    "[PROTECTED_UPDATE:TRANSACTION]",
+    `Proposed by: ${normalizeEmail(proposerEmail)}`,
+    `Hours Purchased: ${event.hoursPurchased}`,
+    `Hourly Rate: ${event.hourlyRate}`,
+    `Allocated to Freelancer: ${event.allocatedHours}`,
+    `Buffer: ${event.bufferHours}`,
+    `SaaS2 Fee: ${event.saas2Fee}`,
+    `Project Remainder: ${event.projectRemainder}`,
+    "Reply with: approve suggestion <id> to confirm this transaction.",
+  ].join(" | ");
+}
+
+function parseProtectedTransactionSuggestion(
+  content: string,
+): { proposerEmail: string; event: TransactionEvent } | null {
+  if (!content.includes("[PROTECTED_UPDATE:TRANSACTION]")) {
+    return null;
+  }
+
+  const getNumber = (label: string): number | null => {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = content.match(new RegExp(`${escaped}:\\s*([\\d.]+)`, "i"));
+    if (!m?.[1]) {
+      return null;
+    }
+    const parsed = Number(m[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const proposerMatch = content.match(/Proposed by:\s*([^|]+)/i);
+  const proposerEmail = proposerMatch?.[1]?.trim().toLowerCase();
+  const hoursPurchased = getNumber("Hours Purchased");
+  const hourlyRate = getNumber("Hourly Rate");
+  const allocatedHours = getNumber("Allocated to Freelancer");
+  const bufferHours = getNumber("Buffer");
+  const saas2Fee = getNumber("SaaS2 Fee");
+  const projectRemainder = getNumber("Project Remainder");
+
+  if (
+    !proposerEmail ||
+    hoursPurchased === null ||
+    hourlyRate === null ||
+    allocatedHours === null ||
+    bufferHours === null ||
+    saas2Fee === null ||
+    projectRemainder === null
+  ) {
+    return null;
+  }
+
+  return {
+    proposerEmail,
+    event: {
+      hoursPurchased,
+      hourlyRate,
+      allocatedHours,
+      bufferHours,
+      saas2Fee,
+      projectRemainder,
+    },
+  };
 }
 
 function parseSuggestionIntoStructuredContext(content: string): Partial<UserProfileStructuredContext> {
@@ -770,6 +840,33 @@ export class MemoryRepository {
     }
   }
 
+  async recordOutboundEmailEvent(input: {
+    projectId?: string | null;
+    userId?: string | null;
+    inboundEventId?: string | null;
+    kind: string;
+    provider?: string | null;
+    status: "sent" | "failed";
+    recipientCount: number;
+    messageId?: string | null;
+    errorMessage?: string | null;
+  }): Promise<void> {
+    const { error } = await this.supabase.from("outbound_email_events").insert({
+      project_id: input.projectId ?? null,
+      user_id: input.userId ?? null,
+      inbound_event_id: input.inboundEventId ?? null,
+      kind: input.kind,
+      provider: input.provider ?? null,
+      status: input.status,
+      recipient_count: Math.max(0, Math.floor(input.recipientCount)),
+      message_id: input.messageId ?? null,
+      error_message: input.errorMessage ?? null,
+    });
+    if (error) {
+      throw new Error(`Failed to record outbound email event: ${error.message}`);
+    }
+  }
+
   /**
    * Always inserts a new project row (multi-project flow). Trigger assigns project_code if omitted.
    */
@@ -1175,13 +1272,47 @@ export class MemoryRepository {
     content: string,
     source: RPMSuggestionSource = "inbound",
   ): Promise<RPMSuggestion> {
+    const normalizedContent = content.replace(/\s+/g, " ").trim();
+    if (!normalizedContent) {
+      throw new Error("Cannot store empty RPM suggestion.");
+    }
+
+    const { data: existingPending, error: existingPendingError } = await this.supabase
+      .from("rpm_suggestions")
+      .select("id, user_id, project_id, from_email, content, status, created_at, source")
+      .eq("user_id", userId)
+      .eq("project_id", projectId)
+      .eq("source", source)
+      .eq("status", "pending")
+      .order("created_at", { ascending: true });
+
+    if (existingPendingError) {
+      throw new Error(`Failed to check existing RPM suggestions: ${existingPendingError.message}`);
+    }
+
+    const duplicate = (existingPending ?? []).find(
+      (row) => normalizeSuggestionContentKey(row.content) === normalizeSuggestionContentKey(normalizedContent),
+    );
+    if (duplicate) {
+      return {
+        id: duplicate.id,
+        userId: duplicate.user_id,
+        projectId: duplicate.project_id,
+        fromEmail: duplicate.from_email,
+        content: duplicate.content,
+        status: duplicate.status,
+        createdAt: duplicate.created_at,
+        source: (duplicate.source as RPMSuggestionSource) ?? source,
+      };
+    }
+
     const { data, error } = await this.supabase
       .from("rpm_suggestions")
       .insert({
         user_id: userId,
         project_id: projectId,
         from_email: normalizeEmail(fromEmail),
-        content,
+        content: normalizedContent,
         source,
       })
       .select("id, user_id, project_id, from_email, content, status, created_at, source")
@@ -1212,13 +1343,35 @@ export class MemoryRepository {
     };
   }
 
+  async storeProtectedTransactionSuggestion(
+    userId: string,
+    projectId: string,
+    proposerEmail: string,
+    event: TransactionEvent,
+  ): Promise<RPMSuggestion> {
+    return this.storeRPMSuggestion(
+      userId,
+      projectId,
+      proposerEmail,
+      buildProtectedTransactionSuggestionContent(proposerEmail, event),
+      "inbound",
+    );
+  }
+
   async approveSuggestion(userId: string, suggestionId: string, approverEmail: string): Promise<void> {
     const { data: suggestion, error: fetchError } = await this.supabase
       .from("rpm_suggestions")
-      .select("id, content, user_id, status")
+      .select("id, project_id, content, user_id, status, source")
       .eq("id", suggestionId)
       .eq("user_id", userId)
-      .maybeSingle<{ id: string; content: string; user_id: string; status: "pending" | "approved" | "rejected" }>();
+      .maybeSingle<{
+        id: string;
+        project_id: string | null;
+        content: string;
+        user_id: string;
+        status: "pending" | "approved" | "rejected";
+        source: RPMSuggestionSource;
+      }>();
 
     if (fetchError) {
       throw new Error(`Failed to find suggestion to approve: ${fetchError.message}`);
@@ -1244,25 +1397,41 @@ export class MemoryRepository {
       throw new Error(`Failed to approve suggestion: ${updateError.message}`);
     }
 
-    await this.storeUserProfileContext(userId, suggestion.content);
+    if (suggestion.project_id) {
+      await this.appendRecentUpdate(suggestion.project_id, `Suggestion accepted [${suggestion.id}]: ${suggestion.content}`);
+    }
 
-    const profile = await this.getUserProfile(userId);
-    const structuredPatch = parseSuggestionIntoStructuredContext(suggestion.content);
-    if (Object.keys(structuredPatch).length > 0) {
-      await this.replaceStructuredUserProfileContext(
-        userId,
-        applyStructuredPatch(profile.structuredContext, structuredPatch),
+    const protectedTransaction = parseProtectedTransactionSuggestion(suggestion.content);
+    if (protectedTransaction && suggestion.project_id) {
+      await this.storeTransactionEvent(suggestion.project_id, protectedTransaction.proposerEmail, protectedTransaction.event);
+      await this.appendRecentUpdate(
+        suggestion.project_id,
+        `Protected transaction approved [${suggestion.id}] by ${normalizeEmail(approverEmail)} (proposed by ${protectedTransaction.proposerEmail})`,
       );
+      return;
+    }
+
+    if (suggestion.source === "inbound") {
+      await this.storeUserProfileContext(userId, suggestion.content);
+
+      const profile = await this.getUserProfile(userId);
+      const structuredPatch = parseSuggestionIntoStructuredContext(suggestion.content);
+      if (Object.keys(structuredPatch).length > 0) {
+        await this.replaceStructuredUserProfileContext(
+          userId,
+          applyStructuredPatch(profile.structuredContext, structuredPatch),
+        );
+      }
     }
   }
 
   async rejectSuggestion(userId: string, suggestionId: string, approverEmail: string): Promise<void> {
     const { data: suggestion, error: fetchError } = await this.supabase
       .from("rpm_suggestions")
-      .select("id, user_id, status")
+      .select("id, project_id, user_id, status")
       .eq("id", suggestionId)
       .eq("user_id", userId)
-      .maybeSingle<{ id: string; user_id: string; status: "pending" | "approved" | "rejected" }>();
+      .maybeSingle<{ id: string; project_id: string | null; user_id: string; status: "pending" | "approved" | "rejected" }>();
 
     if (fetchError) {
       throw new Error(`Failed to find suggestion to reject: ${fetchError.message}`);
@@ -1286,6 +1455,10 @@ export class MemoryRepository {
 
     if (error) {
       throw new Error(`Failed to reject suggestion: ${error.message}`);
+    }
+
+    if (suggestion.project_id) {
+      await this.appendRecentUpdate(suggestion.project_id, `Suggestion rejected [${suggestion.id}]`);
     }
   }
 
@@ -1471,31 +1644,20 @@ export class MemoryRepository {
   }
 
   async storeTransactionEvent(projectId: string, fromEmail: string, event: TransactionEvent): Promise<void> {
-    const { error } = await this.supabase.from("transactions").insert({
-      project_id: projectId,
-      created_by_email: normalizeEmail(fromEmail),
-      type: "hourPurchase",
-      hours_purchased: event.hoursPurchased,
-      hourly_rate: event.hourlyRate,
-      allocated_hours: event.allocatedHours,
-      buffer_hours: event.bufferHours,
-      saas2_fee: event.saas2Fee,
-      project_remainder: event.projectRemainder,
+    const { error } = await this.supabase.rpc("store_transaction_event_atomic", {
+      p_project_id: projectId,
+      p_created_by_email: normalizeEmail(fromEmail),
+      p_type: "hourPurchase",
+      p_hours_purchased: event.hoursPurchased,
+      p_hourly_rate: event.hourlyRate,
+      p_allocated_hours: event.allocatedHours,
+      p_buffer_hours: event.bufferHours,
+      p_saas2_fee: event.saas2Fee,
+      p_project_remainder: event.projectRemainder,
     });
 
     if (error) {
-      throw new Error(`Failed to store transaction event: ${error.message}`);
-    }
-
-    const context = await this.getProjectState(projectId);
-    const nextRemainder = context.remainderBalance + event.projectRemainder;
-    const { error: remainderError } = await this.supabase
-      .from("projects")
-      .update({ remainder_balance: nextRemainder })
-      .eq("id", projectId);
-
-    if (remainderError) {
-      throw new Error(`Failed to update remainder balance: ${remainderError.message}`);
+      throw new Error(`Failed to store transaction event atomically: ${error.message}`);
     }
   }
 
@@ -1614,6 +1776,8 @@ export class MemoryRepository {
       createdAt: row.created_at,
     }));
 
+    const tier = userRow?.tier ?? "freemium";
+    const entitlements = resolvePlanEntitlements(tier);
     return {
       projectId: project.id,
       userId: project.user_id,
@@ -1636,7 +1800,12 @@ export class MemoryRepository {
       remainderBalance: Number(project.remainder_balance ?? 0),
       reminderBalance: Number(project.reminder_balance ?? 0),
       usageCount: Number(project.usage_count ?? 0),
-      tier: userRow?.tier ?? "freemium",
+      tier,
+      planPackage: entitlements.package,
+      featureFlags: {
+        collaborators: entitlements.allowCollaborators,
+        oversight: entitlements.allowHumanOversight,
+      },
       transactionHistory,
     };
   }

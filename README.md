@@ -242,7 +242,12 @@ If the problem is **sending** mail through the Resend API (dashboard “sent”,
 2. **Project update** — Labeled sections (`Summary`, `Goals`, `Action Items`, etc.) update state and outbound email.  
 3. **RPM suggestion** — `UserProfile Suggestion:` from RPM is stored as pending and appears outbound.  
 4. **Approval** — User sends `Approve suggestion <id>`; profile updates apply.  
-5. **Transaction** — `Transaction:` block updates tier, financial normalization, storage, and remainder balance.
+5. **Transaction owner path** — Owner email with `Transaction:` block stores transaction + remainder atomically.  
+6. **Transaction protected path** — Non-owner sensitive transaction proposal stays pending until owner approval.  
+7. **Webhook idempotency** — Replay same inbound provider event id; verify second request is `duplicate=true` and no extra outbound email.  
+8. **Retry storm safety** — Simulate worker transient failures, confirm retries then terminal fallback once at max attempts.  
+9. **Bounce/failed monitoring** — Send provider failure event (`email.bounced` / `email.failed`) and verify it is logged/audited without queueing inbound work.  
+10. **Attachment validation** — Ensure outbound `project-document.md` includes required sections; malformed document generation should fail fast.
 
 ---
 

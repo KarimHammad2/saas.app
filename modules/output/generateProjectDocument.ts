@@ -13,10 +13,54 @@ Your role:
 
 When interacting with the user:
 - Be clear and actionable
-- Ask questions if needed
-- Help generate structured updates to send back via email
+- Use bullet points instead of long paragraphs
+- Avoid unnecessary explanations
+- Focus on helping progress
 
----`;
+---
+
+## How to generate updates for the system
+
+When suggesting updates that the user may send via email:
+
+You MUST follow this exact structure:
+
+Goals:
+- ...
+
+Tasks:
+- ...
+
+Completed:
+- ...
+
+Risks:
+- ...
+
+Decisions:
+- ...
+
+Notes:
+- ...
+
+Rules:
+- Only include sections that have updates
+- Do NOT rewrite the full project
+- Do NOT include explanations outside sections
+- Do NOT invent new section names
+- Keep updates concise and structured
+
+---
+
+## Example
+
+User input:
+"Auth is done"
+
+Correct output:
+
+Completed:
+- Build authentication system`;
 
 function formatBulletSection(values: string[], emptyPlaceholder: string): string {
   const uniqueValues = dedupePreserveOrder(values);
@@ -40,6 +84,43 @@ function formatTasksCompleted(completedTasks: string[]): string {
   return completedTasks.map((t) => formatCompletedTaskLine(t)).filter(Boolean).join("\n");
 }
 
+function normalizeSuggestionLine(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+function formatPendingSuggestions(payload: ProjectEmailPayload): string {
+  const pending = payload.pendingSuggestions
+    .filter((s) => s.status === "pending")
+    .map((s) => ({
+      id: s.id.trim(),
+      content: normalizeSuggestionLine(s.content),
+    }))
+    .filter((s) => s.id || s.content);
+
+  if (pending.length === 0) {
+    return "(none)";
+  }
+
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const suggestion of pending) {
+    const key = `${suggestion.id.toLowerCase()}|${suggestion.content.toLowerCase()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    if (suggestion.id && suggestion.content) {
+      lines.push(`- [${suggestion.id}] ${suggestion.content}`);
+    } else if (suggestion.id) {
+      lines.push(`- [${suggestion.id}]`);
+    } else {
+      lines.push(`- ${suggestion.content}`);
+    }
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "(none)";
+}
+
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
@@ -56,6 +137,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     context.recentUpdatesLog.length > 0
       ? context.recentUpdatesLog.map((line) => `- ${line}`).join("\n")
       : "(none)";
+  const pendingSuggestionsBlock = formatPendingSuggestions(payload);
 
   return [
     "# PROJECT FILE",
@@ -109,6 +191,12 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "## Recent Updates",
     "",
     recentBlock,
+    "",
+    "---",
+    "",
+    "## Pending Suggestions",
+    "",
+    pendingSuggestionsBlock,
     "",
   ].join("\n");
 }

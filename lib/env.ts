@@ -32,6 +32,17 @@ export function getEmailProviderName(): string {
   return provider;
 }
 
+export function getFallbackEmailProviderName(): "resend" | "ses" | null {
+  const raw = (process.env.EMAIL_PROVIDER_FALLBACK ?? "").trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw !== "resend" && raw !== "ses") {
+    throw new Error(`Unsupported EMAIL_PROVIDER_FALLBACK: ${raw}`);
+  }
+  return raw;
+}
+
 export function getMasterUserEmail(): string {
   return (process.env.MASTER_USER_EMAIL ?? "daniel@saas2.app").trim().toLowerCase();
 }
@@ -40,14 +51,9 @@ export function getDefaultFromEmail(): string {
   return process.env.RESEND_FROM_EMAIL ?? "Frank <frank@domain.com>";
 }
 
-/** Bare address that must appear in inbound To for project workflow (defaults from RESEND_FROM_EMAIL or frank@saas2.app). */
+/** Bare address that must appear in inbound To for project workflow (hard-locked by product policy). */
 export function getInboundTriggerEmail(): string {
-  const explicit = process.env.INBOUND_TRIGGER_EMAIL?.trim().toLowerCase();
-  if (explicit) {
-    return explicit;
-  }
-  const parsed = tryNormalizeEmailAddress(getDefaultFromEmail());
-  return parsed ?? "frank@saas2.app";
+  return "frank@saas2.app";
 }
 
 /** Internal senders blocked from triggering inbound workflow (merged with domain aliases). */

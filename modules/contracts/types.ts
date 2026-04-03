@@ -1,4 +1,5 @@
 export type Tier = "freemium" | "solopreneur" | "agency";
+export type PlanPackage = "solo" | "agency";
 
 export type ActorRole = "user" | "rpm" | "master";
 
@@ -79,6 +80,13 @@ export interface ProjectContext {
   reminderBalance: number;
   usageCount: number;
   tier: Tier;
+  /** Plan packaging used for Solo vs Agency workflow gates. */
+  planPackage?: PlanPackage;
+  /** Server-side feature gates resolved from tier/package. */
+  featureFlags?: {
+    collaborators: boolean;
+    oversight: boolean;
+  };
   transactionHistory: TransactionRecord[];
 }
 

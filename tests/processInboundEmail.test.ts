@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { NonRetryableInboundError } from "@/modules/orchestration/errors";
 
 const emptyUserProfile = {
   communicationStyle: "",
@@ -65,6 +66,7 @@ const repoState = {
   setUserTier: vi.fn(),
   assignRpm: vi.fn(),
   storeTransactionEvent: vi.fn(),
+  storeProtectedTransactionSuggestion: vi.fn(),
   snapshotProjectContext: vi.fn(),
   getProjectState: vi.fn(),
   getPendingSuggestions: vi.fn(),
@@ -122,6 +124,7 @@ vi.mock("@/modules/memory/repository", async () => {
       setUserTier = repoState.setUserTier;
       assignRpm = repoState.assignRpm;
       storeTransactionEvent = repoState.storeTransactionEvent;
+      storeProtectedTransactionSuggestion = repoState.storeProtectedTransactionSuggestion;
       snapshotProjectContext = repoState.snapshotProjectContext;
       getProjectState = repoState.getProjectState;
       getPendingSuggestions = repoState.getPendingSuggestions;
@@ -200,6 +203,16 @@ describe("processInboundEmail", () => {
       createdAt: new Date().toISOString(),
       source: source ?? "inbound",
     }));
+    repoState.storeProtectedTransactionSuggestion.mockImplementation(async (userId, projectId, fromEmail, event) => ({
+      id: "txn-proposal-1",
+      userId,
+      projectId,
+      fromEmail,
+      content: JSON.stringify(event),
+      status: "pending" as const,
+      createdAt: new Date().toISOString(),
+      source: "inbound" as const,
+    }));
   });
 
   it("returns recipients and state payload", async () => {
@@ -243,6 +256,464 @@ describe("processInboundEmail", () => {
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
     expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalled();
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
+  });
+
+  it('creates a new project from "I want to build X" style kickoff email', async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_create",
+      provider: "resend",
+      providerEventId: "m_create",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "I want to build a restaurant analytics SaaS",
+      inReplyTo: null,
+      references: [],
+      rawBody: "I want to build a restaurant analytics SaaS with weekly KPI reports.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["I want to build a restaurant analytics SaaS with weekly KPI reports."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "I want to build a restaurant analytics SaaS");
+    expect(result.context.projectId).toBe("p1");
+    expect(result.payload.emailKind).toBeDefined();
+  });
+
+  it("resolves reply updates to the same project via In-Reply-To thread mapping", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-thread" });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p-thread",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
+      transactionHistory: [],
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_reply",
+      provider: "resend",
+      providerEventId: "m_reply",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Project Update [PJT-A1B2C3D4]",
+      inReplyTo: "<outbound-test-msg-id@saas2.app>",
+      references: ["<outbound-test-msg-id@saas2.app>"],
+      rawBody: "Tasks:\n- finalize dashboard filters",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: ["finalize dashboard filters"],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.context.projectId).toBe("p-thread");
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown external sender before participant merge (anti-hijack)", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u-outsider",
+        email: "outsider@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageId.mockResolvedValue({
+      ...defaultMockProject,
+      id: "p-protected",
+      user_id: "u-owner",
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p-protected",
+      userId: "u-owner",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "owner@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
+      transactionHistory: [],
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_hijack",
+      provider: "resend",
+      providerEventId: "m_hijack",
+      timestamp: new Date().toISOString(),
+      from: "outsider@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Protected [PJT-A1B2C3D4]",
+      inReplyTo: "<mapped-thread@saas2.app>",
+      references: [],
+      rawBody: "Tasks:\n- malicious update attempt",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: ["malicious update attempt"],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toBeInstanceOf(NonRetryableInboundError);
+    expect(repoState.mergeProjectParticipants).not.toHaveBeenCalled();
+  });
+
+  it("blocks new collaborator additions on solo package projects", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_solo_participant_gate",
+      provider: "resend",
+      providerEventId: "m_solo_participant_gate",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: ["collab@example.com"],
+      subject: "Update with CC",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Summary: update",
+      parsed: {
+        summary: "update",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.mergeProjectParticipants).toHaveBeenCalledWith("p1", ["user@example.com"]);
+  });
+
+  it("prefers reply thread mapping over conflicting subject project code", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-thread", project_code: "pjt-thread1" });
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject, id: "p-code", project_code: "pjt-code99" });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p-thread",
+      userId: "u1",
+      projectCode: "pjt-thread1",
+      ownerEmail: "user@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
+      transactionHistory: [],
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_thread_wins",
+      provider: "resend",
+      providerEventId: "m_thread_wins",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Update [PJT-C0DE99]",
+      inReplyTo: "<outbound-thread@saas2.app>",
+      references: [],
+      rawBody: "Tasks:\n- finalize analytics export",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: ["finalize analytics export"],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.context.projectId).toBe("p-thread");
+    expect(repoState.findProjectByCodeAndUser).not.toHaveBeenCalled();
+  });
+
+  it("records recent updates when goals, tasks, decisions, risks, and notes are provided", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_recent",
+      provider: "resend",
+      providerEventId: "m_recent",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Structured update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Goals:\n- Reach 100 beta users\nTasks:\n- Ship onboarding\nDecisions:\n- Weekly releases\nRisks:\n- QA bandwidth\nNotes:\n- Need clearer QA ownership",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: ["Reach 100 beta users"],
+        actionItems: ["Ship onboarding"],
+        completedTasks: [],
+        decisions: ["Weekly releases"],
+        risks: ["QA bandwidth"],
+        recommendations: [],
+        notes: ["Need clearer QA ownership"],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    const recentLines = repoState.appendRecentUpdate.mock.calls.map((call) => String(call[1]));
+    expect(recentLines.some((line) => line.includes("Goals updated:"))).toBe(true);
+    expect(recentLines.some((line) => line.includes("Task(s) added:"))).toBe(true);
+    expect(recentLines.some((line) => line.includes("Decision(s) added:"))).toBe(true);
+    expect(recentLines.some((line) => line.includes("Risk(s) added:"))).toBe(true);
+    expect(recentLines.some((line) => line.includes("Notes updated"))).toBe(true);
+  });
+
+  it("routes unmatched completion-like text to notes when no confident task match is found", async () => {
+    const stateWithAuthTask = {
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: ["Build authentication system"],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium" as const,
+      transactionHistory: [],
+    };
+    repoState.getProjectState
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_unmatched_done",
+      provider: "resend",
+      providerEventId: "m_unmatched_done",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Progress update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Auth is done",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.markTasksCompleted).toHaveBeenCalledWith("p1", []);
+    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", ["Auth is done"], event.timestamp);
+  });
+
+  it("marks completion when free text confidently matches an in-progress task", async () => {
+    const stateWithAuthTask = {
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: ["Build authentication system"],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium" as const,
+      transactionHistory: [],
+    };
+    repoState.getProjectState
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask)
+      .mockResolvedValueOnce(stateWithAuthTask);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_matched_done",
+      provider: "resend",
+      providerEventId: "m_matched_done",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Progress update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Build authentication system is done",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.markTasksCompleted).toHaveBeenCalledWith("p1", ["Build authentication system"]);
+    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
   });
 
   it("does not infer profile updates from unlabeled content", async () => {
@@ -405,6 +876,238 @@ describe("processInboundEmail", () => {
     await processInboundEmail(event);
     expect(repoState.approveSuggestion).toHaveBeenCalledWith("u1", "abc123", "user@example.com");
     expect(repoState.rejectSuggestion).toHaveBeenCalledWith("u1", "def456", "user@example.com");
+  });
+
+  it("does not allow RPM role to approve/reject suggestions by email", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_approval_attempt",
+      provider: "resend",
+      providerEventId: "m_rpm_approval_attempt",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Approvals",
+      inReplyTo: null,
+      references: [],
+      rawBody: "approve suggestion abc123 reject suggestion def456",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [
+          { suggestionId: "abc123", decision: "approve" },
+          { suggestionId: "def456", decision: "reject" },
+        ],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.approveSuggestion).not.toHaveBeenCalled();
+    expect(repoState.rejectSuggestion).not.toHaveBeenCalled();
+  });
+
+  it("stores inbound RPM suggestion as pending without mutating confirmed project sections directly", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_inbound",
+      provider: "resend",
+      providerEventId: "m_rpm_inbound",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Suggestion",
+      inReplyTo: null,
+      references: [],
+      rawBody: "UserProfile Suggestion:\nCapture one explicit decision under Decisions.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: {
+          content: "Capture one explicit decision under Decisions.",
+          from: "rpm@example.com",
+          timestamp: new Date().toISOString(),
+        },
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.storeRPMSuggestion).toHaveBeenCalledWith(
+      "u1",
+      "p1",
+      "rpm@example.com",
+      "Capture one explicit decision under Decisions.",
+    );
+    expect(repoState.updateDecisions).toHaveBeenCalledWith("p1", []);
+  });
+
+  it("generates system suggestions as pending records (not confirmed state mutations)", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_system",
+      provider: "resend",
+      providerEventId: "m_rpm_system",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Summary: short update",
+      parsed: {
+        summary: "short update",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    const systemSuggestionCalls = repoState.storeRPMSuggestion.mock.calls.filter((call) => call[4] === "system");
+    expect(systemSuggestionCalls.length).toBeGreaterThan(0);
+    expect(repoState.deletePendingSystemSuggestionsForProject).toHaveBeenCalledWith("p1");
+  });
+
+  it("stores transaction as protected pending proposal for RPM role instead of committing immediately", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_protected_txn",
+      provider: "resend",
+      providerEventId: "m_protected_txn",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Transaction proposal",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Transaction:\nHours Purchased: 10\nHourly Rate: 50",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: {
+          hoursPurchased: 10,
+          hourlyRate: 50,
+          allocatedHours: 9,
+          bufferHours: 1,
+          saas2Fee: 50,
+          projectRemainder: 0,
+        },
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.storeProtectedTransactionSuggestion).toHaveBeenCalledWith(
+      "u1",
+      "p1",
+      "rpm@example.com",
+      expect.objectContaining({
+        hoursPurchased: 10,
+        hourlyRate: 50,
+      }),
+    );
+    expect(repoState.storeTransactionEvent).not.toHaveBeenCalled();
+  });
+
+  it("commits transaction immediately for user role", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_user_txn",
+      provider: "resend",
+      providerEventId: "m_user_txn",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Transaction commit",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Transaction:\nHours Purchased: 5\nHourly Rate: 100",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: {
+          hoursPurchased: 5,
+          hourlyRate: 100,
+          allocatedHours: 4.5,
+          bufferHours: 0.5,
+          saas2Fee: 50,
+          projectRemainder: 0,
+        },
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.storeTransactionEvent).toHaveBeenCalledWith(
+      "p1",
+      "user@example.com",
+      expect.objectContaining({
+        hoursPurchased: 5,
+        hourlyRate: 100,
+      }),
+    );
+    expect(repoState.storeProtectedTransactionSuggestion).not.toHaveBeenCalled();
   });
 
   it("marks first inbound as welcome and stores parsed notes", async () => {
@@ -584,6 +1287,139 @@ describe("processInboundEmail", () => {
     await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
   });
 
+  it("requires clarification for low-context non-thread email without explicit new-project intent", async () => {
+    classifyInboundIntentMock.mockReturnValue({
+      isNewProjectIntent: false,
+      isGreetingOnly: false,
+      confidence: 0.2,
+      reason: "insufficient project-intent signals",
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_low_context",
+      provider: "resend",
+      providerEventId: "m_low_context",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "quick update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "done, thanks",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["done, thanks"],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("requires clarification when subject has unknown project code", async () => {
+    classifyInboundIntentMock.mockReturnValue({
+      isNewProjectIntent: true,
+      isGreetingOnly: false,
+      confidence: 0.9,
+      reason: "strong new project intent",
+    });
+    repoState.findProjectByCodeAndUser.mockResolvedValue(null);
+    repoState.findProjectByCode.mockResolvedValue(null);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_unknown_code",
+      provider: "resend",
+      providerEventId: "m_unknown_code",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Update [PJT-ABCDEF12]",
+      inReplyTo: null,
+      references: [],
+      rawBody: "I want to build a totally new thing.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["I want to build a totally new thing."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("requires clarification when thread context exists but no mapped project is found", async () => {
+    classifyInboundIntentMock.mockReturnValue({
+      isNewProjectIntent: true,
+      isGreetingOnly: false,
+      confidence: 0.9,
+      reason: "strong new project intent",
+    });
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageId.mockResolvedValue(null);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_unresolved_thread",
+      provider: "resend",
+      providerEventId: "m_unresolved_thread",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<unknown-thread@saas2.app>",
+      references: [],
+      rawBody: "I want to build another product now.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["I want to build another product now."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
   it("writes deterministic scope-change overview and notes without explicit summary", async () => {
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
@@ -644,7 +1480,45 @@ describe("processInboundEmail", () => {
     ).toBe(true);
   });
 
-  it("requires clarification when non-thread context matches multiple projects", async () => {
+  it("applies minimal overview update on scope change even when parsed summary is present", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_scope_summary",
+      provider: "resend",
+      providerEventId: "m_scope_summary",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Direction update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "We are no longer doing mobile app for habits, now it's a web dashboard for agencies.",
+      parsed: {
+        summary: "Pivoted to a web dashboard for agencies.",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("Current direction:"));
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("web dashboard for agencies"));
+  });
+
+  it("requires clarification when non-thread email mentions one existing project without explicit thread/code context", async () => {
     classifyInboundIntentMock.mockReturnValue({
       isNewProjectIntent: false,
       isGreetingOnly: false,
@@ -653,7 +1527,6 @@ describe("processInboundEmail", () => {
     });
     repoState.findProjectsOwnedByUser.mockResolvedValue([
       { ...defaultMockProject, id: "p1", name: "Alpha Dashboard" },
-      { ...defaultMockProject, id: "p2", name: "Beta Dashboard" },
     ]);
 
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
@@ -669,7 +1542,7 @@ describe("processInboundEmail", () => {
       subject: "Dashboard update",
       inReplyTo: null,
       references: [],
-      rawBody: "Need to update Alpha Dashboard and Beta Dashboard soon.",
+      rawBody: "Need to update Alpha Dashboard soon.",
       parsed: {
         summary: null,
         currentStatus: null,
@@ -689,5 +1562,6 @@ describe("processInboundEmail", () => {
     };
 
     await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
   });
 });

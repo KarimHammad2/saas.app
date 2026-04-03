@@ -23,18 +23,15 @@ describe("parseInbound", () => {
     expect(parsed.references).toContain("abc123@mail.com");
   });
 
-  it("extracts labeled sections and transaction fields", () => {
+  it("extracts strict memory sections and special command sections", () => {
     const payload = {
       from: "User <user@example.com>",
       subject: "[Project: Revamp] Update",
       text: `
-Summary:
-Refined project scope.
-
 Goals:
 - Launch MVP
 
-Action Items:
+Tasks:
 - Draft architecture
 
 Decisions:
@@ -42,9 +39,6 @@ Decisions:
 
 Risks:
 - Timeline slippage
-
-Recommendations:
-- Weekly check-in
 
 UserProfile:
 Prefer concise updates.
@@ -61,24 +55,26 @@ SaaS2 Fee: 1
 Project Remainder: 1
 
 Approve suggestion abc-123
+Reject suggestion def-456
 `,
     };
 
     const parsed = parseInbound(payload, "resend");
     expect(parsed.from).toBe("user@example.com");
     expect(parsed.fromDisplayName).toBe("User");
-    expect(parsed.parsed.summary).toContain("Refined project scope");
+    expect(parsed.parsed.summary).toBeNull();
     expect(parsed.parsed.goals).toEqual(["Launch MVP"]);
     expect(parsed.parsed.actionItems).toEqual(["Draft architecture"]);
     expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
     expect(parsed.parsed.risks).toEqual(["Timeline slippage"]);
-    expect(parsed.parsed.recommendations).toEqual(["Weekly check-in"]);
+    expect(parsed.parsed.recommendations).toEqual([]);
     expect(parsed.parsed.currentStatus).toBeNull();
     expect(parsed.parsed.notes).toEqual([]);
     expect(parsed.parsed.userProfileContext).toContain("Prefer concise");
     expect(parsed.parsed.rpmSuggestion?.content).toContain("weekly updates");
     expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(20);
     expect(parsed.parsed.approvals[0]).toEqual({ suggestionId: "abc-123", decision: "approve" });
+    expect(parsed.parsed.approvals[1]).toEqual({ suggestionId: "def-456", decision: "reject" });
   });
 
   it("parses markdown-style section headers and dedupes list entries", () => {
@@ -111,15 +107,12 @@ Decisions:
     expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
   });
 
-  it("decodes HTML entities in labeled sections", () => {
+  it("decodes HTML entities in strict labeled sections", () => {
     const payload = {
       from: "User <user@example.com>",
       subject: "[Project: Revamp] Update",
       text: `
-Summary:
-Tom &amp; Jerry
-
-Action Items:
+Tasks:
 - Draft &amp; review
 
 Decisions:
@@ -130,7 +123,7 @@ Decisions:
     const parsed = parseInbound(payload, "resend");
 
     expect(parsed.from).toBe("user@example.com");
-    expect(parsed.parsed.summary).toBe("Tom & Jerry");
+    expect(parsed.parsed.summary).toBeNull();
     expect(parsed.parsed.goals).toEqual([]);
     expect(parsed.parsed.actionItems).toEqual(["Draft & review"]);
     expect(parsed.parsed.decisions).toEqual(["Use <Supabase>"]);
@@ -150,7 +143,7 @@ Decisions:
         to: [{ email: "frank@sign-unlimit.com" }],
         cc: [],
         subject: "[Project: Prod] real email",
-        text: "Summary:\nReal inbound\n\nGoals:\n- Confirm resend payload support",
+        text: "Goals:\n- Confirm resend payload support",
         email_id: "a8e65746-13a5-49b1-9768-ca4ff213a3d3",
       },
       type: "email.received",
@@ -161,7 +154,7 @@ Decisions:
     expect(parsed.providerEventId).toBe("evt_123");
     expect(parsed.from).toBe("karim@example.com");
     expect(parsed.to).toEqual(["frank@sign-unlimit.com"]);
-    expect(parsed.parsed.summary).toContain("Real inbound");
+    expect(parsed.parsed.summary).toBeNull();
     expect(parsed.parsed.goals).toEqual(["Confirm resend payload support"]);
   });
 
@@ -171,14 +164,14 @@ Decisions:
       data: {
         from: "Karim <karim@example.com>",
         subject: "[Project: Real Life Test] Kickoff",
-        message: "Summary:\nRaw payload body\n\nGoals:\n- Parse from message field",
+        message: "Goals:\n- Parse from message field",
       },
       type: "email.received",
     };
 
     const parsed = parseInbound(payload, "resend");
     expect(parsed.from).toBe("karim@example.com");
-    expect(parsed.parsed.summary).toBe("Raw payload body");
+    expect(parsed.parsed.summary).toBeNull();
     expect(parsed.parsed.goals).toEqual(["Parse from message field"]);
   });
 
@@ -195,13 +188,13 @@ Decisions:
     const payload = {
       id: "evt_alias",
       FromFull: { Email: "alias.sender@example.com" },
-      TextBody: "Summary:\nAlias body support\n\nGoals:\n- Parse TextBody and FromFull",
+      TextBody: "Goals:\n- Parse TextBody and FromFull",
       subject: "Alias test",
     };
 
     const parsed = parseInbound(payload, "ses");
     expect(parsed.from).toBe("alias.sender@example.com");
-    expect(parsed.parsed.summary).toBe("Alias body support");
+    expect(parsed.parsed.summary).toBeNull();
     expect(parsed.parsed.goals).toEqual(["Parse TextBody and FromFull"]);
   });
 
@@ -225,7 +218,8 @@ Decisions:
     expect(isIgnoredNoteInput("....")).toBe(true);
     expect(isIgnoredNoteInput(" - _ ")).toBe(true);
     expect(isIgnoredNoteInput("hi")).toBe(true);
-    expect(isIgnoredNoteInput("hello")).toBe(false);
+    expect(isIgnoredNoteInput("hello")).toBe(true);
+    expect(isIgnoredNoteInput("Shipped onboarding and started billing integration")).toBe(false);
   });
 
   it("drops low-signal lines from Notes section", () => {
@@ -267,7 +261,7 @@ Decisions:
     expect(parsed.parsed.summary).toBe("Potential SaaS platform for restaurants.");
   });
 
-  it("parses Status and drops notes that duplicate Summary", () => {
+  it("ignores Summary/Status sections under strict memory contract", () => {
     const payload = {
       from: "user@example.com",
       subject: "Status test",
@@ -284,9 +278,29 @@ Notes:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.parsed.summary).toContain("One line overview");
-    expect(parsed.parsed.currentStatus).toContain("Building MVP");
-    expect(parsed.parsed.notes).toEqual(["Extra detail only in notes."]);
+    expect(parsed.parsed.summary).toBeNull();
+    expect(parsed.parsed.currentStatus).toBeNull();
+    expect(parsed.parsed.notes).toEqual(["One line overview.", "Extra detail only in notes."]);
+  });
+
+  it("ignores unknown sections and Task aliases for memory updates", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "Strict section parsing",
+      text: `Action Items:
+- Alias should not parse
+
+Recommendations:
+- Unknown memory section should be ignored
+
+Tasks:
+- Canonical task should parse
+`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.actionItems).toEqual(["Canonical task should parse"]);
+    expect(parsed.parsed.recommendations).toEqual([]);
   });
 
   it("normalizes recipient variants from strings and objects", () => {
@@ -378,9 +392,9 @@ Approve suggestion 123`,
     const parsed = parseInbound(payload, "resend");
     expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(10);
     expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(50);
-    expect(parsed.parsed.transactionEvent?.allocatedHours).toBe(9);
-    expect(parsed.parsed.transactionEvent?.bufferHours).toBe(1);
-    expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(50);
+    expect(parsed.parsed.transactionEvent?.allocatedHours).toBe(0);
+    expect(parsed.parsed.transactionEvent?.bufferHours).toBe(0);
+    expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(0);
     expect(parsed.parsed.approvals).toEqual([{ suggestionId: "123", decision: "approve" }]);
     expect(parsed.parsed.notes).toEqual([]);
   });

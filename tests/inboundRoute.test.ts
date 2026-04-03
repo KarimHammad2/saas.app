@@ -9,9 +9,11 @@ vi.mock("@/modules/email/providers", () => ({
 }));
 
 const enqueueInboundEmailJob = vi.fn();
+const recordOutboundEmailEvent = vi.fn();
 vi.mock("@/modules/memory/repository", () => ({
   MemoryRepository: class {
     enqueueInboundEmailJob = enqueueInboundEmailJob;
+    recordOutboundEmailEvent = recordOutboundEmailEvent;
   },
 }));
 
@@ -33,7 +35,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
     timestamp: new Date().toISOString(),
     from: "user@example.com",
     fromDisplayName: null,
-    to: ["frank@inbound.test"],
+    to: ["frank@saas2.app"],
     cc: [],
     subject: "Hello",
     inReplyTo: null,
@@ -73,9 +75,9 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
 describe("POST /api/inbound", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.stubEnv("INBOUND_TRIGGER_EMAIL", "frank@inbound.test");
-    vi.stubEnv("MASTER_USER_EMAIL", "daniel@inbound.test");
+    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saas2.app");
     enqueueInboundEmailJob.mockResolvedValue(true);
+    recordOutboundEmailEvent.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -118,7 +120,7 @@ describe("POST /api/inbound", () => {
       timestamp: new Date().toISOString(),
       from: "user@example.com",
       fromDisplayName: null,
-      to: ["frank@inbound.test"],
+      to: ["frank@saas2.app"],
       cc: [],
       subject: "new",
       inReplyTo: null,
@@ -173,7 +175,7 @@ describe("POST /api/inbound", () => {
       timestamp: new Date().toISOString(),
       from: "user@example.com",
       fromDisplayName: null,
-      to: ["daniel@inbound.test"],
+      to: ["daniel@saas2.app"],
       cc: [],
       subject: "Hello",
       inReplyTo: null,
@@ -221,6 +223,36 @@ describe("POST /api/inbound", () => {
     expect(json.ignored).toBe(true);
     expect(json.reason).toBe("not_addressed_to_frank");
     expect(enqueueInboundEmailJob).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 ignored for provider bounced/failed events and records audit", async () => {
+    mockedGetEmailProvider.mockReturnValue(buildProvider());
+    const request = new Request("http://localhost/api/inbound", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "email.bounced",
+        id: "evt_bounce_1",
+        data: { email_id: "outbound_123" },
+      }),
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as Record<string, unknown>;
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.ignored).toBe(true);
+    expect(json.reason).toBe("provider_delivery_failure_event");
+    expect(enqueueInboundEmailJob).not.toHaveBeenCalled();
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "provider-delivery-event",
+        status: "failed",
+        messageId: "evt_bounce_1",
+      }),
+    );
   });
 
   it("returns duplicate=true when idempotency detects replay", async () => {

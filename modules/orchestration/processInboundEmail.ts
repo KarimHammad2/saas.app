@@ -7,6 +7,8 @@ import { log } from "@/lib/log";
 import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
 import { collectParticipantEmailsFromEvent } from "@/modules/email/participantEmails";
 import { parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
+import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
+import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
@@ -16,7 +18,7 @@ import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
 import { canSenderUpdateProject } from "@/modules/domain/projectAccess";
-import { detectCompletedTasks, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
+import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
 import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
 import { MemoryRepository, mergeUniqueStringsPreserveOrder, type ProjectRecord } from "@/modules/memory/repository";
@@ -45,38 +47,6 @@ function deriveProjectName(subject: string): string {
   return "New Project";
 }
 
-function normalizeMatchText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function findUniqueProjectContextMatch(
-  projects: ProjectRecord[],
-  subject: string,
-  rawBody: string,
-): ProjectRecord | null | "ambiguous" {
-  const haystack = normalizeMatchText(`${subject}\n${rawBody}`);
-  if (!haystack) {
-    return null;
-  }
-
-  const matches = projects.filter((p) => {
-    const projectName = normalizeMatchText(p.name ?? "");
-    return projectName.length >= 4 && haystack.includes(projectName);
-  });
-
-  if (matches.length === 1) {
-    return matches[0] ?? null;
-  }
-  if (matches.length > 1) {
-    return "ambiguous";
-  }
-  return null;
-}
-
 async function resolveInboundProject(
   repo: MemoryRepository,
   userId: string,
@@ -86,14 +56,8 @@ async function resolveInboundProject(
   const code = parseProjectCodeFromSubject(event.subject);
   let project: ProjectRecord | null = null;
 
-  if (code) {
-    project = await repo.findProjectByCodeAndUser(code, userId);
-    if (!project) {
-      project = await repo.findProjectByCode(code);
-    }
-  }
-
-  if (!project && event.inReplyTo) {
+  // Highest priority: explicit reply thread linkage.
+  if (event.inReplyTo) {
     project = await repo.findProjectByThreadMessageIdForUser(event.inReplyTo, userId);
     if (!project) {
       project = await repo.findProjectByThreadMessageId(event.inReplyTo);
@@ -117,34 +81,38 @@ async function resolveInboundProject(
     return { project, created: false };
   }
 
+  // Next priority: explicit subject project code.
+  if (code) {
+    project = await repo.findProjectByCodeAndUser(code, userId);
+    if (!project) {
+      project = await repo.findProjectByCode(code);
+    }
+    if (project) {
+      return { project, created: false };
+    }
+    throw new ClarificationRequiredError("Inbound message references unknown project code.", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      intentReason: "project code did not map to a known project",
+    });
+  }
+
+  // If this was a reply-like message but we couldn't map thread context, avoid accidental project creation.
+  if (hasThreadContext) {
+    throw new ClarificationRequiredError("Inbound message has unresolved thread context.", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      intentReason: "thread reference did not map to a known project",
+    });
+  }
+
   const intent = classifyInboundIntent(event.subject, event.rawBody);
-  if (!hasThreadContext && intent.isGreetingOnly) {
+  if (intent.isGreetingOnly) {
     throw new ClarificationRequiredError("Inbound greeting requires clarification for non-threaded messages.", {
       senderEmail: event.from,
       senderSubject: event.subject,
       intentReason: intent.reason,
     });
-  }
-
-  const collaboratorProjects = await repo.findProjectsWhereEmailInParticipantList(event.from);
-  const ownedProjects = await repo.findProjectsOwnedByUser(userId);
-  const candidatesById = new Map<string, ProjectRecord>();
-  for (const p of collaboratorProjects) {
-    candidatesById.set(p.id, p);
-  }
-  for (const p of ownedProjects) {
-    candidatesById.set(p.id, p);
-  }
-  const contextMatch = findUniqueProjectContextMatch(Array.from(candidatesById.values()), event.subject, event.rawBody);
-  if (contextMatch === "ambiguous") {
-    throw new ClarificationRequiredError("Inbound message matches multiple projects.", {
-      senderEmail: event.from,
-      senderSubject: event.subject,
-      intentReason: "ambiguous context match across multiple projects",
-    });
-  }
-  if (contextMatch) {
-    return { project: contextMatch, created: false };
   }
 
   if (!intent.isNewProjectIntent) {
@@ -164,6 +132,7 @@ function defaultNextSteps(): string[] {
     'Use "UserProfile:" for profile context updates.',
     'Use "UserProfile Suggestion:" for RPM-proposed profile updates.',
     "Use transaction blocks and explicit approvals to record financial events.",
+    'Use "approve suggestion <id>" or "reject suggestion <id>" to resolve pending proposals.',
   ];
 }
 
@@ -198,8 +167,6 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     };
   }
 
-  await repo.mergeProjectParticipants(project.id, collectParticipantEmailsFromEvent(event));
-
   const accessState = await repo.getProjectState(project.id);
   const activeRpmEmail = await repo.getActiveRpm(project.id);
   if (
@@ -215,6 +182,17 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       status: 403,
     });
   }
+
+  const entitlements = resolvePlanEntitlements(accessState.tier);
+  const participantCandidates = collectParticipantEmailsFromEvent(event);
+  const filteredParticipantCandidates = filterParticipantEmailsByEntitlements({
+    candidateEmails: participantCandidates,
+    existingParticipantEmails: accessState.participants,
+    ownerEmail: accessState.ownerEmail,
+    activeRpmEmail,
+    entitlements,
+  });
+  await repo.mergeProjectParticipants(project.id, filteredParticipantCandidates);
 
   await repo.storeRawProjectUpdate(project.id, event.rawBody, event as unknown as Record<string, unknown>);
 
@@ -236,7 +214,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     activeRpmEmail,
   });
 
-  if (detectProjectScopeChange(event.rawBody)) {
+  const scopeChanged = detectProjectScopeChange(event.rawBody);
+  if (scopeChanged) {
     const transition = extractScopeTransition(event.rawBody);
     const fromBrief = transition?.fromScope || compactOverviewForDocument(priorSnapshot.summary).slice(0, 120) || "(previous)";
     const toBrief =
@@ -247,19 +226,24 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const scopeLogLine = `Project direction changed from ${fromBrief} to ${toBrief}`;
     await repo.appendRecentUpdate(project.id, scopeLogLine);
     await repo.updateNotes(project.id, [scopeLogLine], event.timestamp);
-    if (!event.parsed.summary?.trim()) {
-      await repo.updateSummaryDisplay(project.id, `Current direction: ${toBrief}`);
-    }
+    await repo.updateSummaryDisplay(project.id, `Current direction: ${toBrief}`);
   }
 
-  if (event.parsed.summary && getAllowOverviewOverride()) {
+  if (event.parsed.summary && getAllowOverviewOverride() && !scopeChanged) {
     await repo.updateSummaryDisplay(project.id, event.parsed.summary);
   }
   if (event.parsed.currentStatus) {
     await repo.updateCurrentStatus(project.id, event.parsed.currentStatus);
+    await repo.appendRecentUpdate(project.id, `Status updated: ${event.parsed.currentStatus}`);
   }
   await repo.updateGoals(project.id, event.parsed.goals);
+  if (event.parsed.goals.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Goals updated: ${event.parsed.goals.join("; ")}`);
+  }
   await repo.appendActionItems(project.id, event.parsed.actionItems);
+  if (event.parsed.actionItems.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Task(s) added: ${event.parsed.actionItems.join("; ")}`);
+  }
   const stateAfterTasks = await repo.getProjectState(project.id);
   const detectedCompleted = detectCompletedTasks(event.rawBody, stateAfterTasks.actionItems);
   const fromSection = filterCompletedToKnownTasks(event.parsed.completedTasks, stateAfterTasks.actionItems);
@@ -271,6 +255,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const stateAfterCompletion = await repo.getProjectState(project.id);
+  const unmatchedCompletionNotes = extractUnmatchedCompletionNotes(event.rawBody, allCompleted);
   const taskIntentEvents = applyTaskIntents(
     event.rawBody,
     stateAfterCompletion.actionItems,
@@ -288,13 +273,20 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   await repo.updateDecisions(project.id, event.parsed.decisions);
+  if (event.parsed.decisions.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Decision(s) added: ${event.parsed.decisions.join("; ")}`);
+  }
   await repo.updateRisks(project.id, event.parsed.risks);
+  if (event.parsed.risks.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Risk(s) added: ${event.parsed.risks.join("; ")}`);
+  }
   await repo.updateRecommendations(project.id, event.parsed.recommendations);
-  const mergedNotes =
-    unknownNotesFromTaskIntents.length > 0
-      ? [...event.parsed.notes, ...unknownNotesFromTaskIntents]
-      : event.parsed.notes;
+  const mergedNotes = [...event.parsed.notes, ...unmatchedCompletionNotes, ...unknownNotesFromTaskIntents];
   await repo.updateNotes(project.id, mergedNotes, event.timestamp);
+  const meaningfulMergedNotes = mergedNotes.map((n) => n.trim()).filter((n) => n.length > 0 && !isIgnoredNoteInput(n));
+  if (meaningfulMergedNotes.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Notes updated (${meaningfulMergedNotes.length} item${meaningfulMergedNotes.length > 1 ? "s" : ""}).`);
+  }
   await repo.mergeStructuredUserProfileContext(
     user.id,
     inferMemorySignals({
@@ -343,14 +335,16 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   if (event.parsed.transactionEvent) {
-    if (!canApproveTransaction(role)) {
-      throw new NonRetryableInboundError("Transactions require user approval.", {
-        code: "TRANSACTION_APPROVAL_REQUIRED",
-        status: 403,
-      });
-    }
     const normalizedFinancials = applyTierFinancials(event.parsed.transactionEvent, effectiveTier);
-    await repo.storeTransactionEvent(project.id, event.from, normalizedFinancials);
+    if (!canApproveTransaction(role)) {
+      const pending = await repo.storeProtectedTransactionSuggestion(ownerUserId, project.id, event.from, normalizedFinancials);
+      await repo.appendRecentUpdate(
+        project.id,
+        `Protected transaction proposed [${pending.id}] by ${event.from}. Awaiting explicit approval.`,
+      );
+    } else {
+      await repo.storeTransactionEvent(project.id, event.from, normalizedFinancials);
+    }
   }
 
   if (getOverviewRegenerationMode() === "rules") {

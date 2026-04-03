@@ -20,6 +20,39 @@ type ParsedRequestPayload = {
   payloadKeys: string[];
 };
 
+function extractProviderEventType(payload: Record<string, unknown>): string {
+  const direct = typeof payload.type === "string" ? payload.type : "";
+  if (direct) {
+    return direct.trim().toLowerCase();
+  }
+  const nestedData = payload.data;
+  if (nestedData && typeof nestedData === "object" && !Array.isArray(nestedData)) {
+    const nestedType = (nestedData as Record<string, unknown>).type;
+    if (typeof nestedType === "string") {
+      return nestedType.trim().toLowerCase();
+    }
+  }
+  return "";
+}
+
+function extractProviderMessageId(payload: Record<string, unknown>): string | null {
+  const direct = typeof payload.id === "string" ? payload.id.trim() : "";
+  if (direct) {
+    return direct;
+  }
+  const data = payload.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const d = data as Record<string, unknown>;
+    const candidates = [d.email_id, d.message_id, d.id];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) {
+        return c.trim();
+      }
+    }
+  }
+  return null;
+}
+
 function isConfigurationError(error: Error): boolean {
   return (
     error.message.includes("Missing required environment variable:") ||
@@ -105,6 +138,7 @@ export async function POST(request: Request) {
     const parsedRequest = await parseRequestPayload(request);
     contentType = parsedRequest.contentType;
     payloadKeys = parsedRequest.payloadKeys;
+    const providerEventType = extractProviderEventType(parsedRequest.payload);
     const envelope = {
       headers: headersToObject(request.headers),
       payload: parsedRequest.payload,
@@ -119,6 +153,39 @@ export async function POST(request: Request) {
         payloadKeys,
       });
       return toErrorResponse(401, requestId, "INVALID_SIGNATURE", "Invalid inbound signature.", false);
+    }
+
+    if (providerEventType.includes("bounced") || providerEventType.includes("failed")) {
+      const providerMessageId = extractProviderMessageId(parsedRequest.payload);
+      log.warn("provider delivery failure event received", {
+        requestId,
+        provider: provider.name,
+        providerEventType,
+        providerMessageId,
+      });
+      await repo.recordOutboundEmailEvent({
+        kind: "provider-delivery-event",
+        provider: provider.name,
+        status: "failed",
+        recipientCount: 0,
+        messageId: providerMessageId,
+        errorMessage: providerEventType,
+      });
+      return NextResponse.json(
+        {
+          ok: true,
+          ignored: true,
+          reason: "provider_delivery_failure_event",
+          provider: provider.name,
+          requestId,
+        },
+        {
+          status: 200,
+          headers: {
+            "x-request-id": requestId,
+          },
+        },
+      );
     }
 
     const event = await provider.parseInbound(envelope);

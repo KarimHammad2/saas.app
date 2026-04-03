@@ -7,6 +7,17 @@ export function isIgnoredNoteInput(input: string): boolean {
   if (/^[.\-_ ]+$/.test(trimmed)) {
     return true;
   }
+  const compact = trimmed
+    .toLowerCase()
+    .replace(/[^\w\s']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (
+    /^(?:hi|hello|hey)(?:\s+(?:frank|team|there))?$/.test(compact) ||
+    /^(?:thanks|thank you|thx|ok|okay|noted|got it|sounds good|sgtm|cool)(?:\s+(?:frank|team))?$/.test(compact)
+  ) {
+    return true;
+  }
   return false;
 }
 

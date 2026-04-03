@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getEmailProvider } from "@/modules/email/providers";
+import { getEmailProvider, getFallbackEmailProvider } from "@/modules/email/providers";
 import { sendEmail } from "@/modules/email/sendEmail";
 
 const providerSendEmail = vi.fn();
+const fallbackSendEmail = vi.fn();
 
 vi.mock("@/modules/email/providers", () => ({
   getEmailProvider: vi.fn(),
+  getFallbackEmailProvider: vi.fn(),
 }));
 
 vi.mock("@/lib/log", () => ({
@@ -17,6 +19,7 @@ vi.mock("@/lib/log", () => ({
 }));
 
 const mockedGetEmailProvider = vi.mocked(getEmailProvider);
+const mockedGetFallbackEmailProvider = vi.mocked(getFallbackEmailProvider);
 
 describe("sendEmail", () => {
   beforeEach(() => {
@@ -27,6 +30,7 @@ describe("sendEmail", () => {
       parseInbound: vi.fn(),
       sendEmail: providerSendEmail,
     });
+    mockedGetFallbackEmailProvider.mockReturnValue(null);
   });
 
   it("retries once after transient failure", async () => {
@@ -53,5 +57,25 @@ describe("sendEmail", () => {
     ).rejects.toThrow("permanent failure");
 
     expect(providerSendEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to secondary provider after primary retries fail", async () => {
+    providerSendEmail.mockRejectedValue(new Error("primary down"));
+    fallbackSendEmail.mockResolvedValue(undefined);
+    mockedGetFallbackEmailProvider.mockReturnValue({
+      name: "ses",
+      validateSignature: vi.fn(() => true),
+      parseInbound: vi.fn(),
+      sendEmail: fallbackSendEmail,
+    });
+
+    await sendEmail({
+      to: "user@example.com",
+      subject: "Test",
+      text: "Hello",
+    });
+
+    expect(providerSendEmail).toHaveBeenCalledTimes(2);
+    expect(fallbackSendEmail).toHaveBeenCalledTimes(1);
   });
 });

@@ -22,7 +22,7 @@ describe("domain logic", () => {
     expect(tier).toBe("agency");
   });
 
-  it("applies fee split by tier", () => {
+  it("normalizes transaction fields deterministically without split assumptions", () => {
     const event = applyTierFinancials(
       {
         hoursPurchased: 20,
@@ -35,10 +35,10 @@ describe("domain logic", () => {
       "solopreneur",
     );
 
-    expect(event.bufferHours).toBe(2);
-    expect(event.allocatedHours).toBe(18);
-    expect(event.saas2Fee).toBe(1);
-    expect(event.projectRemainder).toBe(1);
+    expect(event.bufferHours).toBe(0);
+    expect(event.allocatedHours).toBe(0);
+    expect(event.saas2Fee).toBe(0);
+    expect(event.projectRemainder).toBe(0);
   });
 
   it("enforces role checks", () => {

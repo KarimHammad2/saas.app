@@ -13,23 +13,27 @@ export class InboundParseError extends Error {
   }
 }
 
-const SECTION_LABELS = [
-  "Overview",
-  "Summary",
-  "Status",
+const MEMORY_SECTION_LABELS = [
   "Goals",
   "Tasks",
-  "Action Items",
-  "Completed Tasks",
   "Completed",
   "Decisions",
   "Risks",
   "Notes",
-  "Recommendations",
+  // No aliases allowed for strict memory sections.
+] as const;
+
+const SPECIAL_SECTION_LABELS = [
   "Transaction",
   "UserProfile",
+  "Context",
   "UserProfile Suggestion",
+  "Team Emails",
+  "Additional Emails",
+  "Agency Emails",
 ] as const;
+
+const SECTION_LABELS = [...MEMORY_SECTION_LABELS, ...SPECIAL_SECTION_LABELS] as const;
 
 function toObject(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -395,14 +399,13 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
 
   const hours = valueByLabel(["Hours Purchased", "Hours"]);
   const rate = valueByLabel(["Hourly Rate", "Rate"]);
-  const totalAmount = hours * rate;
 
   const event: TransactionEvent = {
     hoursPurchased: hours,
     hourlyRate: rate,
-    allocatedHours: valueByLabel(["Allocated to Freelancer"]) || hours * 0.9,
-    bufferHours: valueByLabel(["Buffer"]) || hours * 0.1,
-    saas2Fee: valueByLabel(["SaaS2 Fee", "SaaS² Fee"]) || totalAmount * 0.1,
+    allocatedHours: valueByLabel(["Allocated to Freelancer"]),
+    bufferHours: valueByLabel(["Buffer"]),
+    saas2Fee: valueByLabel(["SaaS2 Fee", "SaaS² Fee"]),
     projectRemainder: valueByLabel(["Project Remainder"]) || 0,
   };
 
@@ -507,19 +510,12 @@ function extractBodyContent(source: Record<string, unknown>): string {
 
 export function parseNormalizedContent(content: string) {
   const normalizedContent = normalizeSectionHeadings(content);
-  const summary = cleanOverviewText(extractSection(normalizedContent, "Summary") || extractSection(normalizedContent, "Overview"));
-  const currentStatus = extractSection(normalizedContent, "Status").trim();
   const goals = dedupeListValues(toBulletList(extractSection(normalizedContent, "Goals")));
-  const actionItems = dedupeListValues(
-    toBulletList(extractSection(normalizedContent, "Action Items") || extractSection(normalizedContent, "Tasks")),
-  );
-  const completedTasks = dedupeListValues(
-    toBulletList(extractSection(normalizedContent, "Completed Tasks") || extractSection(normalizedContent, "Completed")),
-  );
+  const actionItems = dedupeListValues(toBulletList(extractSection(normalizedContent, "Tasks")));
+  const completedTasks = dedupeListValues(toBulletList(extractSection(normalizedContent, "Completed")));
   const decisions = dedupeListValues(toBulletList(extractSection(normalizedContent, "Decisions")));
   const risks = dedupeListValues(toBulletList(extractSection(normalizedContent, "Risks")));
   const notesSection = filterIgnoredNoteLines(dedupeListValues(toBulletList(extractSection(normalizedContent, "Notes"))));
-  const recommendations = dedupeListValues(toBulletList(extractSection(normalizedContent, "Recommendations")));
   const userProfileContext = extractSection(normalizedContent, "UserProfile") || extractSection(normalizedContent, "Context");
   const rpmSuggestionContent = extractSection(normalizedContent, "UserProfile Suggestion");
   const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
@@ -527,22 +523,18 @@ export function parseNormalizedContent(content: string) {
   const additionalEmails = parseAdditionalEmails(normalizedContent);
 
   const hasMeaning =
-    Boolean(summary && summary.trim()) ||
-    Boolean(currentStatus) ||
     goals.length > 0 ||
     actionItems.length > 0 ||
     completedTasks.length > 0 ||
     decisions.length > 0 ||
     risks.length > 0 ||
-    recommendations.length > 0 ||
     notesSection.length > 0 ||
     Boolean(userProfileContext) ||
     Boolean(rpmSuggestionContent) ||
     Boolean(transactionEvent) ||
     approvals.length > 0;
 
-  const fallbackSummary = !hasMeaning ? extractSummaryFromText(content) : null;
-  const normalizedSummary = summary?.trim() || fallbackSummary;
+  const normalizedSummary = !hasMeaning ? extractSummaryFromText(content) : null;
   let notes: string[];
   if (hasMeaning) {
     notes = notesSection;
@@ -559,13 +551,13 @@ export function parseNormalizedContent(content: string) {
 
   return {
     summary: normalizedSummary || null,
-    currentStatus: currentStatus || null,
+    currentStatus: null,
     goals,
     actionItems,
     completedTasks,
     decisions,
     risks,
-    recommendations,
+    recommendations: [],
     notes,
     userProfileContext: userProfileContext || null,
     rpmSuggestion: rpmSuggestionContent

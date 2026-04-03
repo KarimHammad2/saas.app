@@ -1,4 +1,4 @@
-import { getEmailProvider } from "@/modules/email/providers";
+import { getEmailProvider, getFallbackEmailProvider } from "@/modules/email/providers";
 import { log } from "@/lib/log";
 
 interface SendEmailInput {
@@ -26,7 +26,8 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     throw new Error("Email body is required (text or html).");
   }
 
-  const provider = getEmailProvider();
+  const primaryProvider = getEmailProvider();
+  const fallbackProvider = getFallbackEmailProvider(primaryProvider.name);
   const recipients = to
     .split(",")
     .map((item) => item.trim())
@@ -53,13 +54,13 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
   const maxAttempts = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await provider.sendEmail(message);
+      await primaryProvider.sendEmail(message);
       return;
     } catch (error) {
       const causeMessage = error instanceof Error ? error.message : String(error);
       const finalAttempt = attempt >= maxAttempts;
       log.warn("email delivery attempt failed", {
-        provider: provider.name,
+        provider: primaryProvider.name,
         attempt,
         maxAttempts,
         recipientCount: recipients.length,
@@ -68,11 +69,30 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
 
       if (finalAttempt) {
         log.error("email delivery failed after retries", {
-          provider: provider.name,
+          provider: primaryProvider.name,
           attempts: attempt,
           recipientCount: recipients.length,
           causeMessage,
         });
+        if (fallbackProvider) {
+          try {
+            await fallbackProvider.sendEmail(message);
+            log.info("email delivery succeeded via fallback provider", {
+              primaryProvider: primaryProvider.name,
+              fallbackProvider: fallbackProvider.name,
+              recipientCount: recipients.length,
+            });
+            return;
+          } catch (fallbackError) {
+            const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            log.error("email delivery failed on fallback provider", {
+              primaryProvider: primaryProvider.name,
+              fallbackProvider: fallbackProvider.name,
+              recipientCount: recipients.length,
+              fallbackMessage,
+            });
+          }
+        }
         throw error instanceof Error ? error : new Error(causeMessage);
       }
 

@@ -24,10 +24,20 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
   }
 
   if (!result.context.duplicate) {
+    const repo = new MemoryRepository();
     try {
       const { outboundMessageId } = await sendProjectEmail(result.recipients, result.payload);
-      const repo = new MemoryRepository();
       await repo.storeOutboundThreadMapping(outboundMessageId, result.context.projectId);
+      await repo.recordOutboundEmailEvent({
+        projectId: result.context.projectId,
+        userId: result.context.userId,
+        inboundEventId: result.context.eventId,
+        kind: "project-update",
+        provider: event.provider,
+        status: "sent",
+        recipientCount: result.recipients.length,
+        messageId: outboundMessageId,
+      });
     } catch (error) {
       const causeMessage = error instanceof Error ? error.message : String(error);
       log.error("outbound project email failed", {
@@ -37,6 +47,25 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
         recipientCount: result.recipients.length,
         causeMessage,
       });
+      try {
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: "project-update",
+          provider: event.provider,
+          status: "failed",
+          recipientCount: result.recipients.length,
+          errorMessage: causeMessage,
+        });
+      } catch (auditError) {
+        const auditMessage = auditError instanceof Error ? auditError.message : String(auditError);
+        log.error("failed to record outbound email audit event", {
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          auditMessage,
+        });
+      }
       throw new OutboundEmailDeliveryError("Failed to deliver outbound project email.", {
         recipients: result.recipients,
         causeMessage,

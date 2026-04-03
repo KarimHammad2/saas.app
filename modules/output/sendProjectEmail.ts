@@ -38,42 +38,40 @@ function bodyToHtmlParagraphs(body: string): string {
     .join("\n");
 }
 
-function truncateTitle(value: string, max = 64): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (!normalized || max <= 3) {
-    return "";
-  }
-  if (normalized.length <= max) {
-    return normalized;
-  }
-  return `${normalized.slice(0, max - 3).trimEnd()}...`;
-}
-
-function summarizeToWordLimit(value: string, maxWords = 5): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  const words = normalized.split(" ");
-  const limited = words.slice(0, Math.max(1, maxWords)).join(" ");
-  return truncateTitle(limited, 48);
-}
-
-function deriveShortTitle(payload: ProjectEmailPayload): string {
-  const candidate = payload.context.projectName?.trim() ?? "";
-  return summarizeToWordLimit(candidate, 5);
-}
-
 function buildEmailSubject(payload: ProjectEmailPayload, baseSubject: string): string {
   const projectCode = payload.context.projectCode?.trim();
-  if (projectCode) {
-    return `${baseSubject} ${formatProjectCodeBracket(projectCode)}`.trim();
+  if (!projectCode) {
+    throw new Error("Project outbound email requires context.projectCode.");
   }
-  const shortTitle = deriveShortTitle(payload);
-  if (!shortTitle) {
-    return baseSubject;
+  return `${baseSubject} ${formatProjectCodeBracket(projectCode)}`.trim();
+}
+
+export function validateProjectDocumentForAttachment(document: string): void {
+  const trimmed = document.trim();
+  if (!trimmed) {
+    throw new Error("Generated project document is empty.");
   }
-  return `${shortTitle} — Update`;
+  if (Buffer.byteLength(trimmed, "utf-8") > 512_000) {
+    throw new Error("Generated project document exceeds safe attachment size limit.");
+  }
+  const requiredHeadings = [
+    "## Instructions to LLM",
+    "## Project Overview",
+    "## Goals",
+    "## Tasks",
+    "### In Progress",
+    "### Completed",
+    "## Risks",
+    "## Decisions",
+    "## Notes",
+    "## Recent Updates",
+    "## Pending Suggestions",
+  ];
+  for (const heading of requiredHeadings) {
+    if (!trimmed.includes(heading)) {
+      throw new Error(`Generated project document is missing required section: ${heading}`);
+    }
+  }
 }
 
 export async function sendProjectEmail(recipients: string[], payload: ProjectEmailPayload): Promise<{ outboundMessageId: string }> {
@@ -84,6 +82,7 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
 
   const runtime = await getRuntimeConfig();
   const document = generateProjectDocument(payload);
+  validateProjectDocumentForAttachment(document);
   const { subject: baseSubject, body: emailBody } = formatProjectEmail(payload);
   const kind = resolveEmailKind(payload);
   const finalSubject = buildEmailSubject(payload, baseSubject);

@@ -38,8 +38,7 @@ function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEma
 
 describe("shouldProcessInboundEmail", () => {
   beforeEach(() => {
-    vi.stubEnv("INBOUND_TRIGGER_EMAIL", "frank@policy.test");
-    vi.stubEnv("MASTER_USER_EMAIL", "daniel@policy.test");
+    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saas2.app");
     vi.stubEnv("INTERNAL_INBOUND_SENDERS", "");
   });
 
@@ -50,7 +49,7 @@ describe("shouldProcessInboundEmail", () => {
   it("allows when Frank is in To with display name form", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["Frank <frank@policy.test>"],
+        to: ["Frank <frank@saas2.app>"],
         from: "client@example.com",
       }),
     );
@@ -61,7 +60,7 @@ describe("shouldProcessInboundEmail", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
         to: ["other@example.com"],
-        cc: ["frank@policy.test"],
+        cc: ["frank@saas2.app"],
         from: "client@example.com",
       }),
     );
@@ -71,7 +70,7 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects when To is contact@ without Frank", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["contact@policy.test"],
+        to: ["contact@saas2.app"],
         from: "client@example.com",
       }),
     );
@@ -81,7 +80,7 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects when To is daniel@ without Frank", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["daniel@policy.test"],
+        to: ["daniel@saas2.app"],
         from: "client@example.com",
       }),
     );
@@ -91,8 +90,8 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects internal sender frank", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["frank@policy.test"],
-        from: "frank@policy.test",
+        to: ["frank@saas2.app"],
+        from: "frank@saas2.app",
       }),
     );
     expect(d).toEqual({ ok: false, reason: "internal_sender" });
@@ -101,8 +100,8 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects internal sender daniel", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["frank@policy.test"],
-        from: "daniel@policy.test",
+        to: ["frank@saas2.app"],
+        from: "daniel@saas2.app",
       }),
     );
     expect(d).toEqual({ ok: false, reason: "internal_sender" });
@@ -111,8 +110,8 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects internal sender message@ alias", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["frank@policy.test"],
-        from: "message@policy.test",
+        to: ["frank@saas2.app"],
+        from: "message@saas2.app",
       }),
     );
     expect(d).toEqual({ ok: false, reason: "internal_sender" });
@@ -121,7 +120,7 @@ describe("shouldProcessInboundEmail", () => {
   it("allows external user To Frank", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["frank@policy.test"],
+        to: ["frank@saas2.app"],
         from: "user@external.com",
       }),
     );
@@ -131,7 +130,7 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects invalid sender", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["frank@policy.test"],
+        to: ["frank@saas2.app"],
         from: "not-an-email",
       }),
     );

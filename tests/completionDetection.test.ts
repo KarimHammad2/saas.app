@@ -27,4 +27,8 @@ describe("detectCompletedTasks", () => {
   it("returns empty when no tasks", () => {
     expect(detectCompletedTasks("Done!", [])).toEqual([]);
   });
+
+  it("does not mark task completed when sentence is negated", () => {
+    expect(detectCompletedTasks("Authentication is not done yet.", ["Build authentication flow"])).toEqual([]);
+  });
 });

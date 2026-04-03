@@ -7,6 +7,7 @@ const sendProjectEmail = vi.fn();
 vi.mock("@/modules/memory/repository", () => ({
   MemoryRepository: class {
     storeOutboundThreadMapping = vi.fn();
+    recordOutboundEmailEvent = vi.fn();
   },
 }));
 
