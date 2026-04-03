@@ -15,6 +15,8 @@ const baseProject = (): ProjectContext => ({
   risks: [],
   recommendations: [],
   notes: [],
+  participants: [],
+  recentUpdatesLog: [],
   remainderBalance: 0,
   reminderBalance: 3,
   usageCount: 0,

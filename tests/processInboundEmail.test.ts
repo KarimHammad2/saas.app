@@ -28,7 +28,14 @@ const repoState = {
   registerInboundEvent: vi.fn(),
   getOrCreateUserByEmail: vi.fn(),
   findProjectByCodeAndUser: vi.fn(),
+  findProjectByCode: vi.fn(),
   findProjectByThreadMessageIdForUser: vi.fn(),
+  findProjectByThreadMessageId: vi.fn(),
+  findProjectsWhereEmailInParticipantList: vi.fn(),
+  findProjectsOwnedByUser: vi.fn(),
+  mergeProjectParticipants: vi.fn(),
+  getUserEmailById: vi.fn(),
+  appendRecentUpdate: vi.fn(),
   createProjectForUser: vi.fn(),
   storeRawProjectUpdate: vi.fn(),
   getActiveRpm: vi.fn(),
@@ -65,8 +72,9 @@ const repoState = {
 
 // Intent classification is tested separately in classifyInboundIntent.test.ts.
 // Always allow project creation here so pipeline behaviour tests remain focused.
+const classifyInboundIntentMock = vi.fn(() => ({ isNewProjectIntent: true, isGreetingOnly: false, confidence: 0.9, reason: "mock" }));
 vi.mock("@/modules/orchestration/classifyInboundIntent", () => ({
-  classifyInboundIntent: () => ({ isNewProjectIntent: true, confidence: 0.9, reason: "mock" }),
+  classifyInboundIntent: classifyInboundIntentMock,
 }));
 
 vi.mock("@/modules/memory/repository", async () => {
@@ -77,7 +85,14 @@ vi.mock("@/modules/memory/repository", async () => {
       registerInboundEvent = repoState.registerInboundEvent;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
       findProjectByCodeAndUser = repoState.findProjectByCodeAndUser;
+      findProjectByCode = repoState.findProjectByCode;
       findProjectByThreadMessageIdForUser = repoState.findProjectByThreadMessageIdForUser;
+      findProjectByThreadMessageId = repoState.findProjectByThreadMessageId;
+      findProjectsWhereEmailInParticipantList = repoState.findProjectsWhereEmailInParticipantList;
+      findProjectsOwnedByUser = repoState.findProjectsOwnedByUser;
+      mergeProjectParticipants = repoState.mergeProjectParticipants;
+      getUserEmailById = repoState.getUserEmailById;
+      appendRecentUpdate = repoState.appendRecentUpdate;
       createProjectForUser = repoState.createProjectForUser;
       storeRawProjectUpdate = repoState.storeRawProjectUpdate;
       getActiveRpm = repoState.getActiveRpm;
@@ -117,6 +132,12 @@ vi.mock("@/modules/memory/repository", async () => {
 describe("processInboundEmail", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    classifyInboundIntentMock.mockReturnValue({
+      isNewProjectIntent: true,
+      isGreetingOnly: false,
+      confidence: 0.9,
+      reason: "mock",
+    });
     repoState.registerInboundEvent.mockResolvedValue(true);
     repoState.getOrCreateUserByEmail.mockResolvedValue({
       user: {
@@ -129,7 +150,14 @@ describe("processInboundEmail", () => {
       created: false,
     });
     repoState.findProjectByCodeAndUser.mockResolvedValue(null);
+    repoState.findProjectByCode.mockResolvedValue(null);
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageId.mockResolvedValue(null);
+    repoState.findProjectsWhereEmailInParticipantList.mockResolvedValue([]);
+    repoState.findProjectsOwnedByUser.mockResolvedValue([]);
+    repoState.mergeProjectParticipants.mockResolvedValue(undefined);
+    repoState.getUserEmailById.mockResolvedValue("user@example.com");
+    repoState.appendRecentUpdate.mockResolvedValue(undefined);
     repoState.createProjectForUser.mockResolvedValue({
       project: { ...defaultMockProject },
       created: true,
@@ -140,6 +168,7 @@ describe("processInboundEmail", () => {
       projectId: "p1",
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
       summary: "summary",
       initialSummary: "summary",
       currentStatus: "",
@@ -150,6 +179,8 @@ describe("processInboundEmail", () => {
       risks: [],
       recommendations: [],
       notes: [],
+      participants: [],
+      recentUpdatesLog: [],
       remainderBalance: 0,
       reminderBalance: 3,
       usageCount: 0,
@@ -397,6 +428,7 @@ describe("processInboundEmail", () => {
       projectId: "p1",
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
       summary: "",
       initialSummary: "",
       currentStatus: "",
@@ -407,6 +439,8 @@ describe("processInboundEmail", () => {
       risks: [],
       recommendations: [],
       notes: ["RAW NOTES"],
+      participants: [],
+      recentUpdatesLog: [],
       remainderBalance: 0,
       reminderBalance: 3,
       usageCount: 0,
@@ -506,5 +540,154 @@ describe("processInboundEmail", () => {
     const result = await processInboundEmail(event);
     expect(result.payload.isWelcome).toBe(false);
     expect(result.payload.emailKind).toBe("update");
+  });
+
+  it("requires clarification for greeting-only new non-thread inbound", async () => {
+    classifyInboundIntentMock.mockReturnValue({
+      isNewProjectIntent: false,
+      isGreetingOnly: true,
+      confidence: 0.1,
+      reason: "matches known vague/greeting pattern",
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_greeting",
+      provider: "resend",
+      providerEventId: "m_greeting",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Hello",
+      inReplyTo: null,
+      references: [],
+      rawBody: "hello",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
+  });
+
+  it("writes deterministic scope-change overview and notes without explicit summary", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_scope",
+      provider: "resend",
+      providerEventId: "m_scope",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Direction change",
+      inReplyTo: null,
+      references: [],
+      rawBody: "We are no longer doing mobile app for habits, now it's a web dashboard",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("web dashboard"));
+    expect(
+      repoState.updateNotes.mock.calls.some(
+        (call) =>
+          call[0] === "p1" &&
+          call[2] === event.timestamp &&
+          Array.isArray(call[1]) &&
+          call[1].some(
+            (line: unknown) =>
+              typeof line === "string" &&
+              line.includes("Project direction changed from mobile app for habits") &&
+              line.includes("web dashboard"),
+          ),
+      ),
+    ).toBe(true);
+    expect(
+      repoState.appendRecentUpdate.mock.calls.some(
+        (call) =>
+          call[0] === "p1" &&
+          typeof call[1] === "string" &&
+          call[1].includes("Project direction changed from mobile app for habits") &&
+          call[1].includes("web dashboard"),
+      ),
+    ).toBe(true);
+  });
+
+  it("requires clarification when non-thread context matches multiple projects", async () => {
+    classifyInboundIntentMock.mockReturnValue({
+      isNewProjectIntent: false,
+      isGreetingOnly: false,
+      confidence: 0.2,
+      reason: "insufficient project-intent signals",
+    });
+    repoState.findProjectsOwnedByUser.mockResolvedValue([
+      { ...defaultMockProject, id: "p1", name: "Alpha Dashboard" },
+      { ...defaultMockProject, id: "p2", name: "Beta Dashboard" },
+    ]);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_ambiguous_ctx",
+      provider: "resend",
+      providerEventId: "m_ambiguous_ctx",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Dashboard update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Need to update Alpha Dashboard and Beta Dashboard soon.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
   });
 });

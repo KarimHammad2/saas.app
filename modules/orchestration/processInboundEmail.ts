@@ -5,6 +5,7 @@ import {
 } from "@/lib/env";
 import { log } from "@/lib/log";
 import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
+import { collectParticipantEmailsFromEvent } from "@/modules/email/participantEmails";
 import { parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
@@ -14,12 +15,15 @@ import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
+import { canSenderUpdateProject } from "@/modules/domain/projectAccess";
 import { detectCompletedTasks, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
+import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
 import { MemoryRepository, mergeUniqueStringsPreserveOrder, type ProjectRecord } from "@/modules/memory/repository";
 import { ClarificationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
 import type { ProjectEmailPayload } from "@/modules/output/types";
+import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 export interface InboundProcessingResult {
   recipients: string[];
@@ -41,25 +45,68 @@ function deriveProjectName(subject: string): string {
   return "New Project";
 }
 
+function normalizeMatchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findUniqueProjectContextMatch(
+  projects: ProjectRecord[],
+  subject: string,
+  rawBody: string,
+): ProjectRecord | null | "ambiguous" {
+  const haystack = normalizeMatchText(`${subject}\n${rawBody}`);
+  if (!haystack) {
+    return null;
+  }
+
+  const matches = projects.filter((p) => {
+    const projectName = normalizeMatchText(p.name ?? "");
+    return projectName.length >= 4 && haystack.includes(projectName);
+  });
+
+  if (matches.length === 1) {
+    return matches[0] ?? null;
+  }
+  if (matches.length > 1) {
+    return "ambiguous";
+  }
+  return null;
+}
+
 async function resolveInboundProject(
   repo: MemoryRepository,
   userId: string,
   event: NormalizedEmailEvent,
 ): Promise<{ project: ProjectRecord; created: boolean }> {
+  const hasThreadContext = Boolean(event.inReplyTo) || event.references.length > 0;
   const code = parseProjectCodeFromSubject(event.subject);
   let project: ProjectRecord | null = null;
 
   if (code) {
     project = await repo.findProjectByCodeAndUser(code, userId);
+    if (!project) {
+      project = await repo.findProjectByCode(code);
+    }
   }
 
   if (!project && event.inReplyTo) {
     project = await repo.findProjectByThreadMessageIdForUser(event.inReplyTo, userId);
+    if (!project) {
+      project = await repo.findProjectByThreadMessageId(event.inReplyTo);
+    }
   }
 
   if (!project) {
     for (const ref of event.references) {
       project = await repo.findProjectByThreadMessageIdForUser(ref, userId);
+      if (project) {
+        break;
+      }
+      project = await repo.findProjectByThreadMessageId(ref);
       if (project) {
         break;
       }
@@ -70,9 +117,36 @@ async function resolveInboundProject(
     return { project, created: false };
   }
 
-  // No existing project found — this would create a new one.
-  // Classify intent first: only create a project when the message clearly describes one.
   const intent = classifyInboundIntent(event.subject, event.rawBody);
+  if (!hasThreadContext && intent.isGreetingOnly) {
+    throw new ClarificationRequiredError("Inbound greeting requires clarification for non-threaded messages.", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      intentReason: intent.reason,
+    });
+  }
+
+  const collaboratorProjects = await repo.findProjectsWhereEmailInParticipantList(event.from);
+  const ownedProjects = await repo.findProjectsOwnedByUser(userId);
+  const candidatesById = new Map<string, ProjectRecord>();
+  for (const p of collaboratorProjects) {
+    candidatesById.set(p.id, p);
+  }
+  for (const p of ownedProjects) {
+    candidatesById.set(p.id, p);
+  }
+  const contextMatch = findUniqueProjectContextMatch(Array.from(candidatesById.values()), event.subject, event.rawBody);
+  if (contextMatch === "ambiguous") {
+    throw new ClarificationRequiredError("Inbound message matches multiple projects.", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      intentReason: "ambiguous context match across multiple projects",
+    });
+  }
+  if (contextMatch) {
+    return { project: contextMatch, created: false };
+  }
+
   if (!intent.isNewProjectIntent) {
     throw new ClarificationRequiredError("Inbound message lacks sufficient project intent.", {
       senderEmail: event.from,
@@ -86,7 +160,7 @@ async function resolveInboundProject(
 
 function defaultNextSteps(): string[] {
   return [
-    "Reply with updates using labeled sections for best parsing quality.",
+    "Reply with labeled sections (Goals:, Tasks:, Notes:) for reliable parsing.",
     'Use "UserProfile:" for profile context updates.',
     'Use "UserProfile Suggestion:" for RPM-proposed profile updates.',
     "Use transaction blocks and explicit approvals to record financial events.",
@@ -98,14 +172,16 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const inserted = await repo.registerInboundEvent(event.provider, event.providerEventId, event as unknown as Record<string, unknown>);
 
   const { user, created: userCreated } = await repo.getOrCreateUserByEmail(event.from);
-  const { project, created: projectCreated } = await resolveInboundProject(repo, user.id, event);
+  const { project } = await resolveInboundProject(repo, user.id, event);
+
+  const ownerUserId = project.user_id;
 
   if (!inserted) {
     log.info("duplicate inbound event ignored", { provider: event.provider, providerEventId: event.providerEventId });
     const projectState = await repo.getProjectState(project.id);
-    const pendingSuggestions = await repo.getPendingSuggestions(user.id, project.id);
+    const pendingSuggestions = await repo.getPendingSuggestions(ownerUserId, project.id);
     return {
-      recipients: [user.email],
+      recipients: buildRecipientList(projectState, await repo.getActiveRpm(project.id)),
       payload: {
         context: projectState,
         pendingSuggestions,
@@ -122,23 +198,59 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     };
   }
 
+  await repo.mergeProjectParticipants(project.id, collectParticipantEmailsFromEvent(event));
+
+  const accessState = await repo.getProjectState(project.id);
+  const activeRpmEmail = await repo.getActiveRpm(project.id);
+  if (
+    !canSenderUpdateProject({
+      senderEmail: event.from,
+      ownerEmail: accessState.ownerEmail,
+      participantEmails: accessState.participants,
+      activeRpmEmail,
+    })
+  ) {
+    throw new NonRetryableInboundError("Sender is not allowed to update this project.", {
+      code: "PROJECT_ACCESS_DENIED",
+      status: 403,
+    });
+  }
+
   await repo.storeRawProjectUpdate(project.id, event.rawBody, event as unknown as Record<string, unknown>);
 
   if (userCreated && event.fromDisplayName) {
     await repo.updateUserDisplayNameIfEmpty(user.id, event.fromDisplayName);
   }
 
+  const priorSnapshot = await repo.getProjectState(project.id);
+
   const shouldRunKickoff = !project.kickoff_completed_at;
   if (shouldRunKickoff) {
     await runKickoffFlow(repo, event, user.id, project.id);
   }
 
-  const activeRpmEmail = await repo.getActiveRpm(project.id);
+  const ownerEmailForRole = (await repo.getUserEmailById(ownerUserId)) ?? user.email;
   const role = resolveActorRole({
     senderEmail: event.from,
-    primaryUserEmail: user.email,
+    primaryUserEmail: ownerEmailForRole,
     activeRpmEmail,
   });
+
+  if (detectProjectScopeChange(event.rawBody)) {
+    const transition = extractScopeTransition(event.rawBody);
+    const fromBrief = transition?.fromScope || compactOverviewForDocument(priorSnapshot.summary).slice(0, 120) || "(previous)";
+    const toBrief =
+      transition?.toScope ||
+      event.parsed.summary?.trim() ||
+      compactOverviewForDocument(event.rawBody).slice(0, 200) ||
+      "(new scope)";
+    const scopeLogLine = `Project direction changed from ${fromBrief} to ${toBrief}`;
+    await repo.appendRecentUpdate(project.id, scopeLogLine);
+    await repo.updateNotes(project.id, [scopeLogLine], event.timestamp);
+    if (!event.parsed.summary?.trim()) {
+      await repo.updateSummaryDisplay(project.id, `Current direction: ${toBrief}`);
+    }
+  }
 
   if (event.parsed.summary && getAllowOverviewOverride()) {
     await repo.updateSummaryDisplay(project.id, event.parsed.summary);
@@ -154,7 +266,16 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const allCompleted = mergeUniqueStringsPreserveOrder(fromSection, detectedCompleted);
   await repo.markTasksCompleted(project.id, allCompleted);
 
-  const taskIntentEvents = applyTaskIntents(event.rawBody, stateAfterTasks.actionItems);
+  if (allCompleted.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Task(s) completed: ${allCompleted.join("; ")}`);
+  }
+
+  const stateAfterCompletion = await repo.getProjectState(project.id);
+  const taskIntentEvents = applyTaskIntents(
+    event.rawBody,
+    stateAfterCompletion.actionItems,
+    stateAfterCompletion.completedTasks,
+  );
   const unknownNotesFromTaskIntents: string[] = [];
   for (const ev of taskIntentEvents) {
     if (ev.intent === "UPDATE_TASK" && ev.matchedTask && ev.updatedText) {
@@ -189,15 +310,15 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   if (event.parsed.rpmSuggestion && canProposeUserProfile(role)) {
-    await repo.storeRPMSuggestion(user.id, project.id, event.from, event.parsed.rpmSuggestion.content);
+    await repo.storeRPMSuggestion(ownerUserId, project.id, event.from, event.parsed.rpmSuggestion.content);
   }
 
   for (const approval of event.parsed.approvals) {
     if (canModifyUserProfile(role)) {
       if (approval.decision === "approve") {
-        await repo.approveSuggestion(user.id, approval.suggestionId, event.from);
+        await repo.approveSuggestion(ownerUserId, approval.suggestionId, event.from);
       } else {
-        await repo.rejectSuggestion(user.id, approval.suggestionId, event.from);
+        await repo.rejectSuggestion(ownerUserId, approval.suggestionId, event.from);
       }
     }
   }
@@ -243,19 +364,19 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const projectStateForRpm = await repo.getProjectState(project.id);
-  const userProfileForRpm = await repo.getUserProfile(user.id);
+  const userProfileForRpm = await repo.getUserProfile(ownerUserId);
   await repo.deletePendingSystemSuggestionsForProject(project.id);
   for (const line of generateRPMSuggestions(projectStateForRpm, userProfileForRpm)) {
-    await repo.storeRPMSuggestion(user.id, project.id, getSystemRpmSenderEmail(), line, "system");
+    await repo.storeRPMSuggestion(ownerUserId, project.id, getSystemRpmSenderEmail(), line, "system");
   }
 
   await repo.snapshotProjectContext(project.id);
   await repo.incrementProjectUsageCount(project.id);
 
   const projectState = await repo.getProjectState(project.id);
-  const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(user.id, project.id);
+  const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(ownerUserId, project.id);
   const userRpm = await repo.getActiveRpm(project.id);
-  const recipients = [user.email, userRpm].filter((entry): entry is string => Boolean(entry));
+  const recipients = buildRecipientList(projectState, userRpm);
 
   const isWelcome = shouldRunKickoff;
   const nextSteps = isWelcome ? [...getKickoffFollowUpQuestions(), ...defaultNextSteps()] : defaultNextSteps();
@@ -276,4 +397,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       duplicate: false,
     },
   };
+}
+
+function buildRecipientList(projectState: { ownerEmail?: string; participants: string[] }, rpmEmail: string | null): string[] {
+  const raw = [projectState.ownerEmail, ...projectState.participants, rpmEmail].filter(
+    (entry): entry is string => typeof entry === "string" && entry.includes("@"),
+  );
+  return Array.from(new Set(raw.map((e) => e.trim().toLowerCase())));
 }

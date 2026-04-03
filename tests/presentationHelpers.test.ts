@@ -15,6 +15,8 @@ const emptyContext = (): ProjectContext => ({
   risks: [],
   recommendations: [],
   notes: [],
+  participants: [],
+  recentUpdatesLog: [],
   remainderBalance: 0,
   reminderBalance: 0,
   usageCount: 0,

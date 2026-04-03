@@ -11,6 +11,7 @@
 
 export interface IntentClassification {
   isNewProjectIntent: boolean;
+  isGreetingOnly: boolean;
   /** 0–1 confidence score. */
   confidence: number;
   reason: string;
@@ -64,13 +65,23 @@ export function classifyInboundIntent(subject: string, rawBody: string): IntentC
 
   // Extremely short — cannot be a project description.
   if (wordCount < 4) {
-    return { isNewProjectIntent: false, confidence: 0.05, reason: "message too short (fewer than 4 words)" };
+    return {
+      isNewProjectIntent: false,
+      isGreetingOnly: true,
+      confidence: 0.05,
+      reason: "message too short (fewer than 4 words)",
+    };
   }
 
   // Match known vague / greeting-only bodies.
   for (const pattern of VAGUE_EXACT_PATTERNS) {
     if (pattern.test(body)) {
-      return { isNewProjectIntent: false, confidence: 0.1, reason: "matches known vague/greeting pattern" };
+      return {
+        isNewProjectIntent: false,
+        isGreetingOnly: true,
+        confidence: 0.1,
+        reason: "matches known vague/greeting pattern",
+      };
     }
   }
 
@@ -78,6 +89,7 @@ export function classifyInboundIntent(subject: string, rawBody: string): IntentC
     if (pattern.test(body)) {
       return {
         isNewProjectIntent: true,
+        isGreetingOnly: false,
         confidence: 0.9,
         reason: "strong-override: explicit build/create intent",
       };
@@ -106,6 +118,7 @@ export function classifyInboundIntent(subject: string, rawBody: string): IntentC
 
   return {
     isNewProjectIntent,
+    isGreetingOnly: false,
     confidence,
     reason: isNewProjectIntent ? "sufficient project-intent signals detected" : "insufficient project-intent signals",
   };

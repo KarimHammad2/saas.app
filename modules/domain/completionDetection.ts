@@ -1,5 +1,9 @@
+import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
+
 const COMPLETION_KEYWORD =
   /\b(?:done|completed|finished|shipped|launched|deployed)\b/i;
+
+const IS_DONE_PHRASE = /\b(?:is|are)\s+(?:done|completed|finished)\b/i;
 
 /** Common English words to ignore when matching task text to sentences. */
 const STOP_WORDS = new Set([
@@ -25,10 +29,6 @@ const STOP_WORDS = new Set([
   "get",
 ]);
 
-function normalizeListItemKey(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
 function significantWords(text: string): string[] {
   return text
     .toLowerCase()
@@ -41,8 +41,8 @@ function significantWords(text: string): string[] {
  * Keep only completion lines that correspond to current action items (case-insensitive).
  */
 export function filterCompletedToKnownTasks(items: string[], actionItems: string[]): string[] {
-  const keys = new Set(actionItems.map(normalizeListItemKey));
-  return items.filter((item) => keys.has(normalizeListItemKey(item)));
+  const keys = new Set(actionItems.map(normalizeTaskMatchKey));
+  return items.filter((item) => keys.has(normalizeTaskMatchKey(item)));
 }
 
 /**
@@ -68,11 +68,15 @@ export function detectCompletedTasks(rawBody: string, existingTasks: string[]): 
     }
 
     for (const sentence of sentences) {
-      if (!COMPLETION_KEYWORD.test(sentence)) {
+      const completionSignal = COMPLETION_KEYWORD.test(sentence) || IS_DONE_PHRASE.test(sentence);
+      if (!completionSignal) {
         continue;
       }
       const lower = sentence.toLowerCase();
-      const hit = words.some((w) => lower.includes(w));
+      const taskKey = normalizeTaskMatchKey(task);
+      const hit =
+        words.some((w) => lower.includes(w)) ||
+        (taskKey.length >= 4 && lower.includes(taskKey.slice(0, Math.min(taskKey.length, 40))));
       if (hit) {
         completed.push(task);
         break;

@@ -70,6 +70,10 @@ export interface ProjectContext {
   risks: string[];
   recommendations: string[];
   notes: string[];
+  /** Emails on this project thread (from/to/cc), excluding the system inbox address. */
+  participants: string[];
+  /** Dated lines for ## Recent Updates in the LLM project file. */
+  recentUpdatesLog: string[];
   remainderBalance: number;
   /** Mocked reminder credits (distinct from financial remainder_balance). */
   reminderBalance: number;

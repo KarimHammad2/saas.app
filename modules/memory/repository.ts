@@ -12,6 +12,7 @@ import type {
 } from "@/modules/contracts/types";
 import { normalizeMessageId } from "@/modules/email/messageId";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
+import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 function formatNoteDatePrefix(iso?: string): string {
@@ -592,6 +593,169 @@ export class MemoryRepository {
     return project ?? null;
   }
 
+  /**
+   * Resolve a project from thread Message-Id without scoping to a single user (participant routing).
+   */
+  async findProjectByThreadMessageId(messageId: string): Promise<ProjectRecord | null> {
+    const normalized = normalizeMessageId(messageId);
+    if (!normalized) {
+      return null;
+    }
+    const { data: mapRow, error: mapError } = await this.supabase
+      .from("email_thread_map")
+      .select("project_id")
+      .eq("message_id", normalized)
+      .maybeSingle<{ project_id: string }>();
+
+    if (mapError) {
+      throw new Error(`Failed to look up thread mapping: ${mapError.message}`);
+    }
+    if (!mapRow) {
+      return null;
+    }
+
+    const { data: project, error: projectError } = await this.supabase
+      .from("projects")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .eq("id", mapRow.project_id)
+      .maybeSingle<ProjectRecord>();
+
+    if (projectError) {
+      throw new Error(`Failed to load project for thread: ${projectError.message}`);
+    }
+    return project ?? null;
+  }
+
+  /**
+   * Resolve project by globally unique project_code (any owner).
+   */
+  async findProjectByCode(code: string): Promise<ProjectRecord | null> {
+    const normalized = code.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .eq("project_code", normalized)
+      .maybeSingle<ProjectRecord>();
+
+    if (error) {
+      throw new Error(`Failed to find project by code: ${error.message}`);
+    }
+    return data ?? null;
+  }
+
+  async getUserEmailById(userId: string): Promise<string | null> {
+    const { data, error } = await this.supabase
+      .from("users")
+      .select("email")
+      .eq("id", userId)
+      .maybeSingle<{ email: string | null }>();
+
+    if (error) {
+      throw new Error(`Failed to load user email: ${error.message}`);
+    }
+    const e = data?.email?.trim();
+    return e ? normalizeEmail(e) : null;
+  }
+
+  async findProjectsOwnedByUser(userId: string): Promise<ProjectRecord[]> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .eq("user_id", userId);
+
+    if (error) {
+      throw new Error(`Failed to list owned projects: ${error.message}`);
+    }
+    return (data ?? []) as ProjectRecord[];
+  }
+
+  /**
+   * Projects that list this email in participant_emails (collaborator / CC thread), excluding ownership-only matches.
+   */
+  async findProjectsWhereEmailInParticipantList(email: string): Promise<ProjectRecord[]> {
+    const n = normalizeEmail(email);
+    if (!isEmail(n)) {
+      return [];
+    }
+
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .contains("participant_emails", [n]);
+
+    if (error) {
+      throw new Error(`Failed to list collaborator projects: ${error.message}`);
+    }
+    return (data ?? []) as ProjectRecord[];
+  }
+
+  async mergeProjectParticipants(projectId: string, emails: string[]): Promise<void> {
+    const normalized = Array.from(
+      new Set(
+        emails
+          .map(normalizeEmail)
+          .filter((e) => isEmail(e)),
+      ),
+    );
+    if (normalized.length === 0) {
+      return;
+    }
+
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("participant_emails")
+      .eq("id", projectId)
+      .maybeSingle<{ participant_emails: unknown }>();
+
+    if (error) {
+      throw new Error(`Failed to load project participants: ${error.message}`);
+    }
+
+    const existingRaw = data?.participant_emails;
+    const existing = Array.isArray(existingRaw)
+      ? existingRaw.filter((entry): entry is string => typeof entry === "string").map(normalizeEmail)
+      : [];
+
+    const merged = mergeUniqueStringsPreserveOrder(existing, normalized);
+    const { error: updateError } = await this.supabase.from("projects").update({ participant_emails: merged }).eq("id", projectId);
+    if (updateError) {
+      throw new Error(`Failed to update project participants: ${updateError.message}`);
+    }
+  }
+
+  async appendRecentUpdate(projectId: string, line: string): Promise<void> {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const { data, error } = await this.supabase
+      .from("project_states")
+      .select("recent_updates")
+      .eq("project_id", projectId)
+      .maybeSingle<{ recent_updates: unknown }>();
+
+    if (error) {
+      throw new Error(`Failed to load recent updates: ${error.message}`);
+    }
+
+    const existing = asStringArray(data?.recent_updates);
+    const dated = `[${new Date().toISOString().slice(0, 10)}] ${trimmed}`;
+    const next = [...existing, dated].slice(-100);
+
+    const { error: updateError } = await this.supabase
+      .from("project_states")
+      .update({ recent_updates: next })
+      .eq("project_id", projectId);
+
+    if (updateError) {
+      throw new Error(`Failed to append recent update: ${updateError.message}`);
+    }
+  }
+
   async storeOutboundThreadMapping(messageId: string, projectId: string): Promise<void> {
     const normalized = normalizeMessageId(messageId);
     if (!normalized) {
@@ -770,8 +934,8 @@ export class MemoryRepository {
 
     const context = await this.getProjectState(projectId);
     const items = context.actionItems;
-    const key = normalizeListItemKey(oldText);
-    const idx = items.findIndex((item) => normalizeListItemKey(item) === key);
+    const key = normalizeTaskMatchKey(oldText);
+    const idx = items.findIndex((item) => normalizeTaskMatchKey(item) === key);
     if (idx === -1) {
       return;
     }
@@ -794,9 +958,11 @@ export class MemoryRepository {
 
     const context = await this.getProjectState(projectId);
     const merged = mergeUniqueStringsPreserveOrder(context.completedTasks, items);
+    const keysToRemove = new Set(items.map((t) => normalizeTaskMatchKey(t)));
+    const nextActionItems = context.actionItems.filter((item) => !keysToRemove.has(normalizeTaskMatchKey(item)));
     const { error } = await this.supabase
       .from("project_states")
-      .update({ completed_tasks: merged })
+      .update({ completed_tasks: merged, action_items: nextActionItems, tasks: nextActionItems })
       .eq("project_id", projectId);
     if (error) {
       throw new Error(`Failed to mark tasks completed: ${error.message}`);
@@ -1375,7 +1541,7 @@ export class MemoryRepository {
     const { data: state, error: stateError } = await this.supabase
       .from("project_states")
       .select(
-        "project_id, summary, initial_summary, current_status, goals, action_items, completed_tasks, decisions, risks, recommendations, notes",
+        "project_id, summary, initial_summary, current_status, goals, action_items, completed_tasks, decisions, risks, recommendations, notes, recent_updates",
       )
       .eq("project_id", projectId)
       .maybeSingle<{
@@ -1390,6 +1556,7 @@ export class MemoryRepository {
         risks: unknown;
         recommendations: unknown;
         notes: unknown;
+        recent_updates: unknown;
       }>();
 
     if (stateError) {
@@ -1398,7 +1565,7 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count")
+      .select("id, user_id, name, project_code, remainder_balance, reminder_balance, usage_count, participant_emails")
       .eq("id", projectId)
       .single<{
         id: string;
@@ -1408,6 +1575,7 @@ export class MemoryRepository {
         remainder_balance: number;
         reminder_balance: number;
         usage_count: number;
+        participant_emails: unknown;
       }>();
 
     if (projectError || !project) {
@@ -1463,6 +1631,8 @@ export class MemoryRepository {
       risks: asStringArray(state?.risks),
       recommendations: asStringArray(state?.recommendations),
       notes: asStringArray(state?.notes),
+      participants: asStringArray(project?.participant_emails),
+      recentUpdatesLog: asStringArray(state?.recent_updates),
       remainderBalance: Number(project.remainder_balance ?? 0),
       reminderBalance: Number(project.reminder_balance ?? 0),
       usageCount: Number(project.usage_count ?? 0),

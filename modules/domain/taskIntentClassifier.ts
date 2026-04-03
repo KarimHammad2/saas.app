@@ -4,6 +4,8 @@
  * this module focuses on START / CREATE / UPDATE and UNKNOWN fallbacks.
  */
 
+import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
+
 export type TaskIntent = "COMPLETE_TASK" | "START_TASK" | "CREATE_TASK" | "UPDATE_TASK" | "UNKNOWN";
 
 export interface TaskIntentEvent {
@@ -52,12 +54,12 @@ export function normalize(str: string): string {
  * Fuzzy match: existing task line contains normalized hint, or hint contains normalized task.
  */
 export function matchTask(taskHint: string, tasks: string[]): string | null {
-  const h = normalize(taskHint);
+  const h = normalizeTaskMatchKey(taskHint);
   if (!h) {
     return null;
   }
   for (const task of tasks) {
-    const t = normalize(task);
+    const t = normalizeTaskMatchKey(task);
     if (!t) {
       continue;
     }
@@ -150,7 +152,11 @@ function parseUpdateDetail(sentence: string): { beforeTo: string; afterTo: strin
  * Split body into sentences and emit actionable task events.
  * Skips COMPLETE_TASK (handled by `detectCompletedTasks` in orchestration).
  */
-export function applyTaskIntents(rawBody: string, existingTasks: string[]): TaskIntentEvent[] {
+export function applyTaskIntents(
+  rawBody: string,
+  existingTasks: string[],
+  completedTasks: string[] = [],
+): TaskIntentEvent[] {
   if (!rawBody.trim()) {
     return [];
   }
@@ -161,6 +167,7 @@ export function applyTaskIntents(rawBody: string, existingTasks: string[]): Task
     .filter((s) => s.length > 0);
 
   const events: TaskIntentEvent[] = [];
+  const allKnownTasks = [...existingTasks, ...completedTasks];
 
   for (const sentence of sentences) {
     const intent = classifyTaskMessage(sentence);
@@ -221,11 +228,14 @@ export function applyTaskIntents(rawBody: string, existingTasks: string[]): Task
 
     if (intent === "CREATE_TASK") {
       const hint = extractTaskHint(sentence, "CREATE_TASK");
-      const matched = hint ? matchTask(hint, existingTasks) : null;
+      const matched = hint ? matchTask(hint, allKnownTasks) : null;
+      if (matched) {
+        continue;
+      }
       events.push({
         intent: "CREATE_TASK",
         rawSentence: sentence,
-        matchedTask: matched,
+        matchedTask: null,
         taskHint: hint || sentence,
       });
       continue;

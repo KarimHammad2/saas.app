@@ -23,6 +23,7 @@ describe("classifyInboundIntent", () => {
     ])('subject=%j body=%j', (subject, body) => {
       const result = classifyInboundIntent(subject, body);
       expect(result.isNewProjectIntent).toBe(false);
+      expect(result.isGreetingOnly).toBe(true);
       expect(result.confidence).toBeLessThan(0.6);
     });
   });
@@ -31,6 +32,7 @@ describe("classifyInboundIntent", () => {
     it("three-word body", () => {
       const result = classifyInboundIntent("Hi", "Hello how are");
       expect(result.isNewProjectIntent).toBe(false);
+      expect(result.isGreetingOnly).toBe(true);
       expect(result.confidence).toBeLessThan(0.6);
     });
   });
@@ -42,6 +44,7 @@ describe("classifyInboundIntent", () => {
         "I want to build a SaaS app for invoice tracking for small businesses.",
       );
       expect(result.isNewProjectIntent).toBe(true);
+      expect(result.isGreetingOnly).toBe(false);
       expect(result.confidence).toBeGreaterThanOrEqual(0.6);
     });
 

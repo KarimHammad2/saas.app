@@ -92,9 +92,7 @@ describe("applyTaskIntents", () => {
   it("does not emit CREATE_TASK duplicate when hint matches existing task", () => {
     const tasks = ["Stripe payments"];
     const events = applyTaskIntents("We should add Stripe payments.", tasks);
-    expect(events).toHaveLength(1);
-    expect(events[0].intent).toBe("CREATE_TASK");
-    expect(events[0].matchedTask).toBe("Stripe payments");
+    expect(events).toHaveLength(0);
   });
 
   it("emits START_TASK with optional match", () => {
