@@ -24,7 +24,7 @@ export function getSupabaseServiceRoleKey(): string {
   return key;
 }
 
-export function getEmailProviderName(): string {
+export function getEmailProviderName(): "resend" | "ses" {
   const provider = (process.env.EMAIL_PROVIDER ?? "resend").trim().toLowerCase();
   if (provider !== "resend" && provider !== "ses") {
     throw new Error(`Unsupported EMAIL_PROVIDER: ${provider}`);
