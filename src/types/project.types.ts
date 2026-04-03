@@ -41,6 +41,7 @@ export interface UserRecord {
 export interface ProjectRecord {
   id: string;
   user_id: string;
+  owner_email: string;
   name: string;
   created_at: string;
 }

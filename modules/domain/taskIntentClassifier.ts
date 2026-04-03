@@ -5,8 +5,9 @@
  */
 
 import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
+import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
 
-export type TaskIntent = "COMPLETE_TASK" | "START_TASK" | "CREATE_TASK" | "UPDATE_TASK" | "UNKNOWN";
+export type TaskIntent = "COMPLETE_TASK" | "START_TASK" | "CREATE_TASK" | "UPDATE_TASK" | "SCOPE_CHANGE" | "UNKNOWN";
 
 export interface TaskIntentEvent {
   intent: TaskIntent;
@@ -18,6 +19,9 @@ export interface TaskIntentEvent {
   taskHint: string;
   /** For UPDATE_TASK: new action item text (status preserved as incomplete). */
   updatedText?: string;
+  /** For SCOPE_CHANGE: extracted project direction transition. */
+  fromScope?: string;
+  toScope?: string;
 }
 
 const COMPLETION_KEYWORD =
@@ -121,6 +125,10 @@ export function classifyTaskMessage(sentence: string): TaskIntent {
     return "UNKNOWN";
   }
 
+  if (detectProjectScopeChange(s)) {
+    return "SCOPE_CHANGE";
+  }
+
   if (UPDATE_PATTERN.test(s)) {
     return "UPDATE_TASK";
   }
@@ -210,6 +218,19 @@ export function applyTaskIntents(
         matchedTask: matched,
         taskHint: hint,
         updatedText,
+      });
+      continue;
+    }
+
+    if (intent === "SCOPE_CHANGE") {
+      const transition = extractScopeTransition(sentence);
+      events.push({
+        intent: "SCOPE_CHANGE",
+        rawSentence: sentence,
+        matchedTask: null,
+        taskHint: "",
+        fromScope: transition?.fromScope,
+        toScope: transition?.toScope,
       });
       continue;
     }

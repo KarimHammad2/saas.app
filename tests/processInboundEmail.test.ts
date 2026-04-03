@@ -16,6 +16,7 @@ const emptyUserProfile = {
 const defaultMockProject = {
   id: "p1",
   user_id: "u1",
+  owner_email: "user@example.com",
   name: "Primary Project",
   project_code: "pjt-a1b2c3d4",
   remainder_balance: 0,
@@ -1464,20 +1465,12 @@ describe("processInboundEmail", () => {
           call[1].some(
             (line: unknown) =>
               typeof line === "string" &&
-              line.includes("Project direction changed from mobile app for habits") &&
+              line.includes("Scope changed from mobile app for habits") &&
               line.includes("web dashboard"),
           ),
       ),
     ).toBe(true);
-    expect(
-      repoState.appendRecentUpdate.mock.calls.some(
-        (call) =>
-          call[0] === "p1" &&
-          typeof call[1] === "string" &&
-          call[1].includes("Project direction changed from mobile app for habits") &&
-          call[1].includes("web dashboard"),
-      ),
-    ).toBe(true);
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Scope changed");
   });
 
   it("applies minimal overview update on scope change even when parsed summary is present", async () => {
@@ -1514,8 +1507,253 @@ describe("processInboundEmail", () => {
     };
 
     await processInboundEmail(event);
-    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("Current direction:"));
     expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("web dashboard for agencies"));
+  });
+
+  it("keeps existing goals/tasks and does not create a new project on threaded scope pivot", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-thread" });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p-thread",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
+      summary: "mobile app for habit tracking",
+      initialSummary: "mobile app for habit tracking",
+      currentStatus: "",
+      goals: ["launch MVP"],
+      actionItems: ["build auth", "build tracker"],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "agency",
+      transactionHistory: [],
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_scope_threaded",
+      provider: "resend",
+      providerEventId: "m_scope_threaded",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Direction change [PJT-A1B2C3D4]",
+      inReplyTo: "<thread-msg@saas2.app>",
+      references: ["<thread-msg@saas2.app>"],
+      rawBody: "We are no longer building a mobile app. Instead we want a shared spreadsheet workflow for gyms.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+    expect(repoState.updateGoals).toHaveBeenCalledWith("p-thread", []);
+    expect(repoState.appendActionItems).toHaveBeenCalledWith("p-thread", []);
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p-thread", expect.stringContaining("shared spreadsheet workflow for gyms"));
+  });
+
+  it("updates overview to the new direction for two-sentence pivot phrasing", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-two-sentence" });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p-two-sentence",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "user@example.com",
+      summary: "mobile app for habit tracking",
+      initialSummary: "mobile app for habit tracking",
+      currentStatus: "",
+      goals: ["launch MVP"],
+      actionItems: ["build auth", "build tracker"],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "agency",
+      transactionHistory: [],
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_scope_sentence_style",
+      provider: "resend",
+      providerEventId: "m_scope_sentence_style",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Pivot [PJT-A1B2C3D4]",
+      inReplyTo: "<thread-two-sentence@saas2.app>",
+      references: [],
+      rawBody: "We are no longer building a mobile app. We want a shared spreadsheet workflow for gyms instead.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p-two-sentence", "a shared spreadsheet workflow for gyms");
+    expect(repoState.updateNotes).toHaveBeenCalledWith(
+      "p-two-sentence",
+      [expect.stringContaining("Scope changed from a mobile app to a shared spreadsheet workflow for gyms")],
+      event.timestamp,
+    );
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p-two-sentence", "Scope changed");
+  });
+
+  it("allows cc participant to reply in same thread without creating a new project", async () => {
+    const threadProject = { ...defaultMockProject, id: "p-collab", user_id: "u-owner", owner_email: "owner@example.com" };
+    repoState.getProjectState
+      .mockResolvedValueOnce({
+        projectId: "p-collab",
+        userId: "u-owner",
+        projectCode: "pjt-a1b2c3d4",
+        ownerEmail: "owner@example.com",
+        summary: "summary",
+        initialSummary: "summary",
+        currentStatus: "",
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        participants: [],
+        recentUpdatesLog: [],
+        remainderBalance: 0,
+        reminderBalance: 3,
+        usageCount: 0,
+        tier: "agency",
+        transactionHistory: [],
+      })
+      .mockResolvedValue({
+        projectId: "p-collab",
+        userId: "u-owner",
+        projectCode: "pjt-a1b2c3d4",
+        ownerEmail: "owner@example.com",
+        summary: "summary",
+        initialSummary: "summary",
+        currentStatus: "",
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        participants: ["collab@example.com"],
+        recentUpdatesLog: [],
+        remainderBalance: 0,
+        reminderBalance: 3,
+        usageCount: 0,
+        tier: "agency",
+        transactionHistory: [],
+      });
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageId.mockResolvedValue(threadProject);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const ownerEvent: NormalizedEmailEvent = {
+      eventId: "e_owner_cc",
+      provider: "resend",
+      providerEventId: "m_owner_cc",
+      timestamp: new Date().toISOString(),
+      from: "owner@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: ["collab@example.com"],
+      subject: "Re: Update [PJT-A1B2C3D4]",
+      inReplyTo: "<thread-collab@saas2.app>",
+      references: [],
+      rawBody: "Quick update",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    await processInboundEmail(ownerEvent);
+    expect(repoState.mergeProjectParticipants).toHaveBeenCalledWith("p-collab", ["owner@example.com", "collab@example.com"]);
+
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-collab",
+        email: "collab@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    const collabEvent: NormalizedEmailEvent = {
+      ...ownerEvent,
+      eventId: "e_collab_reply",
+      providerEventId: "m_collab_reply",
+      from: "collab@example.com",
+      cc: [],
+      rawBody: "Tasks:\n- refine onboarding copy",
+      parsed: {
+        ...ownerEvent.parsed,
+        actionItems: ["refine onboarding copy"],
+      },
+    };
+
+    await processInboundEmail(collabEvent);
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
   });
 
   it("requires clarification when non-thread email mentions one existing project without explicit thread/code context", async () => {

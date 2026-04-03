@@ -1,5 +1,6 @@
 import { getEmailProvider, getFallbackEmailProvider } from "@/modules/email/providers";
 import { log } from "@/lib/log";
+import { getMasterUserEmail } from "@/lib/env";
 
 interface SendEmailInput {
   to: string;
@@ -28,18 +29,45 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
 
   const primaryProvider = getEmailProvider();
   const fallbackProvider = getFallbackEmailProvider(primaryProvider.name);
+  const pausedMasterEmail = getMasterUserEmail();
+  const normalize = (value: string): string => value.trim().toLowerCase();
+  const shouldDeliverTo = (email: string): boolean => normalize(email) !== pausedMasterEmail;
   const recipients = to
     .split(",")
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(shouldDeliverTo);
   const ccRecipients = (cc ?? "")
     .split(",")
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(shouldDeliverTo);
   const bccRecipients = (bcc ?? "")
     .split(",")
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(shouldDeliverTo);
+
+  const initialRecipientCount = to
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean).length;
+  if (initialRecipientCount !== recipients.length) {
+    log.info("suppressed paused master email recipient", {
+      pausedMasterEmail,
+      suppressedCount: initialRecipientCount - recipients.length,
+      finalRecipientCount: recipients.length,
+      subject,
+    });
+  }
+  if (recipients.length === 0) {
+    log.info("skipping email delivery with no primary recipients after suppression", {
+      pausedMasterEmail,
+      subject,
+    });
+    return;
+  }
+
   const message = {
     to: recipients,
     cc: ccRecipients.length > 0 ? ccRecipients : undefined,

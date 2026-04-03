@@ -40,6 +40,7 @@ describe("classifyTaskMessage", () => {
     ["Add user roles", "CREATE_TASK"],
     ["Landing page is done", "COMPLETE_TASK"],
     ["Authentication has been finished", "COMPLETE_TASK"],
+    ["We are no longer building a mobile app, instead we want a dashboard", "SCOPE_CHANGE"],
     ["Just checking in with the team today", "UNKNOWN"],
   ];
 
@@ -109,6 +110,16 @@ describe("applyTaskIntents", () => {
       [],
     );
     expect(events.some((e) => e.intent === "UNKNOWN")).toBe(true);
+  });
+
+  it("emits SCOPE_CHANGE with transition metadata for pivot language", () => {
+    const events = applyTaskIntents(
+      "We are no longer building a mobile app, instead we want a shared spreadsheet workflow for gyms.",
+      [],
+    );
+    expect(events.some((e) => e.intent === "SCOPE_CHANGE")).toBe(true);
+    const scopeEvent = events.find((e) => e.intent === "SCOPE_CHANGE");
+    expect(scopeEvent?.toScope?.toLowerCase()).toContain("shared spreadsheet workflow for gyms");
   });
 
   it("does not emit UNKNOWN for very short sentences", () => {

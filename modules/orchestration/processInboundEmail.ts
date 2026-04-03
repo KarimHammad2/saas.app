@@ -207,29 +207,14 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await runKickoffFlow(repo, event, user.id, project.id);
   }
 
-  const ownerEmailForRole = (await repo.getUserEmailById(ownerUserId)) ?? user.email;
+  const ownerEmailForRole = accessState.ownerEmail ?? user.email;
   const role = resolveActorRole({
     senderEmail: event.from,
     primaryUserEmail: ownerEmailForRole,
     activeRpmEmail,
   });
 
-  const scopeChanged = detectProjectScopeChange(event.rawBody);
-  if (scopeChanged) {
-    const transition = extractScopeTransition(event.rawBody);
-    const fromBrief = transition?.fromScope || compactOverviewForDocument(priorSnapshot.summary).slice(0, 120) || "(previous)";
-    const toBrief =
-      transition?.toScope ||
-      event.parsed.summary?.trim() ||
-      compactOverviewForDocument(event.rawBody).slice(0, 200) ||
-      "(new scope)";
-    const scopeLogLine = `Project direction changed from ${fromBrief} to ${toBrief}`;
-    await repo.appendRecentUpdate(project.id, scopeLogLine);
-    await repo.updateNotes(project.id, [scopeLogLine], event.timestamp);
-    await repo.updateSummaryDisplay(project.id, `Current direction: ${toBrief}`);
-  }
-
-  if (event.parsed.summary && getAllowOverviewOverride() && !scopeChanged) {
+  if (event.parsed.summary && getAllowOverviewOverride()) {
     await repo.updateSummaryDisplay(project.id, event.parsed.summary);
   }
   if (event.parsed.currentStatus) {
@@ -261,15 +246,36 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     stateAfterCompletion.actionItems,
     stateAfterCompletion.completedTasks,
   );
+  const fallbackScopeTransition = detectProjectScopeChange(event.rawBody) ? extractScopeTransition(event.rawBody) : null;
+  const scopeEvent = taskIntentEvents.find((ev) => ev.intent === "SCOPE_CHANGE");
+  const scopeTransition = {
+    fromScope: scopeEvent?.fromScope || fallbackScopeTransition?.fromScope,
+    toScope: scopeEvent?.toScope || fallbackScopeTransition?.toScope,
+  };
   const unknownNotesFromTaskIntents: string[] = [];
   for (const ev of taskIntentEvents) {
     if (ev.intent === "UPDATE_TASK" && ev.matchedTask && ev.updatedText) {
       await repo.replaceActionItem(project.id, ev.matchedTask, ev.updatedText);
     } else if (ev.intent === "CREATE_TASK" && !ev.matchedTask && ev.taskHint.trim()) {
       await repo.appendActionItems(project.id, [ev.taskHint.trim()]);
+    } else if (ev.intent === "SCOPE_CHANGE") {
+      continue;
     } else if (ev.intent === "UNKNOWN" && ev.rawSentence.trim()) {
       unknownNotesFromTaskIntents.push(ev.rawSentence.trim());
     }
+  }
+
+  const scopeChanged = Boolean(scopeEvent) || detectProjectScopeChange(event.rawBody);
+  if (scopeChanged) {
+    const fromBrief = scopeTransition.fromScope || compactOverviewForDocument(priorSnapshot.summary).slice(0, 120) || "(previous)";
+    const toBrief =
+      scopeTransition.toScope ||
+      event.parsed.summary?.trim() ||
+      compactOverviewForDocument(event.rawBody).slice(0, 200) ||
+      "(new scope)";
+    await repo.updateSummaryDisplay(project.id, toBrief);
+    await repo.updateNotes(project.id, [`Scope changed from ${fromBrief} to ${toBrief}`], event.timestamp);
+    await repo.appendRecentUpdate(project.id, "Scope changed");
   }
 
   await repo.updateDecisions(project.id, event.parsed.decisions);

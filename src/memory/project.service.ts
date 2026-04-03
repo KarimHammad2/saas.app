@@ -36,10 +36,23 @@ export class ProjectService {
   private readonly supabase = getSupabaseAdminClient();
 
   async createProject(userId: string): Promise<ProjectRecord> {
+    const { data: owner, error: ownerError } = await this.supabase
+      .from("users")
+      .select("email")
+      .eq("id", userId)
+      .maybeSingle<{ email: string | null }>();
+    if (ownerError) {
+      throw new Error(`Failed to load user email: ${ownerError.message}`);
+    }
+    const ownerEmail = owner?.email?.trim().toLowerCase();
+    if (!ownerEmail) {
+      throw new Error("Owner email is required to create project.");
+    }
+
     const { data, error } = await this.supabase
       .from("projects")
-      .insert({ user_id: userId, name: "Primary Project" })
-      .select("id, user_id, name, created_at")
+      .insert({ user_id: userId, owner_email: ownerEmail, name: "Primary Project" })
+      .select("id, user_id, owner_email, name, created_at")
       .single<ProjectRecord>();
 
     if (error || !data) {
@@ -52,7 +65,7 @@ export class ProjectService {
   async getProjectByUserId(userId: string): Promise<ProjectRecord | null> {
     const { data, error } = await this.supabase
       .from("projects")
-      .select("id, user_id, name, created_at")
+      .select("id, user_id, owner_email, name, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: true })
       .limit(1)
