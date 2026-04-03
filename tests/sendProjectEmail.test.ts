@@ -88,28 +88,29 @@ describe("sendProjectEmail", () => {
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update — AI SaaS for real estate");
+    expect(call?.subject).toBe("Project Update");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# PROJECT FILE");
     expect(attachment?.content).toContain("## Instructions to LLM");
     expect(attachment?.content).toContain("## Goals");
+    expect(attachment?.content).toContain("## Decisions");
     expect(attachment?.content).toContain("### In Progress");
     expect(attachment?.content).toContain("### Completed");
 
     expect(call?.html).toContain('charset="utf-8"');
     expect(call?.html).toContain('class="email-root"');
     expect(call?.html).toContain("project-document.md");
-    expect(call?.html).toContain("<strong>Project:</strong> AI SaaS for real estate");
-    expect(call?.html).toContain("<strong>Status:</strong> In Progress");
-    expect(call?.html).toContain("<strong>Last Update:</strong> N/A");
-    expect(call?.html).toContain("You are working on:");
+    expect(call?.html).not.toContain("<strong>Project:</strong>");
+    expect(call?.html).not.toContain("<strong>Status:</strong>");
+    expect(call?.html).not.toContain("<strong>Last Update:</strong>");
+    expect(call?.html).not.toContain("You are working on:");
     expect(call?.text).toContain("Here is your updated project file.");
-    expect(call?.text).toContain("Project: AI SaaS for real estate");
-    expect(call?.text).toContain("Status: In Progress");
-    expect(call?.text).toContain("Last Update: N/A");
-    expect(call?.text).toContain('You are working on:\n"AI SaaS for real estate"');
+    expect(call?.text).not.toContain("Project:");
+    expect(call?.text).not.toContain("Status:");
+    expect(call?.text).not.toContain("Last Update:");
+    expect(call?.text).not.toContain("You are working on:");
     expect(call?.text).toContain("Attachment: project-document.md");
     expect(call?.text).not.toContain("{{summary}}");
   });
@@ -120,9 +121,9 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update — AI SaaS for real estate");
+    expect(call?.subject).toBe("Project Update");
     expect(call?.html).toContain("Here is your updated project file.");
-    expect(call?.text).toContain("Project: AI SaaS for real estate");
+    expect(call?.text).not.toContain("Project: AI SaaS for real estate");
   });
 
   it("uses reminder message type when emailKind=reminder", async () => {
@@ -132,7 +133,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update — AI SaaS for real estate");
+    expect(call?.subject).toBe("Project Update");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
   });
 
@@ -196,10 +197,10 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update — AI SaaS for real estate [PJT-DEADBEEF]");
+    expect(call?.subject).toBe("Project Update [PJT-DEADBEEF]");
   });
 
-  it("uses deterministic fallback values for title/status/last update", async () => {
+  it("uses minimal fallback subject and body when title metadata is missing", async () => {
     const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
     const payload = buildPayload(false);
     payload.context.summary = "";
@@ -211,9 +212,21 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update — Untitled project");
-    expect(call?.text).toContain("Project: Untitled project");
-    expect(call?.text).toContain("Status: Unknown");
-    expect(call?.text).toContain("Last Update: N/A");
+    expect(call?.subject).toBe("Project Update");
+    expect(call?.text).toContain("Here is your updated project file.");
+    expect(call?.text).toContain("Attachment: project-document.md");
+    expect(call?.text).not.toContain("Project:");
+    expect(call?.text).not.toContain("Status:");
+    expect(call?.text).not.toContain("Last Update:");
+  });
+
+  it("uses short project-name subject when project code is absent", async () => {
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(false);
+    payload.context.projectName = "Meal Planning App for Busy Professionals";
+    await sendProjectEmail(["user@example.com"], payload);
+
+    const call = mockedSendEmail.mock.calls[0]?.[0];
+    expect(call?.subject).toBe("Meal Planning App for Busy — Update");
   });
 });

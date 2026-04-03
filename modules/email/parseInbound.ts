@@ -329,16 +329,57 @@ function normalizeRecipientList(value: unknown): string[] {
 function extractSection(content: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const allLabels = SECTION_LABELS.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const regex = new RegExp(`(?:^|\\n)${escaped}:\\s*([\\s\\S]*?)(?=\\n(?:${allLabels}):|$)`, "i");
+  const regex = new RegExp(`(?:^|\\n)\\s*${escaped}:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${allLabels}):|$)`, "i");
   const match = content.match(regex);
   return match?.[1]?.trim() ?? "";
+}
+
+function normalizeSectionHeadings(content: string): string {
+  const labels = SECTION_LABELS.map((label) => ({
+    label,
+    escaped: label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  }));
+
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      for (const { label, escaped } of labels) {
+        const headingPattern = new RegExp(`^(?:>\\s*)?(?:#{1,6}\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:?\\s*$`, "i");
+        if (headingPattern.test(trimmed)) {
+          return `${label}:`;
+        }
+      }
+      return line;
+    })
+    .join("\n");
 }
 
 function toBulletList(content: string): string[] {
   return content
     .split("\n")
-    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .map((line) =>
+      line
+        .replace(/^\s*[-*+]\s+\[(?: |x|X)\]\s*/, "")
+        .replace(/^\s*[-*+]\s*/, "")
+        .replace(/^\s*\d+[.)]\s*/, "")
+        .trim(),
+    )
     .filter(Boolean);
+}
+
+function dedupeListValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const key = normalizeForDedup(value);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(value.trim());
+  }
+  return output;
 }
 
 function parseTransactionBlock(content: string): TransactionEvent | null {
@@ -465,20 +506,25 @@ function extractBodyContent(source: Record<string, unknown>): string {
 }
 
 export function parseNormalizedContent(content: string) {
-  const summary = cleanOverviewText(extractSection(content, "Summary") || extractSection(content, "Overview"));
-  const currentStatus = extractSection(content, "Status").trim();
-  const goals = toBulletList(extractSection(content, "Goals"));
-  const actionItems = toBulletList(extractSection(content, "Action Items") || extractSection(content, "Tasks"));
-  const completedTasks = toBulletList(extractSection(content, "Completed Tasks") || extractSection(content, "Completed"));
-  const decisions = toBulletList(extractSection(content, "Decisions"));
-  const risks = toBulletList(extractSection(content, "Risks"));
-  const notesSection = filterIgnoredNoteLines(toBulletList(extractSection(content, "Notes")));
-  const recommendations = toBulletList(extractSection(content, "Recommendations"));
-  const userProfileContext = extractSection(content, "UserProfile") || extractSection(content, "Context");
-  const rpmSuggestionContent = extractSection(content, "UserProfile Suggestion");
-  const transactionEvent = parseTransactionBlock(extractSection(content, "Transaction"));
+  const normalizedContent = normalizeSectionHeadings(content);
+  const summary = cleanOverviewText(extractSection(normalizedContent, "Summary") || extractSection(normalizedContent, "Overview"));
+  const currentStatus = extractSection(normalizedContent, "Status").trim();
+  const goals = dedupeListValues(toBulletList(extractSection(normalizedContent, "Goals")));
+  const actionItems = dedupeListValues(
+    toBulletList(extractSection(normalizedContent, "Action Items") || extractSection(normalizedContent, "Tasks")),
+  );
+  const completedTasks = dedupeListValues(
+    toBulletList(extractSection(normalizedContent, "Completed Tasks") || extractSection(normalizedContent, "Completed")),
+  );
+  const decisions = dedupeListValues(toBulletList(extractSection(normalizedContent, "Decisions")));
+  const risks = dedupeListValues(toBulletList(extractSection(normalizedContent, "Risks")));
+  const notesSection = filterIgnoredNoteLines(dedupeListValues(toBulletList(extractSection(normalizedContent, "Notes"))));
+  const recommendations = dedupeListValues(toBulletList(extractSection(normalizedContent, "Recommendations")));
+  const userProfileContext = extractSection(normalizedContent, "UserProfile") || extractSection(normalizedContent, "Context");
+  const rpmSuggestionContent = extractSection(normalizedContent, "UserProfile Suggestion");
+  const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
   const approvals = parseApprovals(content);
-  const additionalEmails = parseAdditionalEmails(content);
+  const additionalEmails = parseAdditionalEmails(normalizedContent);
 
   const hasMeaning =
     Boolean(summary && summary.trim()) ||

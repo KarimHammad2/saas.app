@@ -81,6 +81,36 @@ Approve suggestion abc-123
     expect(parsed.parsed.approvals[0]).toEqual({ suggestionId: "abc-123", decision: "approve" });
   });
 
+  it("parses markdown-style section headers and dedupes list entries", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Markdown sections",
+      text: `
+## Goals
+- Launch MVP
+- launch   mvp
+
+**Tasks**
+- Build onboarding flow
+- [x] Build onboarding flow
+
+## Risks
+- Timeline risk
+- timeline    risk
+
+Decisions:
+- Use Supabase
+- use supabase
+`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.goals).toEqual(["Launch MVP"]);
+    expect(parsed.parsed.actionItems).toEqual(["Build onboarding flow"]);
+    expect(parsed.parsed.risks).toEqual(["Timeline risk"]);
+    expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
+  });
+
   it("decodes HTML entities in labeled sections", () => {
     const payload = {
       from: "User <user@example.com>",

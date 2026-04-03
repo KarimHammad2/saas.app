@@ -45,6 +45,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
 
   const goalsBlock = formatBulletSection(context.goals, "(none)");
+  const decisionsBlock = formatBulletSection(context.decisions, "(none)");
   const risksBlock = formatBulletSection(context.risks, "(none)");
   const notesBlock = formatBulletSection(context.notes, "(none)");
 
@@ -90,6 +91,12 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "## Risks",
     "",
     risksBlock,
+    "",
+    "---",
+    "",
+    "## Decisions",
+    "",
+    decisionsBlock,
     "",
     "---",
     "",
