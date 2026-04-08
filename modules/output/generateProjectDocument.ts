@@ -124,6 +124,7 @@ function formatPendingSuggestions(payload: ProjectEmailPayload): string {
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
+  const projectName = (context.projectName || "").trim() || "Untitled Project";
 
   const goalsBlock = formatBulletSection(context.goals, "(none)");
   const decisionsBlock = formatBulletSection(context.decisions, "(none)");
@@ -141,6 +142,13 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
 
   return [
     "# PROJECT FILE",
+    "",
+    "## Project Metadata",
+    "",
+    "Project Name:",
+    `- ${projectName}`,
+    "",
+    "---",
     "",
     "## Instructions to LLM",
     "",

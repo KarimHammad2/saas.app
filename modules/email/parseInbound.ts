@@ -1,5 +1,6 @@
 import type { NormalizedEmailEvent, TransactionEvent } from "@/modules/contracts/types";
 import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
+import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { filterIgnoredNoteLines, isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { extractDisplayNameFromSenderRaw, tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
 import { normalizeMessageId } from "@/modules/email/messageId";
@@ -28,6 +29,7 @@ const SPECIAL_SECTION_LABELS = [
   "UserProfile",
   "Context",
   "UserProfile Suggestion",
+  "Project Name",
   "Team Emails",
   "Additional Emails",
   "Agency Emails",
@@ -453,6 +455,35 @@ function parseAdditionalEmails(content: string): string[] {
     .filter(Boolean);
 }
 
+function firstMeaningfulLine(content: string): string {
+  const lines = content
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s*[-*+]\s+/, "")
+        .replace(/^\s*\d+[.)]\s+/, "")
+        .trim(),
+    )
+    .filter(Boolean);
+
+  return lines[0] ?? "";
+}
+
+function parseProjectNameUpdate(content: string, normalizedContent: string): string | null {
+  const fromSection = extractSection(normalizedContent, "Project Name");
+  const sectionCandidate = normalizeProjectNameCandidate(firstMeaningfulLine(fromSection));
+  if (sectionCandidate) {
+    return sectionCandidate;
+  }
+
+  const renameMatch = content.match(/(?:^|\n)\s*rename\s+project\s+to\s*:\s*(.+)$/im);
+  if (renameMatch?.[1]) {
+    return normalizeProjectNameCandidate(renameMatch[1]);
+  }
+
+  return null;
+}
+
 function extractBodyContent(source: Record<string, unknown>): string {
   const textBody = toStringOrEmpty(source.text);
   if (textBody) {
@@ -521,6 +552,7 @@ export function parseNormalizedContent(content: string) {
   const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
   const approvals = parseApprovals(content);
   const additionalEmails = parseAdditionalEmails(normalizedContent);
+  const projectName = parseProjectNameUpdate(content, normalizedContent);
 
   const hasMeaning =
     goals.length > 0 ||
@@ -570,6 +602,7 @@ export function parseNormalizedContent(content: string) {
     transactionEvent,
     approvals,
     additionalEmails,
+    projectName,
   };
 }
 

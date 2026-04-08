@@ -43,7 +43,8 @@ function buildEmailSubject(payload: ProjectEmailPayload, baseSubject: string): s
   if (!projectCode) {
     throw new Error("Project outbound email requires context.projectCode.");
   }
-  return `${baseSubject} ${formatProjectCodeBracket(projectCode)}`.trim();
+  const projectName = payload.context.projectName?.trim() || "Untitled Project";
+  return `${baseSubject} — ${projectName} ${formatProjectCodeBracket(projectCode)}`.trim();
 }
 
 export function validateProjectDocumentForAttachment(document: string): void {
@@ -55,6 +56,7 @@ export function validateProjectDocumentForAttachment(document: string): void {
     throw new Error("Generated project document exceeds safe attachment size limit.");
   }
   const requiredHeadings = [
+    "## Project Metadata",
     "## Instructions to LLM",
     "## Project Overview",
     "## Goals",

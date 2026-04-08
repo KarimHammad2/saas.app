@@ -140,5 +140,6 @@ export interface NormalizedEmailEvent {
       decision: "approve" | "reject";
     }[];
     additionalEmails: string[];
+    projectName?: string | null;
   };
 }

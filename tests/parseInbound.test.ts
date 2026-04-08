@@ -107,6 +107,31 @@ Decisions:
     expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
   });
 
+  it("extracts project name from Project Name section", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Re: Project Update — Old Name [PJT-A1B2C3D4]",
+      text: `
+Project Name:
+- SMS SaaS Platform
+`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.projectName).toBe("SMS SaaS Platform");
+  });
+
+  it("extracts project name from rename command", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Re: Project Update — Old Name [PJT-A1B2C3D4]",
+      text: "Rename project to: AI PDF Tool",
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.projectName).toBe("AI PDF Tool");
+  });
+
   it("decodes HTML entities in strict labeled sections", () => {
     const payload = {
       from: "User <user@example.com>",

@@ -52,6 +52,7 @@ const repoState = {
   updateRecommendations: vi.fn(),
   updateNotes: vi.fn(),
   updateCurrentStatus: vi.fn(),
+  updateProjectName: vi.fn(),
   storeUserProfileContext: vi.fn(),
   getUserProfile: vi.fn(),
   replaceStructuredUserProfileContext: vi.fn(),
@@ -110,6 +111,7 @@ vi.mock("@/modules/memory/repository", async () => {
       updateRecommendations = repoState.updateRecommendations;
       updateNotes = repoState.updateNotes;
       updateCurrentStatus = repoState.updateCurrentStatus;
+      updateProjectName = repoState.updateProjectName;
       storeUserProfileContext = repoState.storeUserProfileContext;
       getUserProfile = repoState.getUserProfile;
       replaceStructuredUserProfileContext = repoState.replaceStructuredUserProfileContext;
@@ -162,6 +164,7 @@ describe("processInboundEmail", () => {
     repoState.mergeProjectParticipants.mockResolvedValue(undefined);
     repoState.getUserEmailById.mockResolvedValue("user@example.com");
     repoState.appendRecentUpdate.mockResolvedValue(undefined);
+    repoState.updateProjectName.mockResolvedValue(undefined);
     repoState.createProjectForUser.mockResolvedValue({
       project: { ...defaultMockProject },
       created: true,
@@ -293,7 +296,7 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "I want to build a restaurant analytics SaaS");
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Restaurant Analytics Saas Weekly KPI");
     expect(result.context.projectId).toBe("p1");
     expect(result.payload.emailKind).toBeDefined();
   });
@@ -358,6 +361,87 @@ describe("processInboundEmail", () => {
     const result = await processInboundEmail(event);
     expect(result.context.projectId).toBe("p-thread");
     expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("updates project name when inbound parsed Project Name differs", async () => {
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject, name: "Old Name" });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rename",
+      provider: "resend",
+      providerEventId: "m_rename",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Project Update — Old Name [PJT-A1B2C3D4]",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Project Name:\n- SMS SaaS Platform",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        projectName: "SMS SaaS Platform",
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateProjectName).toHaveBeenCalledWith("p1", "SMS SaaS Platform");
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Project renamed to: SMS SaaS Platform");
+  });
+
+  it("does not update project name when inbound name matches current", async () => {
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject, name: "SMS SaaS Platform" });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_same_name",
+      provider: "resend",
+      providerEventId: "m_same_name",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Project Update — SMS SaaS Platform [PJT-A1B2C3D4]",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Rename project to: SMS SaaS Platform",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        projectName: "SMS SaaS Platform",
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateProjectName).not.toHaveBeenCalled();
   });
 
   it("rejects unknown external sender before participant merge (anti-hijack)", async () => {

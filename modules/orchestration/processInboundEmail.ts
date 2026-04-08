@@ -12,6 +12,7 @@ import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
+import { generateShortProjectName, normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { runKickoffFlow } from "@/modules/domain/kickoffService";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
@@ -38,12 +39,18 @@ export interface InboundProcessingResult {
   };
 }
 
-function deriveProjectName(subject: string): string {
-  const withoutToken = subject.replace(/\[PJT-[A-F0-9]{6,10}\]/gi, "").trim();
-  const cleaned = withoutToken.replace(/^re:\s*/i, "").trim();
-  if (cleaned.length > 0) {
-    return cleaned.slice(0, 200);
+function deriveProjectName(event: NormalizedEmailEvent): string {
+  const fromBody = (event.parsed.summary || event.rawBody).trim();
+  if (fromBody) {
+    return generateShortProjectName(fromBody, "New Project");
   }
+
+  const withoutToken = event.subject.replace(/\[PJT-[A-F0-9]{6,10}\]/gi, "").trim();
+  const cleanedSubject = withoutToken.replace(/^re:\s*/i, "").trim();
+  if (cleanedSubject) {
+    return generateShortProjectName(cleanedSubject, "New Project");
+  }
+
   return "New Project";
 }
 
@@ -123,7 +130,7 @@ async function resolveInboundProject(
     });
   }
 
-  return repo.createProjectForUser(userId, deriveProjectName(event.subject));
+  return repo.createProjectForUser(userId, deriveProjectName(event));
 }
 
 function defaultNextSteps(): string[] {
@@ -181,6 +188,16 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       code: "PROJECT_ACCESS_DENIED",
       status: 403,
     });
+  }
+
+  const requestedProjectName = normalizeProjectNameCandidate(event.parsed.projectName || "");
+  const currentProjectName = normalizeProjectNameCandidate(project.name || "");
+  if (
+    requestedProjectName &&
+    requestedProjectName.toLowerCase() !== (currentProjectName || "").toLowerCase()
+  ) {
+    await repo.updateProjectName(project.id, requestedProjectName);
+    await repo.appendRecentUpdate(project.id, `Project renamed to: ${requestedProjectName}`);
   }
 
   const entitlements = resolvePlanEntitlements(accessState.tier);

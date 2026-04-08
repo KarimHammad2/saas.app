@@ -29,6 +29,7 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       projectId: "p1",
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
+      projectName: "AI Real Estate Copilot",
       summary: "AI SaaS for real estate",
       initialSummary: "AI SaaS for real estate",
       currentStatus: "MVP in progress",
@@ -89,11 +90,14 @@ describe("sendProjectEmail", () => {
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update [PJT-A1B2C3D4]");
+    expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# PROJECT FILE");
+    expect(attachment?.content).toContain("## Project Metadata");
+    expect(attachment?.content).toContain("Project Name:");
+    expect(attachment?.content).toContain("- AI Real Estate Copilot");
     expect(attachment?.content).toContain("## Instructions to LLM");
     expect(attachment?.content).toContain("## Goals");
     expect(attachment?.content).toContain("## Decisions");
@@ -125,7 +129,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update [PJT-A1B2C3D4]");
+    expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.html).toContain("Here is your updated project file.");
     expect(call?.text).not.toContain("Project: AI SaaS for real estate");
   });
@@ -137,7 +141,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update [PJT-A1B2C3D4]");
+    expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
   });
 
@@ -204,7 +208,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update [PJT-DEADBEEF]");
+    expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-DEADBEEF]");
   });
 
   it("throws when projectCode is missing from payload context", async () => {
@@ -229,7 +233,7 @@ describe("sendProjectEmail", () => {
   it("validates required document headings before attachment send", async () => {
     const { validateProjectDocumentForAttachment } = await import("@/modules/output/sendProjectEmail");
     expect(() => validateProjectDocumentForAttachment("# PROJECT FILE\n\nbroken")).toThrow(
-      "Generated project document is missing required section: ## Instructions to LLM",
+      "Generated project document is missing required section: ## Project Metadata",
     );
   });
 });

@@ -13,6 +13,7 @@ import type {
 import { normalizeMessageId } from "@/modules/email/messageId";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { resolvePlanEntitlements } from "@/modules/domain/entitlements";
+import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
@@ -908,6 +909,18 @@ export class MemoryRepository {
     );
 
     return { project: created, created: true };
+  }
+
+  async updateProjectName(projectId: string, name: string): Promise<void> {
+    const normalized = normalizeProjectNameCandidate(name);
+    if (!normalized) {
+      return;
+    }
+
+    const { error } = await this.supabase.from("projects").update({ name: normalized }).eq("id", projectId);
+    if (error) {
+      throw new Error(`Failed to update project name: ${error.message}`);
+    }
   }
 
   async assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void> {
