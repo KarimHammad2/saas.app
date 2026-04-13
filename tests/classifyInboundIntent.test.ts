@@ -119,6 +119,24 @@ describe("classifyInboundIntent", () => {
       expect(result.isNewProjectIntent).toBe(true);
       expect(result.reason).toContain("strong-override");
     });
+
+    it("regression: I'm working now on AI automation tool like n8n", () => {
+      const result = classifyInboundIntent("no subject", "I'm working now on AI automation tool like n8n");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("regression: I am working now on workflow automation for support", () => {
+      const result = classifyInboundIntent("no subject", "I am working now on workflow automation for support teams");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("regression: We're working right now on an automation platform", () => {
+      const result = classifyInboundIntent("no subject", "We're working right now on an automation platform for agencies");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
   });
 
   describe("strong override does not match vague messages", () => {

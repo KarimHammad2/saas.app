@@ -41,7 +41,7 @@ export interface InboundProcessingResult {
 
 function deriveProjectName(event: NormalizedEmailEvent): string {
   const extractSeedAfterWorkingOn = (text: string): string | null => {
-    const match = text.match(/\bi(?:['\u2019]?m|\s+am)\s+working\s+on\s+(.+)/i);
+    const match = text.match(/\bi(?:['\u2019]?m|\s+am)\s+working(?:\s+\w+){0,4}\s+on\s+(.+)/i);
     if (!match || !match[1]) {
       return null;
     }
