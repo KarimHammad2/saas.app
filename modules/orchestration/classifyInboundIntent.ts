@@ -34,7 +34,7 @@ const VAGUE_EXACT_PATTERNS: RegExp[] = [
  */
 const STRONG_OVERRIDE_PATTERNS: RegExp[] = [
   /\bi\s+(?:want|would\s+like|need)\s+to\s+(?:build|create|make|develop|launch|start)\b/i,
-  /\bi(?:'?m|\s+am)\s+(?:building|creating|developing|launching|making)\b/i,
+  /\bi(?:['\u2019]?m|\s+am)\s+(?:building|creating|developing|launching|making|working\s+on)\b/i,
   /\bwe(?:'?re|\s+are)\s+(?:building|creating|developing|launching)\b/i,
 ];
 

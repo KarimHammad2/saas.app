@@ -107,6 +107,18 @@ describe("classifyInboundIntent", () => {
       expect(result.isNewProjectIntent).toBe(true);
       expect(result.reason).toContain("strong-override");
     });
+
+    it("short clear intent: I'm working on a CRM for clinics", () => {
+      const result = classifyInboundIntent("no subject", "I'm working on a CRM for clinics");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("short clear intent: I am working on a scheduling app for salons", () => {
+      const result = classifyInboundIntent("no subject", "I am working on a scheduling app for salons");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
   });
 
   describe("strong override does not match vague messages", () => {

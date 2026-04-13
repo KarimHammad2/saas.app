@@ -301,6 +301,45 @@ describe("processInboundEmail", () => {
     expect(result.payload.emailKind).toBeDefined();
   });
 
+  it('creates a new project from "I\'m working on X" style kickoff email', async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_create_working_on",
+      provider: "resend",
+      providerEventId: "m_create_working_on",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "I'm working on a salon CRM",
+      inReplyTo: null,
+      references: [],
+      rawBody: "I'm working on a salon CRM with booking reminders and client notes.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["I'm working on a salon CRM with booking reminders and client notes."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", expect.stringContaining("Working"));
+    expect(result.context.projectId).toBe("p1");
+    expect(result.payload.emailKind).toBeDefined();
+  });
+
   it("resolves reply updates to the same project via In-Reply-To thread mapping", async () => {
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-thread" });
     repoState.getProjectState.mockResolvedValue({
