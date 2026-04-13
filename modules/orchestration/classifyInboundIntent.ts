@@ -21,7 +21,9 @@ export interface IntentClassification {
 const VAGUE_EXACT_PATTERNS: RegExp[] = [
   /^(hi+|hey+|hello+|howdy|greetings|good\s+(?:morning|afternoon|evening)|what'?s\s+up|sup|yo)\b[\s.!?]*$/i,
   /^(ok|okay|ok+|thanks|thank\s+you|thx|ty|noted|got\s+it|sounds\s+good|perfect|great|cool|sure|yep|nope|yes|no|bye|goodbye|ttyl|lol|haha|😊|👍|🙏)[\s.!?]*$/i,
+  /^(yes|yeah|yep|sure|ok(?:ay)?)(?:\s+do\s+it)?(?:\s+please)?[\s.!?]*$/i,
   /^(test|testing|test\s+email|email\s+test)[\s.!?]*$/i,
+  /^(asdf|qwerty|zxcv|asdfgh|qwertyuiop)[\s.!?]*$/i,
   /^(checking\s+in|just\s+checking|follow[\s-]?up|following\s+up|touching\s+base|pinging\s+you)[\s.!?]*$/i,
   /^(can\s+you\s+hear\s+me|is\s+this\s+working|did\s+you\s+get\s+this)[\s.!?]*$/i,
 ];
