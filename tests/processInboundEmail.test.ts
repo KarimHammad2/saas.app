@@ -335,7 +335,7 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", expect.stringContaining("Working"));
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Salon CRM Booking Reminders Client");
     expect(result.context.projectId).toBe("p1");
     expect(result.payload.emailKind).toBeDefined();
   });

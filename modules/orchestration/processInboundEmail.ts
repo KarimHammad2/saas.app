@@ -40,13 +40,35 @@ export interface InboundProcessingResult {
 }
 
 function deriveProjectName(event: NormalizedEmailEvent): string {
+  const extractSeedAfterWorkingOn = (text: string): string | null => {
+    const match = text.match(/\bi(?:['\u2019]?m|\s+am)\s+working\s+on\s+(.+)/i);
+    if (!match || !match[1]) {
+      return null;
+    }
+    const seed = match[1]
+      .split(/[.!?\n]/)[0]
+      .trim()
+      .replace(/^["'`(]+/, "")
+      .replace(/["'`),]+$/, "")
+      .trim();
+    return seed || null;
+  };
+
   const fromBody = (event.parsed.summary || event.rawBody).trim();
+  const bodyKickoffSeed = extractSeedAfterWorkingOn(fromBody);
+  if (bodyKickoffSeed) {
+    return generateShortProjectName(bodyKickoffSeed, "New Project");
+  }
   if (fromBody) {
     return generateShortProjectName(fromBody, "New Project");
   }
 
   const withoutToken = event.subject.replace(/\[PJT-[A-F0-9]{6,10}\]/gi, "").trim();
   const cleanedSubject = withoutToken.replace(/^re:\s*/i, "").trim();
+  const subjectKickoffSeed = extractSeedAfterWorkingOn(cleanedSubject);
+  if (subjectKickoffSeed) {
+    return generateShortProjectName(subjectKickoffSeed, "New Project");
+  }
   if (cleanedSubject) {
     return generateShortProjectName(cleanedSubject, "New Project");
   }
