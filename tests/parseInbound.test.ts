@@ -200,6 +200,45 @@ Decisions:
     expect(parsed.parsed.goals).toEqual(["Parse from message field"]);
   });
 
+  it("extracts attachments and flags PDF by filename", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Attachment test",
+      text: "Goals:\n- Review docs",
+      attachments: [{ filename: "brief.pdf", contentType: "application/octet-stream" }],
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.attachments).toEqual([{ filename: "brief.pdf", contentType: "application/octet-stream", isPdf: true }]);
+  });
+
+  it("extracts attachments and flags PDF by mime type", () => {
+    const payload = {
+      subject: "Attachment test",
+      text: "Goals:\n- Review docs",
+      data: {
+        from: "User <user@example.com>",
+        text: "Goals:\n- Review docs",
+        attachments: [{ filename: "brief.bin", contentType: "application/pdf" }],
+      },
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.attachments).toEqual([{ filename: "brief.bin", contentType: "application/pdf", isPdf: true }]);
+  });
+
+  it("does not flag non-PDF attachments", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Attachment test",
+      text: "Goals:\n- Review docs",
+      files: [{ name: "notes.txt", type: "text/plain" }],
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.attachments).toEqual([{ filename: "notes.txt", contentType: "text/plain", isPdf: false }]);
+  });
+
   it("throws when no supported body content fields are present", () => {
     const payload = {
       from: "karim@example.com",

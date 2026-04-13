@@ -89,6 +89,7 @@ describe("resendProvider.parseInbound", () => {
           text: "Summary:\nHydrated body\n\nGoals:\n- Continue flow",
           to: ["frank@example.com"],
           cc: [],
+          attachments: [{ filename: "scope.pdf", content_type: "application/pdf" }],
           message_id: "<msg_1>",
         },
         error: null,
@@ -119,8 +120,9 @@ describe("resendProvider.parseInbound", () => {
     });
 
     expect(event.from).toBe("karim@example.com");
-    expect(event.parsed.summary).toBe("Hydrated body");
+    expect(event.parsed.summary).toBeNull();
     expect(event.parsed.goals).toEqual(["Continue flow"]);
+    expect(event.attachments).toEqual([{ filename: "scope.pdf", contentType: "application/pdf", isPdf: true }]);
     expect(getReceivedEmail).toHaveBeenCalledOnce();
   });
 });

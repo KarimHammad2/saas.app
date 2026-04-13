@@ -3,10 +3,20 @@ import { log } from "@/lib/log";
 import { MemoryRepository } from "@/modules/memory/repository";
 import { ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
-import { sendClarificationEmail } from "@/modules/orchestration/sendClarificationEmail";
+import { sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 
 export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
+  if (event.attachments?.some((attachment) => attachment.isPdf)) {
+    log.info("inbound email includes PDF attachment — sending resubmission reply", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      attachmentCount: event.attachments.length,
+    });
+    await sendPdfResubmissionEmail(event.from, event.subject);
+    return { userId: null, projectId: null, duplicate: false, clarificationSent: true };
+  }
+
   let result;
   try {
     result = await processInboundEmail(event);

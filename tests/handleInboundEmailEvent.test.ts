@@ -3,7 +3,7 @@ import type { InboundProcessingResult } from "@/modules/orchestration/processInb
 import { ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
-import { sendClarificationEmail } from "@/modules/orchestration/sendClarificationEmail";
+import { sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 const { storeOutboundThreadMapping, recordOutboundEmailEvent } = vi.hoisted(() => ({
@@ -28,11 +28,13 @@ vi.mock("@/modules/output/sendProjectEmail", () => ({
 
 vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
   sendClarificationEmail: vi.fn(),
+  sendPdfResubmissionEmail: vi.fn(),
 }));
 
 const mockedProcessInboundEmail = vi.mocked(processInboundEmail);
 const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
+const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
 
 describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
@@ -204,6 +206,24 @@ describe("handleInboundEmailEvent", () => {
       clarificationSent: true,
     });
     expect(mockedSendClarificationEmail).toHaveBeenCalledWith("user@example.com", "quick update");
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends PDF resubmission email and skips inbound processing when attachment is PDF", async () => {
+    const response = await handleInboundEmailEvent({
+      from: "user@example.com",
+      subject: "Please review this",
+      attachments: [{ filename: "scope.pdf", contentType: "application/pdf", isPdf: true }],
+    } as never);
+
+    expect(response).toMatchObject({
+      userId: null,
+      projectId: null,
+      duplicate: false,
+      clarificationSent: true,
+    });
+    expect(mockedSendPdfResubmissionEmail).toHaveBeenCalledWith("user@example.com", "Please review this");
+    expect(mockedProcessInboundEmail).not.toHaveBeenCalled();
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
   });
 });

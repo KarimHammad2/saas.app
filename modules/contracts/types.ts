@@ -117,6 +117,12 @@ export interface NormalizedEmailEvent {
   inReplyTo: string | null;
   /** Additional Message-IDs from References header (normalized). */
   references: string[];
+  /** Attachment metadata extracted from provider payload (content is never stored). */
+  attachments?: Array<{
+    filename: string | null;
+    contentType: string | null;
+    isPdf: boolean;
+  }>;
   rawBody: string;
   parsed: {
     summary: string | null;

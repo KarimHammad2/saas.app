@@ -55,6 +55,11 @@ function toObjectOrNull(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function toStringOrNull(value: unknown): string | null {
+  const normalized = toStringOrEmpty(value);
+  return normalized || null;
+}
+
 function toObjectFromUnknown(value: unknown): Record<string, unknown> | null {
   const objectValue = toObjectOrNull(value);
   if (objectValue) {
@@ -539,6 +544,119 @@ function extractBodyContent(source: Record<string, unknown>): string {
   return "";
 }
 
+type ParsedInboundAttachment = {
+  filename: string | null;
+  contentType: string | null;
+  isPdf: boolean;
+};
+
+function attachmentFilename(value: Record<string, unknown>): string | null {
+  return (
+    toStringOrNull(value.filename) ||
+    toStringOrNull(value.fileName) ||
+    toStringOrNull(value.name) ||
+    toStringOrNull(value.originalFilename) ||
+    toStringOrNull(value.original_filename)
+  );
+}
+
+function attachmentContentType(value: Record<string, unknown>): string | null {
+  return (
+    toStringOrNull(value.contentType) ||
+    toStringOrNull(value.content_type) ||
+    toStringOrNull(value.mimeType) ||
+    toStringOrNull(value.mime_type) ||
+    toStringOrNull(value.type)
+  );
+}
+
+function isPdfAttachment(filename: string | null, contentType: string | null): boolean {
+  if (filename?.toLowerCase().endsWith(".pdf")) {
+    return true;
+  }
+  if (contentType?.toLowerCase().includes("application/pdf")) {
+    return true;
+  }
+  return false;
+}
+
+function parseAttachmentCandidate(value: unknown): ParsedInboundAttachment | null {
+  if (typeof value === "string") {
+    const filename = toStringOrNull(value);
+    if (!filename) {
+      return null;
+    }
+    return {
+      filename,
+      contentType: null,
+      isPdf: isPdfAttachment(filename, null),
+    };
+  }
+
+  const objectValue = toObjectOrNull(value);
+  if (!objectValue) {
+    return null;
+  }
+
+  const filename = attachmentFilename(objectValue);
+  const contentType = attachmentContentType(objectValue);
+  if (!filename && !contentType) {
+    return null;
+  }
+
+  return {
+    filename,
+    contentType,
+    isPdf: isPdfAttachment(filename, contentType),
+  };
+}
+
+function extractInboundAttachments(root: Record<string, unknown>, source: Record<string, unknown>): ParsedInboundAttachment[] {
+  const candidateCollections = [root.attachments, source.attachments, root.files, source.files, root.data, source.data];
+  const parsedAttachments: ParsedInboundAttachment[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidateCollections) {
+    const objectCandidate = toObjectOrNull(candidate);
+    if (objectCandidate) {
+      const nestedArrayCandidate = objectCandidate.attachments ?? objectCandidate.files;
+      if (Array.isArray(nestedArrayCandidate)) {
+        for (const attachmentCandidate of nestedArrayCandidate) {
+          const parsed = parseAttachmentCandidate(attachmentCandidate);
+          if (!parsed) {
+            continue;
+          }
+          const key = `${parsed.filename ?? ""}|${parsed.contentType ?? ""}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          parsedAttachments.push(parsed);
+        }
+      }
+      continue;
+    }
+
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+    for (const attachmentCandidate of candidate) {
+      const parsed = parseAttachmentCandidate(attachmentCandidate);
+      if (!parsed) {
+        continue;
+      }
+      const key = `${parsed.filename ?? ""}|${parsed.contentType ?? ""}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      parsedAttachments.push(parsed);
+    }
+  }
+
+  return parsedAttachments;
+}
+
 export function parseNormalizedContent(content: string) {
   const normalizedContent = normalizeSectionHeadings(content);
   const goals = dedupeListValues(toBulletList(extractSection(normalizedContent, "Goals")));
@@ -721,6 +839,7 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
   const timestamp = extractEventTimestamp(root, source);
   const providerEventId = messageId || stableProviderEventId(provider, senderEmail, subject, cleanedBody);
   const parsed = parseNormalizedContent(cleanedBody);
+  const attachments = extractInboundAttachments(root, source);
 
   if (parsed.rpmSuggestion) {
     parsed.rpmSuggestion.from = senderEmail;
@@ -743,6 +862,7 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
     subject,
     inReplyTo,
     references,
+    attachments,
     rawBody: cleanedBody,
     parsed,
   };

@@ -25,6 +25,9 @@ When suggesting updates that the user may send via email:
 
 You MUST follow this exact structure:
 
+Project Name:
+- ...
+
 Goals:
 - ...
 

@@ -57,6 +57,8 @@ export function normalizeResendPayload(payload: UnknownObject): UnknownObject {
     cc: source.cc ?? root.cc,
     messageId: source.messageId ?? root.messageId ?? source["Message-Id"] ?? root["Message-Id"] ?? source.message_id ?? root.message_id ?? source.email_id,
     email_id: source.email_id ?? root.email_id ?? root.id,
+    attachments: source.attachments ?? root.attachments,
+    files: source.files ?? root.files,
     type: root.type,
   };
 }
@@ -87,5 +89,7 @@ export function normalizeSesPayload(payload: UnknownObject): UnknownObject {
     to: commonHeaders.to ?? source.to ?? mail.destination,
     cc: commonHeaders.cc ?? source.cc,
     messageId: mail.messageId ?? source.messageId ?? source["Message-Id"],
+    attachments: source.attachments ?? root.attachments,
+    files: source.files ?? root.files,
   };
 }

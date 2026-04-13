@@ -79,6 +79,7 @@ async function hydrateResendBodyIfNeeded(payload: UnknownObject): Promise<Unknow
       message: payload.message ?? received.text,
       to: payload.to ?? toStringArray(received.to),
       cc: payload.cc ?? toStringArray(received.cc),
+      attachments: payload.attachments ?? received.attachments,
       messageId: payload.messageId ?? received.message_id,
       email_id: payload.email_id ?? received.id ?? emailId,
     };
