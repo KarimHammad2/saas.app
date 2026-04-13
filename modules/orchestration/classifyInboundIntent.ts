@@ -33,22 +33,32 @@ const VAGUE_EXACT_PATTERNS: RegExp[] = [
  * Runs after vague checks so greetings/noise cannot match.
  */
 const STRONG_OVERRIDE_PATTERNS: RegExp[] = [
-  /\bi\s+(?:want|would\s+like|need)\s+to\s+(?:build|create|make|develop|launch|start)\b/i,
-  /\bi(?:['\u2019]?m|\s+am)\s+(?:building|creating|developing|launching|making|working(?:\s+\w+){0,4}\s+on)\b/i,
+  /\b(?:start|create|begin|initialize)\s+(?:a|the|new)\s+project\b/i,
+  /\b(?:start|create|begin|initialize)\s+project\b/i,
+  /\bkick\s+off\s+(?:a|the|new)\s+project\b/i,
+  /\bkick\s+off\s+project\b/i,
+  /\bnew\s+project\b/i,
+  /\bi\s+(?:want|would\s+like|(?:['\u2019]?d)\s+like|need)\s+to\s+(?:build|create|make|develop|design|launch|start|plan|setup|set\s+up|automate|organize|manage|track)\b/i,
+  /\bi\s+need\s+help\s+with\b/i,
+  /\b(?:build|create|develop|design|launch|plan|setup|set\s+up|automate|organize|manage|track)\s+(?:a|an|the|my|our|new)\s+(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|project)\b/i,
+  /\b(?:build|create|develop|design|launch|plan|setup|set\s+up|automate|organize|manage|track)\s+(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|project)\b/i,
+  /\bi(?:['\u2019]?m|\s+am)\s+(?:starting|planning|building|creating|developing|launching|making|working(?:\s+\w+){0,4}\s+on)\b/i,
   /\bwe(?:'?re|\s+are)\s+(?:building|creating|developing|launching|working(?:\s+\w+){0,4}\s+on)\b/i,
 ];
 
 /** Positive signals that strongly suggest new project intent. */
 const PROJECT_INTENT_PATTERNS: RegExp[] = [
-  /\bi\s+(?:want|need|would\s+like|am\s+looking)\s+to\s+(?:build|create|develop|make|design|start|launch|work\s+on)\b/i,
+  /\bi\s+(?:want|need|would\s+like|(?:['\u2019]?d)\s+like|am\s+looking)\s+to\s+(?:build|create|develop|make|design|start|launch|plan|setup|set\s+up|automate|organize|manage|track|work\s+on)\b/i,
   /\b(?:new\s+project|project\s+idea|my\s+(?:next\s+)?(?:project|idea)|startup\s+idea)\b/i,
   /\b(?:idea\s*:|project\s*:)\b/i,
   /\b(?:building|developing|creating|designing|launching|starting)\s+(?:a|an|the|our|my)\b/i,
   /\bworking(?:\s+\w+){0,4}\s+on\s+([a-z0-9][\w-]*)(?:\s+[a-z0-9][\w-]*){0,8}\b/i,
   /\b(?:help\s+(?:me|us)\s+(?:with|build|create|develop|design|plan|structure))\b/i,
   /\bneed\s+(?:someone\s+to\s+help|help\s+(?:with|us|me)|to\s+(?:build|create|develop|design|plan))\b/i,
+  /\b(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|ai\s+tool)\b/i,
   /\b(?:saas|mvp|app\s+idea|web\s+app|mobile\s+app|platform|marketplace|tool\s+(?:for|that)|system\s+for|software\s+for|api\s+for)\b/i,
   /\b(?:workflow\s+automation|automation\s+tool|automation\s+workflow|orchestration|like\s+(?:n8n|zapier|make(?:\.com)?|integromat))\b/i,
+  /\b(?:build|create|develop|design|launch|plan|setup|set\s+up|automate|organize|manage|track)\s+(?:a|an|the|my|our|new)?\s*(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|project)\b/i,
   /\b(?:i\s+have\s+an?\s+idea|here'?s?\s+(?:the\s+)?(?:project|idea|plan|concept))\b/i,
   /\b(?:roadmap|sprint|backlog|feature\s+list|user\s+story|milestone)\b/i,
 ];

@@ -137,6 +137,72 @@ describe("classifyInboundIntent", () => {
       expect(result.isNewProjectIntent).toBe(true);
       expect(result.reason).toContain("strong-override");
     });
+
+    it("direct phrase: start project", () => {
+      const result = classifyInboundIntent("no subject", "Please start project for an AI tool that manages support tickets");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("direct phrase: kick off a project", () => {
+      const result = classifyInboundIntent("no subject", "Let's kick off a project for a CRM dashboard");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("direct phrase: initialize project", () => {
+      const result = classifyInboundIntent("no subject", "Can you initialize project for a website analytics platform?");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("natural language: I'm planning", () => {
+      const result = classifyInboundIntent("no subject", "I'm planning a SaaS product for salon scheduling");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("natural language: I need help with", () => {
+      const result = classifyInboundIntent("no subject", "I need help with a business automation dashboard for support operations");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("natural language: I'd like to build", () => {
+      const result = classifyInboundIntent("no subject", "I'd like to build a website for booking and payments");
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
+    it("keyword signal: AI tool", () => {
+      const result = classifyInboundIntent("no subject", "Project idea: AI tool for organizing sales calls");
+      expect(result.isNewProjectIntent).toBe(true);
+    });
+
+    it("action verb context: setup", () => {
+      const result = classifyInboundIntent("no subject", "We need to setup a dashboard for tracking agency KPIs");
+      expect(result.isNewProjectIntent).toBe(true);
+    });
+
+    it("action verb context: automate", () => {
+      const result = classifyInboundIntent("no subject", "I want to automate a CRM workflow for onboarding");
+      expect(result.isNewProjectIntent).toBe(true);
+    });
+
+    it("action verb context: organize", () => {
+      const result = classifyInboundIntent("no subject", "Please organize a project for managing API integrations");
+      expect(result.isNewProjectIntent).toBe(true);
+    });
+
+    it("action verb context: manage", () => {
+      const result = classifyInboundIntent("no subject", "I need a platform to manage business operations");
+      expect(result.isNewProjectIntent).toBe(true);
+    });
+
+    it("action verb context: track", () => {
+      const result = classifyInboundIntent("no subject", "Let's track project milestones in a product dashboard");
+      expect(result.isNewProjectIntent).toBe(true);
+    });
   });
 
   describe("strong override does not match vague messages", () => {
@@ -147,6 +213,11 @@ describe("classifyInboundIntent", () => {
 
     it("Something about fitness — too vague / too short", () => {
       const result = classifyInboundIntent("no subject", "Something about fitness");
+      expect(result.isNewProjectIntent).toBe(false);
+    });
+
+    it("generic start without project context", () => {
+      const result = classifyInboundIntent("no subject", "We should start tomorrow morning.");
       expect(result.isNewProjectIntent).toBe(false);
     });
   });
