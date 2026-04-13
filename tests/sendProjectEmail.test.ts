@@ -90,7 +90,7 @@ describe("sendProjectEmail", () => {
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
+    expect(call?.subject).toBe("Your project has been initialized — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");

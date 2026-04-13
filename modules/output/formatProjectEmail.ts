@@ -5,13 +5,17 @@ export interface FormattedProjectEmail {
   body: string;
 }
 
+function resolveBaseSubject(payload: ProjectEmailPayload): string {
+  const isKickoff = payload.emailKind ? payload.emailKind === "kickoff" : payload.isWelcome;
+  return isKickoff ? "Your project has been initialized" : "Project Update";
+}
+
 /**
  * Minimal human-facing email: full project state lives in the markdown attachment only.
  */
-export function formatProjectEmail(_payload: ProjectEmailPayload): FormattedProjectEmail {
-  void _payload;
+export function formatProjectEmail(payload: ProjectEmailPayload): FormattedProjectEmail {
   return {
-    subject: "Project Update",
+    subject: resolveBaseSubject(payload),
     body: `
 Here is your updated project file.
 
