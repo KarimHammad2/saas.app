@@ -1,4 +1,4 @@
-import type { NormalizedEmailEvent, TransactionEvent } from "@/modules/contracts/types";
+import type { NormalizedEmailEvent, ProjectStatus, TransactionEvent } from "@/modules/contracts/types";
 import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { filterIgnoredNoteLines, isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
@@ -26,6 +26,8 @@ const MEMORY_SECTION_LABELS = [
 
 const SPECIAL_SECTION_LABELS = [
   "Transaction",
+  "Project Status",
+  "Status",
   "UserProfile",
   "Context",
   "UserProfile Suggestion",
@@ -379,6 +381,14 @@ function toBulletList(content: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeProjectStatus(content: string): ProjectStatus | null {
+  const match = firstMeaningfulLine(content).match(/\b(active|paused|completed)\b/i);
+  if (!match?.[1]) {
+    return null;
+  }
+  return match[1].toLowerCase() as ProjectStatus;
+}
+
 function dedupeListValues(values: string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -659,6 +669,9 @@ function extractInboundAttachments(root: Record<string, unknown>, source: Record
 
 export function parseNormalizedContent(content: string) {
   const normalizedContent = normalizeSectionHeadings(content);
+  const projectStatus = normalizeProjectStatus(
+    extractSection(normalizedContent, "Project Status") || extractSection(normalizedContent, "Status"),
+  );
   const goals = dedupeListValues(toBulletList(extractSection(normalizedContent, "Goals")));
   const actionItems = dedupeListValues(toBulletList(extractSection(normalizedContent, "Tasks")));
   const completedTasks = dedupeListValues(toBulletList(extractSection(normalizedContent, "Completed")));
@@ -673,6 +686,7 @@ export function parseNormalizedContent(content: string) {
   const projectName = parseProjectNameUpdate(content, normalizedContent);
 
   const hasMeaning =
+    Boolean(projectStatus) ||
     goals.length > 0 ||
     actionItems.length > 0 ||
     completedTasks.length > 0 ||
@@ -702,6 +716,7 @@ export function parseNormalizedContent(content: string) {
   return {
     summary: normalizedSummary || null,
     currentStatus: null,
+    projectStatus,
     goals,
     actionItems,
     completedTasks,

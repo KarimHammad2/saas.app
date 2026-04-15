@@ -1,5 +1,6 @@
 export type Tier = "freemium" | "solopreneur" | "agency";
 export type PlanPackage = "solo" | "agency";
+export type ProjectStatus = "active" | "paused" | "completed";
 
 export type ActorRole = "user" | "rpm" | "master";
 
@@ -56,6 +57,7 @@ export interface ProjectContext {
   /** Short code for subjects and routing, e.g. pjt-a1b2c3d4 (display as [PJT-A1B2C3D4]). */
   projectCode?: string;
   projectName?: string;
+  projectStatus: ProjectStatus;
   ownerDisplayName?: string;
   ownerEmail?: string;
   summary: string;
@@ -127,6 +129,7 @@ export interface NormalizedEmailEvent {
   parsed: {
     summary: string | null;
     currentStatus: string | null;
+    projectStatus?: ProjectStatus | null;
     goals: string[];
     actionItems: string[];
     completedTasks: string[];

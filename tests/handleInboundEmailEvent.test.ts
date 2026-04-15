@@ -49,6 +49,7 @@ describe("handleInboundEmailEvent", () => {
         context: {
           projectId: "p1",
           userId: "u1",
+          projectStatus: "active",
           summary: "s",
           initialSummary: "s",
           currentStatus: "",
@@ -102,6 +103,7 @@ describe("handleInboundEmailEvent", () => {
         context: {
           projectId: "p1",
           userId: "u1",
+          projectStatus: "active",
           summary: "s",
           initialSummary: "s",
           currentStatus: "",
@@ -147,6 +149,7 @@ describe("handleInboundEmailEvent", () => {
         context: {
           projectId: "p1",
           userId: "u1",
+          projectStatus: "active",
           summary: "s",
           initialSummary: "s",
           currentStatus: "",

@@ -5,6 +5,7 @@ import { generateRPMSuggestions } from "@/modules/domain/rpmSuggestions";
 const baseProject = (): ProjectContext => ({
   projectId: "p1",
   userId: "u1",
+  projectStatus: "active",
   summary: "",
   initialSummary: "",
   currentStatus: "",

@@ -30,6 +30,7 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
       projectName: "AI Real Estate Copilot",
+      projectStatus: "active",
       summary: "AI SaaS for real estate",
       initialSummary: "AI SaaS for real estate",
       currentStatus: "MVP in progress",
@@ -98,7 +99,11 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("## Project Metadata");
     expect(attachment?.content).toContain("Project Name:");
     expect(attachment?.content).toContain("- AI Real Estate Copilot");
+    expect(attachment?.content).toContain("Project Status:");
+    expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Instructions to LLM");
+    expect(attachment?.content).toContain("Project Status:");
+    expect(attachment?.content).toContain("- active");
     expect(attachment?.content).toContain("## Goals");
     expect(attachment?.content).toContain("## Decisions");
     expect(attachment?.content).toContain("### In Progress");

@@ -28,6 +28,7 @@ describe("handleIncomingEmail", () => {
         context: {
           projectId: "p1",
           userId: "u1",
+          projectStatus: "active",
           summary: "hello",
           currentStatus: "",
           goals: [],

@@ -9,6 +9,7 @@ function buildPayload(): ProjectEmailPayload {
       projectId: "p1",
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
       summary: "Build a lightweight CRM for agencies.",
       initialSummary: "Build a lightweight CRM for agencies.",
       currentStatus: "",
@@ -46,8 +47,11 @@ function buildPayload(): ProjectEmailPayload {
 describe("generateProjectDocument", () => {
   it("keeps stable LLM-ready section ordering", () => {
     const content = generateProjectDocument(buildPayload());
+    expect(content).toContain("Project Status:");
+    expect(content).toContain("- Active");
     expect(content).toContain("## Instructions to LLM");
     expect(content).toContain("## How to generate updates for the system");
+    expect(content).toContain("Project Status:\n- active");
     expect(content).toContain("Rules:");
     expect(content).toContain("- Do NOT invent new section names");
     expect(content).toContain('User input:\n"Auth is done"');

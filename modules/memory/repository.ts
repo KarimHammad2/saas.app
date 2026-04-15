@@ -2,6 +2,7 @@ import { getMasterUserEmail } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase";
 import type {
   ProjectContext,
+  ProjectStatus,
   RPMSuggestion,
   RPMSuggestionSource,
   Tier,
@@ -40,6 +41,7 @@ export interface ProjectRecord {
   user_id: string;
   owner_email: string;
   name: string;
+  status: ProjectStatus;
   project_code: string;
   remainder_balance: number;
   reminder_balance: number;
@@ -99,6 +101,18 @@ function isEmail(value: string): boolean {
 
 function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function normalizeProjectStatus(value: string | null | undefined): ProjectStatus {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "paused":
+      return "paused";
+    case "completed":
+      return "completed";
+    case "active":
+    default:
+      return "active";
+  }
 }
 
 function asStringArray(value: unknown): string[] {
@@ -566,7 +580,7 @@ export class MemoryRepository {
     }
     const { data: existing, error: findError } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: true })
       .limit(1)
@@ -582,8 +596,8 @@ export class MemoryRepository {
 
     const { data: created, error: createError } = await this.supabase
       .from("projects")
-      .insert({ user_id: userId, owner_email: ownerEmail, name: "Primary Project" })
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .insert({ user_id: userId, owner_email: ownerEmail, name: "Primary Project", status: "active" })
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .single<ProjectRecord>();
 
     if (createError || !created) {
@@ -624,7 +638,7 @@ export class MemoryRepository {
     }
     const { data, error } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("project_code", normalized)
       .eq("user_id", userId)
       .maybeSingle<ProjectRecord>();
@@ -658,7 +672,7 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("id", mapRow.project_id)
       .eq("user_id", userId)
       .maybeSingle<ProjectRecord>();
@@ -692,7 +706,7 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("id", mapRow.project_id)
       .maybeSingle<ProjectRecord>();
 
@@ -712,7 +726,7 @@ export class MemoryRepository {
     }
     const { data, error } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("project_code", normalized)
       .maybeSingle<ProjectRecord>();
 
@@ -739,7 +753,7 @@ export class MemoryRepository {
   async findProjectsOwnedByUser(userId: string): Promise<ProjectRecord[]> {
     const { data, error } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .eq("user_id", userId);
 
     if (error) {
@@ -759,7 +773,7 @@ export class MemoryRepository {
 
     const { data, error } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .contains("participant_emails", [n]);
 
     if (error) {
@@ -884,8 +898,8 @@ export class MemoryRepository {
     const trimmed = name.trim() || "New Project";
     const { data: created, error: createError } = await this.supabase
       .from("projects")
-      .insert({ user_id: userId, owner_email: ownerEmail, name: trimmed.slice(0, 200) })
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .insert({ user_id: userId, owner_email: ownerEmail, name: trimmed.slice(0, 200), status: "active" })
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
       .single<ProjectRecord>();
 
     if (createError || !created) {
@@ -920,6 +934,14 @@ export class MemoryRepository {
     const { error } = await this.supabase.from("projects").update({ name: normalized }).eq("id", projectId);
     if (error) {
       throw new Error(`Failed to update project name: ${error.message}`);
+    }
+  }
+
+  async updateProjectStatus(projectId: string, status: ProjectStatus): Promise<void> {
+    const normalized = normalizeProjectStatus(status);
+    const { error } = await this.supabase.from("projects").update({ status: normalized }).eq("id", projectId);
+    if (error) {
+      throw new Error(`Failed to update project status: ${error.message}`);
     }
   }
 
@@ -1749,13 +1771,14 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, project_code, remainder_balance, reminder_balance, usage_count, participant_emails")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, participant_emails")
       .eq("id", projectId)
       .single<{
         id: string;
         user_id: string;
         owner_email: string | null;
         name: string;
+        status: ProjectStatus;
         project_code: string;
         remainder_balance: number;
         reminder_balance: number;
@@ -1806,6 +1829,7 @@ export class MemoryRepository {
       userId: project.user_id,
       projectCode: typeof project.project_code === "string" ? project.project_code : undefined,
       projectName: typeof project.name === "string" ? project.name : undefined,
+      projectStatus: normalizeProjectStatus(project.status),
       ownerDisplayName: userRow?.display_name?.trim() ? userRow.display_name : undefined,
       ownerEmail:
         typeof project.owner_email === "string" && project.owner_email.trim()

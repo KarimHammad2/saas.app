@@ -28,6 +28,9 @@ You MUST follow this exact structure:
 Project Name:
 - ...
 
+Project Status:
+- active
+
 Goals:
 - ...
 
@@ -51,6 +54,7 @@ Rules:
 - Do NOT rewrite the full project
 - Do NOT include explanations outside sections
 - Do NOT invent new section names
+- Use only these status values when updating Project Status: active, paused, completed
 - Keep updates concise and structured
 
 ---
@@ -61,6 +65,9 @@ User input:
 "Auth is done"
 
 Correct output:
+
+Project Status:
+- completed
 
 Completed:
 - Build authentication system`;
@@ -89,6 +96,19 @@ function formatTasksCompleted(completedTasks: string[]): string {
 
 function normalizeSuggestionLine(content: string): string {
   return content.replace(/\s+/g, " ").trim();
+}
+
+function formatProjectStatusLabel(status: string | undefined): string {
+  const normalized = (status || "active").trim().toLowerCase();
+  switch (normalized) {
+    case "paused":
+      return "Paused";
+    case "completed":
+      return "Completed";
+    case "active":
+    default:
+      return "Active";
+  }
 }
 
 function formatPendingSuggestions(payload: ProjectEmailPayload): string {
@@ -128,6 +148,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
   const projectName = (context.projectName || "").trim() || "Untitled Project";
+  const projectStatus = formatProjectStatusLabel(context.projectStatus);
 
   const goalsBlock = formatBulletSection(context.goals, "(none)");
   const decisionsBlock = formatBulletSection(context.decisions, "(none)");
@@ -150,6 +171,9 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     "Project Name:",
     `- ${projectName}`,
+    "",
+    "Project Status:",
+    `- ${projectStatus}`,
     "",
     "---",
     "",

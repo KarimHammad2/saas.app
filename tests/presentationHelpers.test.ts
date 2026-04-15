@@ -5,6 +5,7 @@ import { computeProjectProgress } from "@/modules/output/presentationHelpers";
 const emptyContext = (): ProjectContext => ({
   projectId: "p1",
   userId: "u1",
+  projectStatus: "active",
   summary: "",
   initialSummary: "",
   currentStatus: "",

@@ -64,6 +64,7 @@ describe("GET /api/cron/reminders", () => {
     getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
+      projectStatus: "active",
       summary: "s",
       initialSummary: "s",
       currentStatus: "",
@@ -112,6 +113,7 @@ describe("GET /api/cron/reminders", () => {
     getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
+      projectStatus: "active",
       summary: "s",
       initialSummary: "s",
       currentStatus: "",

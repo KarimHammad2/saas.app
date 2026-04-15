@@ -37,6 +37,9 @@ Tasks:
 Decisions:
 - Use Supabase
 
+Project Status:
+- Paused
+
 Risks:
 - Timeline slippage
 
@@ -69,6 +72,7 @@ Reject suggestion def-456
     expect(parsed.parsed.risks).toEqual(["Timeline slippage"]);
     expect(parsed.parsed.recommendations).toEqual([]);
     expect(parsed.parsed.currentStatus).toBeNull();
+    expect(parsed.parsed.projectStatus).toBe("paused");
     expect(parsed.parsed.notes).toEqual([]);
     expect(parsed.parsed.userProfileContext).toContain("Prefer concise");
     expect(parsed.parsed.rpmSuggestion?.content).toContain("weekly updates");
@@ -325,15 +329,15 @@ Decisions:
     expect(parsed.parsed.summary).toBe("Potential SaaS platform for restaurants.");
   });
 
-  it("ignores Summary/Status sections under strict memory contract", () => {
+  it("parses canonical Project Status section while keeping Summary strict", () => {
     const payload = {
       from: "user@example.com",
       subject: "Status test",
       text: `Summary:
 One line overview.
 
-Status:
-Building MVP — on track.
+Project Status:
+Completed
 
 Notes:
 - One line overview.
@@ -344,7 +348,33 @@ Notes:
     const parsed = parseInbound(payload, "resend");
     expect(parsed.parsed.summary).toBeNull();
     expect(parsed.parsed.currentStatus).toBeNull();
+    expect(parsed.parsed.projectStatus).toBe("completed");
     expect(parsed.parsed.notes).toEqual(["One line overview.", "Extra detail only in notes."]);
+  });
+
+  it("normalizes lifecycle status values case-insensitively", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "Status normalization",
+      text: `Project Status:
+- ACTIVE`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.projectStatus).toBe("active");
+    expect(parsed.parsed.currentStatus).toBeNull();
+  });
+
+  it("still accepts legacy Status label for backwards compatibility", () => {
+    const payload = {
+      from: "user@example.com",
+      subject: "Legacy status",
+      text: `Status:
+- paused`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.projectStatus).toBe("paused");
   });
 
   it("ignores unknown sections and Task aliases for memory updates", () => {

@@ -18,6 +18,7 @@ const defaultMockProject = {
   user_id: "u1",
   owner_email: "user@example.com",
   name: "Primary Project",
+  status: "active",
   project_code: "pjt-a1b2c3d4",
   remainder_balance: 0,
   reminder_balance: 3,
@@ -52,6 +53,7 @@ const repoState = {
   updateRecommendations: vi.fn(),
   updateNotes: vi.fn(),
   updateCurrentStatus: vi.fn(),
+  updateProjectStatus: vi.fn(),
   updateProjectName: vi.fn(),
   storeUserProfileContext: vi.fn(),
   getUserProfile: vi.fn(),
@@ -111,6 +113,7 @@ vi.mock("@/modules/memory/repository", async () => {
       updateRecommendations = repoState.updateRecommendations;
       updateNotes = repoState.updateNotes;
       updateCurrentStatus = repoState.updateCurrentStatus;
+      updateProjectStatus = repoState.updateProjectStatus;
       updateProjectName = repoState.updateProjectName;
       storeUserProfileContext = repoState.storeUserProfileContext;
       getUserProfile = repoState.getUserProfile;
@@ -175,6 +178,7 @@ describe("processInboundEmail", () => {
       projectId: "p1",
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
       ownerEmail: "user@example.com",
       summary: "summary",
       initialSummary: "summary",
@@ -260,6 +264,47 @@ describe("processInboundEmail", () => {
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
     expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalled();
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
+  });
+
+  it("persists canonical project lifecycle status updates", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_status",
+      provider: "resend",
+      providerEventId: "m_status",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Status:\n- paused",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        projectStatus: "paused",
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+
+    expect(repoState.updateProjectStatus).toHaveBeenCalledWith("p1", "paused");
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Project status updated: Paused");
   });
 
   it('creates a new project from "I want to build X" style kickoff email', async () => {

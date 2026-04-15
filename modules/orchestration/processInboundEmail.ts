@@ -243,6 +243,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   if (event.parsed.summary && getAllowOverviewOverride()) {
     await repo.updateSummaryDisplay(project.id, event.parsed.summary);
   }
+  if (event.parsed.projectStatus) {
+    await repo.updateProjectStatus(project.id, event.parsed.projectStatus);
+    const projectStatusLabel = `${event.parsed.projectStatus[0]?.toUpperCase() ?? ""}${event.parsed.projectStatus.slice(1)}`;
+    await repo.appendRecentUpdate(project.id, `Project status updated: ${projectStatusLabel}`);
+  }
   if (event.parsed.currentStatus) {
     await repo.updateCurrentStatus(project.id, event.parsed.currentStatus);
     await repo.appendRecentUpdate(project.id, `Status updated: ${event.parsed.currentStatus}`);
