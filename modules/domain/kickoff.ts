@@ -164,12 +164,13 @@ function defaultKickoffTasks(summary: string): string[] {
 export function buildKickoffSummary(event: NormalizedEmailEvent): KickoffSummary {
   const baseOverview = cleanOverviewText(event.parsed.summary || event.rawBody);
   const seedMatch = extractKickoffSeed(event.rawBody);
-  const seedSentence = seedMatch.seed ? cleanOverviewText(`Project focus: ${seedMatch.seed}.`) : "";
+  const seed = seedMatch.seed;
+  const seedSentence = seed ? cleanOverviewText(`Project focus: ${seed}.`) : "";
   const shouldAppendBaseOverview =
     Boolean(seedSentence) &&
     Boolean(baseOverview) &&
-    Boolean(seedMatch.seed) &&
-    !baseOverview.toLowerCase().includes(seedMatch.seed.toLowerCase());
+    Boolean(seed) &&
+    !baseOverview.toLowerCase().includes(seed.toLowerCase());
   const summarySource = shouldAppendBaseOverview
     ? `${seedSentence} ${baseOverview}`
     : seedSentence || baseOverview || event.rawBody;
