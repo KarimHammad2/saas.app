@@ -102,7 +102,7 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Instructions to LLM");
     expect(attachment?.content).toContain("Project Status:");
-    expect(attachment?.content).toContain("- active");
+    expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Goals");
     expect(attachment?.content).toContain("## Decisions");
     expect(attachment?.content?.indexOf("## Decisions")).toBeLessThan(attachment?.content?.lastIndexOf("Project Status:\n- Active") ?? -1);
