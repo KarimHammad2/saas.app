@@ -28,9 +28,6 @@ You MUST follow this exact structure:
 Project Name:
 - ...
 
-Project Status:
-- active
-
 Goals:
 - ...
 
@@ -45,6 +42,9 @@ Risks:
 
 Decisions:
 - ...
+
+Project Status:
+- active
 
 Notes:
 - ...
@@ -65,9 +65,6 @@ User input:
 "Auth is done"
 
 Correct output:
-
-Project Status:
-- completed
 
 Completed:
 - Build authentication system`;
@@ -172,9 +169,6 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "Project Name:",
     `- ${projectName}`,
     "",
-    "Project Status:",
-    `- ${projectStatus}`,
-    "",
     "---",
     "",
     "## Instructions to LLM",
@@ -214,6 +208,9 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "## Decisions",
     "",
     decisionsBlock,
+    "",
+    "Project Status:",
+    `- ${projectStatus}`,
     "",
     "---",
     "",

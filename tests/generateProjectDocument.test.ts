@@ -47,8 +47,6 @@ function buildPayload(): ProjectEmailPayload {
 describe("generateProjectDocument", () => {
   it("keeps stable LLM-ready section ordering", () => {
     const content = generateProjectDocument(buildPayload());
-    expect(content).toContain("Project Status:");
-    expect(content).toContain("- Active");
     expect(content).toContain("## Instructions to LLM");
     expect(content).toContain("## How to generate updates for the system");
     expect(content).toContain("Project Status:\n- active");
@@ -75,6 +73,8 @@ describe("generateProjectDocument", () => {
       expect(idx).toBeGreaterThan(lastIndex);
       lastIndex = idx;
     }
+    expect(content.indexOf("## Decisions")).toBeLessThan(content.lastIndexOf("Project Status:\n- Active"));
+    expect(content.lastIndexOf("Project Status:\n- Active")).toBeLessThan(content.indexOf("## Notes"));
   });
 
   it("renders deterministic empty states for all major sections", () => {

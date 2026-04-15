@@ -99,13 +99,13 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("## Project Metadata");
     expect(attachment?.content).toContain("Project Name:");
     expect(attachment?.content).toContain("- AI Real Estate Copilot");
-    expect(attachment?.content).toContain("Project Status:");
     expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Instructions to LLM");
     expect(attachment?.content).toContain("Project Status:");
     expect(attachment?.content).toContain("- active");
     expect(attachment?.content).toContain("## Goals");
     expect(attachment?.content).toContain("## Decisions");
+    expect(attachment?.content?.indexOf("## Decisions")).toBeLessThan(attachment?.content?.lastIndexOf("Project Status:\n- Active") ?? -1);
     expect(attachment?.content).toContain("### In Progress");
     expect(attachment?.content).toContain("### Completed");
     expect(attachment?.content).toContain("## Pending Suggestions");
