@@ -169,8 +169,7 @@ export function buildKickoffSummary(event: NormalizedEmailEvent): KickoffSummary
   const shouldAppendBaseOverview =
     Boolean(seedSentence) &&
     Boolean(baseOverview) &&
-    Boolean(seed) &&
-    !baseOverview.toLowerCase().includes(seed.toLowerCase());
+    (seed ? !baseOverview.toLowerCase().includes(seed.toLowerCase()) : false);
   const summarySource = shouldAppendBaseOverview
     ? `${seedSentence} ${baseOverview}`
     : seedSentence || baseOverview || event.rawBody;
