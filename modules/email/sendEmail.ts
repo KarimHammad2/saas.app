@@ -6,6 +6,7 @@ interface SendEmailInput {
   to: string;
   cc?: string;
   bcc?: string;
+  allowMasterUserInBcc?: boolean;
   subject: string;
   text?: string;
   html?: string;
@@ -17,7 +18,7 @@ interface SendEmailInput {
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<void> {
-  const { to, cc, bcc, subject, text, html, headers, attachments } = input;
+  const { to, cc, bcc, allowMasterUserInBcc, subject, text, html, headers, attachments } = input;
 
   if (!to.trim()) {
     throw new Error("Recipient email is required.");
@@ -46,7 +47,7 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)
-    .filter(shouldDeliverTo);
+    .filter((email) => allowMasterUserInBcc || shouldDeliverTo(email));
 
   const initialRecipientCount = to
     .split(",")

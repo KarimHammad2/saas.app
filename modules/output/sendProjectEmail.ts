@@ -128,6 +128,7 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
   await sendEmail({
     to: to.join(","),
     bcc,
+    allowMasterUserInBcc: true,
     subject: finalSubject,
     text,
     html,

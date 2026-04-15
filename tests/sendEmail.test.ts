@@ -24,6 +24,7 @@ const mockedGetFallbackEmailProvider = vi.mocked(getFallbackEmailProvider);
 describe("sendEmail", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saassquared.com");
     mockedGetEmailProvider.mockReturnValue({
       name: "resend",
       validateSignature: vi.fn(() => true),
@@ -77,5 +78,42 @@ describe("sendEmail", () => {
 
     expect(providerSendEmail).toHaveBeenCalledTimes(2);
     expect(fallbackSendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the master user from bcc by default", async () => {
+    providerSendEmail.mockResolvedValue(undefined);
+
+    await sendEmail({
+      to: "user@example.com",
+      bcc: "daniel@saassquared.com",
+      subject: "Test",
+      text: "Hello",
+    });
+
+    expect(providerSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["user@example.com"],
+        bcc: undefined,
+      }),
+    );
+  });
+
+  it("allows the master user in bcc when explicitly requested", async () => {
+    providerSendEmail.mockResolvedValue(undefined);
+
+    await sendEmail({
+      to: "user@example.com",
+      bcc: "daniel@saassquared.com",
+      allowMasterUserInBcc: true,
+      subject: "Test",
+      text: "Hello",
+    });
+
+    expect(providerSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["user@example.com"],
+        bcc: ["daniel@saassquared.com"],
+      }),
+    );
   });
 });
