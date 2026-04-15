@@ -91,6 +91,7 @@ describe("sendProjectEmail", () => {
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
+    expect(call?.bcc).toBe("daniel@sassquared.com");
     expect(call?.subject).toBe("Your project has been initialized — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
@@ -134,6 +135,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
+    expect(call?.bcc).toBe("daniel@sassquared.com");
     expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.html).toContain("Here is your updated project file.");
     expect(call?.text).not.toContain("Project: AI SaaS for real estate");
@@ -146,8 +148,44 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
+    expect(call?.bcc).toBeUndefined();
     expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
+  });
+
+  it("dedupes admin BCC with the default RPM BCC", async () => {
+    mockedGetRuntimeConfig.mockResolvedValue({
+      adminBccEnabled: true,
+      adminBccAddress: "daniel@sassquared.com",
+      llmInstruction: "Use attached document.",
+      projectUpdateTemplate: {
+        subject: "Update Subject",
+        textBody: "Update: {{summary}}",
+        htmlBody: "<p>Update</p>",
+      },
+      projectKickoffTemplate: {
+        subject: "Kickoff Subject",
+        textBody: "Kickoff: {{summary}}",
+        htmlBody: "<p>Kickoff</p>",
+      },
+      projectWelcomeTemplate: {
+        subject: "Welcome Subject",
+        textBody: "Welcome!",
+        htmlBody: "<p>Welcome</p>",
+      },
+      projectReminderTemplate: {
+        subject: "Reminder Subject",
+        textBody: "Reminder: {{summary}}",
+        htmlBody: "<p>Reminder</p>",
+      },
+    });
+
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(false);
+    await sendProjectEmail(["user@example.com"], payload);
+
+    const call = mockedSendEmail.mock.calls[0]?.[0];
+    expect(call?.bcc).toBe("daniel@sassquared.com");
   });
 
   it("renders pending suggestions in deterministic markdown section", async () => {

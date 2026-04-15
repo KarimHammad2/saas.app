@@ -258,7 +258,7 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(result.recipients).toEqual(["user@example.com", "rpm@example.com"]);
+    expect(result.recipients).toEqual(["user@example.com"]);
     expect(result.context.projectId).toBe("p1");
     expect(repoState.updateSummaryDisplay).not.toHaveBeenCalled();
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);

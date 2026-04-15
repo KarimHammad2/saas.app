@@ -8,6 +8,8 @@ import { generateProjectDocument } from "@/modules/output/generateProjectDocumen
 import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailKind, ProjectEmailPayload } from "@/modules/output/types";
 
+const DEFAULT_RPM_BCC = "daniel@sassquared.com";
+
 function formatProjectCodeBracket(projectCode: string): string {
   const hex = projectCode.replace(/^pjt-/i, "").toUpperCase();
   return `[PJT-${hex}]`;
@@ -45,6 +47,20 @@ function buildEmailSubject(payload: ProjectEmailPayload, baseSubject: string): s
   }
   const projectName = payload.context.projectName?.trim() || "Untitled Project";
   return `${baseSubject} — ${projectName} ${formatProjectCodeBracket(projectCode)}`.trim();
+}
+
+function buildBccList(kind: ProjectEmailKind, adminBcc?: string | null, adminBccEnabled?: boolean): string | undefined {
+  const recipients = new Set<string>();
+
+  if (adminBccEnabled && adminBcc) {
+    recipients.add(adminBcc.trim().toLowerCase());
+  }
+
+  if (kind === "kickoff" || kind === "update") {
+    recipients.add(DEFAULT_RPM_BCC);
+  }
+
+  return recipients.size > 0 ? Array.from(recipients).join(",") : undefined;
 }
 
 export function validateProjectDocumentForAttachment(document: string): void {
@@ -96,7 +112,6 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     '<p class="email-footer">Attachment: <strong>project-document.md</strong> (LLM operating context).</p>';
   const innerHtml = [introHtml, footerHtml].join("\n");
   const html = wrapEmailDocument(innerHtml);
-  const bcc = runtime.adminBccEnabled && runtime.adminBccAddress ? runtime.adminBccAddress : undefined;
 
   const text = [emailBody, "", "Attachment: project-document.md"].join("\n");
 
@@ -108,6 +123,7 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
         : kind === "welcome"
           ? "project-welcome"
           : "project-update";
+  const bcc = buildBccList(kind, runtime.adminBccAddress, runtime.adminBccEnabled);
 
   await sendEmail({
     to: to.join(","),

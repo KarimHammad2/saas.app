@@ -166,7 +166,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const projectState = await repo.getProjectState(project.id);
     const pendingSuggestions = await repo.getPendingSuggestions(ownerUserId, project.id);
     return {
-      recipients: buildRecipientList(projectState, await repo.getActiveRpm(project.id)),
+      recipients: buildRecipientList(projectState),
       payload: {
         context: projectState,
         pendingSuggestions,
@@ -406,8 +406,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const projectState = await repo.getProjectState(project.id);
   const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(ownerUserId, project.id);
-  const userRpm = await repo.getActiveRpm(project.id);
-  const recipients = buildRecipientList(projectState, userRpm);
+  const recipients = buildRecipientList(projectState);
 
   const isWelcome = shouldRunKickoff;
   const nextSteps = isWelcome ? [...getKickoffFollowUpQuestions(), ...defaultNextSteps()] : defaultNextSteps();
@@ -430,8 +429,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   };
 }
 
-function buildRecipientList(projectState: { ownerEmail?: string; participants: string[] }, rpmEmail: string | null): string[] {
-  const raw = [projectState.ownerEmail, ...projectState.participants, rpmEmail].filter(
+function buildRecipientList(projectState: { ownerEmail?: string; participants: string[] }): string[] {
+  const raw = [projectState.ownerEmail, ...projectState.participants].filter(
     (entry): entry is string => typeof entry === "string" && entry.includes("@"),
   );
   return Array.from(new Set(raw.map((e) => e.trim().toLowerCase())));
