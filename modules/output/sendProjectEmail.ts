@@ -8,7 +8,7 @@ import { generateProjectDocument } from "@/modules/output/generateProjectDocumen
 import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailKind, ProjectEmailPayload } from "@/modules/output/types";
 
-const DEFAULT_RPM_BCC = "daniel@sassquared.com";
+const DEFAULT_RPM_BCC = "daniel@saassquared.com";
 
 function formatProjectCodeBracket(projectCode: string): string {
   const hex = projectCode.replace(/^pjt-/i, "").toUpperCase();
