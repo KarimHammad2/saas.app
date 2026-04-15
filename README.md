@@ -124,7 +124,7 @@ SUPABASE_SERVICE_ROLE_KEY=
 EMAIL_PROVIDER=resend
 
 # shared
-MASTER_USER_EMAIL=daniel@saas2.app
+MASTER_USER_EMAIL=daniel@saassquared.com
 
 # Inbound policy: bare address that must appear in the To header of incoming mail (not CC/Bcc).
 # If unset, derived from RESEND_FROM_EMAIL, else defaults to frank@saas2.app. Must match your

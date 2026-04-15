@@ -44,7 +44,7 @@ export function getFallbackEmailProviderName(): "resend" | "ses" | null {
 }
 
 export function getMasterUserEmail(): string {
-  return (process.env.MASTER_USER_EMAIL ?? "daniel@saas2.app").trim().toLowerCase();
+  return (process.env.MASTER_USER_EMAIL ?? "daniel@saassquared.com").trim().toLowerCase();
 }
 
 export function getDefaultFromEmail(): string {

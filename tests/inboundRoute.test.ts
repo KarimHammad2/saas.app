@@ -75,7 +75,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
 describe("POST /api/inbound", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saas2.app");
+    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saassquared.com");
     enqueueInboundEmailJob.mockResolvedValue(true);
     recordOutboundEmailEvent.mockResolvedValue(undefined);
   });
@@ -175,7 +175,7 @@ describe("POST /api/inbound", () => {
       timestamp: new Date().toISOString(),
       from: "user@example.com",
       fromDisplayName: null,
-      to: ["daniel@saas2.app"],
+      to: ["daniel@saassquared.com"],
       cc: [],
       subject: "Hello",
       inReplyTo: null,

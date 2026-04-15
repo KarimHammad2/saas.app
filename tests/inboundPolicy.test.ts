@@ -38,7 +38,7 @@ function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEma
 
 describe("shouldProcessInboundEmail", () => {
   beforeEach(() => {
-    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saas2.app");
+    vi.stubEnv("MASTER_USER_EMAIL", "daniel@saassquared.com");
     vi.stubEnv("INTERNAL_INBOUND_SENDERS", "");
   });
 
@@ -80,7 +80,7 @@ describe("shouldProcessInboundEmail", () => {
   it("rejects when To is daniel@ without Frank", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
-        to: ["daniel@saas2.app"],
+        to: ["daniel@saassquared.com"],
         from: "client@example.com",
       }),
     );
@@ -101,7 +101,7 @@ describe("shouldProcessInboundEmail", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
         to: ["frank@saas2.app"],
-        from: "daniel@saas2.app",
+        from: "daniel@saassquared.com",
       }),
     );
     expect(d).toEqual({ ok: false, reason: "internal_sender" });
