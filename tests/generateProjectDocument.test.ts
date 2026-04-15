@@ -48,9 +48,9 @@ describe("generateProjectDocument", () => {
   it("keeps stable LLM-ready section ordering", () => {
     const content = generateProjectDocument(buildPayload());
     expect(content).toContain("## Instructions to LLM");
-    expect(content).toContain("You are assisting the user with this project.");
-    expect(content).toContain("You are NOT Frank.");
-    expect(content).toContain("Frank is the system that stores and manages the structured project state.");
+    expect(content).toContain("Your role:");
+    expect(content).toContain(" - Help the user think through this project");
+    expect(content).toContain("Scope rules:");
     expect(content).toContain("Project Status:\n- Active");
     expect(content).toContain("Always format updates using the exact project update structure in this document");
     expect(content).toContain("Only include sections that changed");
