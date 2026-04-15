@@ -340,6 +340,60 @@ describe("processInboundEmail", () => {
     expect(result.payload.emailKind).toBeDefined();
   });
 
+  it("uses multiline working-on phrase to derive a better kickoff name and overview", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.createProjectForUser.mockResolvedValueOnce({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
+    });
+    const rawBody = [
+      "Hi Frank,",
+      "",
+      "I want to start a project.",
+      "",
+      "Here’s what we’re working on:",
+      "platform for managing client projects across our team",
+    ].join("\n");
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_create_multiline_working_on",
+      provider: "resend",
+      providerEventId: "m_create_multiline_working_on",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New project kickoff",
+      inReplyTo: null,
+      references: [],
+      rawBody,
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [rawBody],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Platform Managing Client Projects Across");
+    expect(repoState.storeSummary).toHaveBeenCalledWith(
+      "p1",
+      expect.stringContaining("Project focus: platform for managing client projects across our team."),
+    );
+  });
+
   it("resolves reply updates to the same project via In-Reply-To thread mapping", async () => {
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-thread" });
     repoState.getProjectState.mockResolvedValue({

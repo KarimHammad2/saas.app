@@ -12,6 +12,7 @@ import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
+import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
 import { generateShortProjectName, normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { runKickoffFlow } from "@/modules/domain/kickoffService";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
@@ -40,22 +41,8 @@ export interface InboundProcessingResult {
 }
 
 function deriveProjectName(event: NormalizedEmailEvent): string {
-  const extractSeedAfterWorkingOn = (text: string): string | null => {
-    const match = text.match(/\bi(?:['\u2019]?m|\s+am)\s+working(?:\s+\w+){0,4}\s+on\s+(.+)/i);
-    if (!match || !match[1]) {
-      return null;
-    }
-    const seed = match[1]
-      .split(/[.!?\n]/)[0]
-      .trim()
-      .replace(/^["'`(]+/, "")
-      .replace(/["'`),]+$/, "")
-      .trim();
-    return seed || null;
-  };
-
   const fromBody = (event.parsed.summary || event.rawBody).trim();
-  const bodyKickoffSeed = extractSeedAfterWorkingOn(fromBody);
+  const bodyKickoffSeed = extractKickoffSeed(fromBody).seed;
   if (bodyKickoffSeed) {
     return generateShortProjectName(bodyKickoffSeed, "New Project");
   }
@@ -65,7 +52,7 @@ function deriveProjectName(event: NormalizedEmailEvent): string {
 
   const withoutToken = event.subject.replace(/\[PJT-[A-F0-9]{6,10}\]/gi, "").trim();
   const cleanedSubject = withoutToken.replace(/^re:\s*/i, "").trim();
-  const subjectKickoffSeed = extractSeedAfterWorkingOn(cleanedSubject);
+  const subjectKickoffSeed = extractKickoffSeed(cleanedSubject).seed;
   if (subjectKickoffSeed) {
     return generateShortProjectName(subjectKickoffSeed, "New Project");
   }

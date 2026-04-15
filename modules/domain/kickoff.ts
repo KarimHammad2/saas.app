@@ -1,4 +1,5 @@
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
 import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
@@ -161,8 +162,18 @@ function defaultKickoffTasks(summary: string): string[] {
 }
 
 export function buildKickoffSummary(event: NormalizedEmailEvent): KickoffSummary {
-  const cleanedOverview = cleanOverviewText(event.parsed.summary || event.rawBody);
-  const summary = compactOverviewForDocument(cleanedOverview || event.rawBody);
+  const baseOverview = cleanOverviewText(event.parsed.summary || event.rawBody);
+  const seedMatch = extractKickoffSeed(event.rawBody);
+  const seedSentence = seedMatch.seed ? cleanOverviewText(`Project focus: ${seedMatch.seed}.`) : "";
+  const shouldAppendBaseOverview =
+    Boolean(seedSentence) &&
+    Boolean(baseOverview) &&
+    Boolean(seedMatch.seed) &&
+    !baseOverview.toLowerCase().includes(seedMatch.seed.toLowerCase());
+  const summarySource = shouldAppendBaseOverview
+    ? `${seedSentence} ${baseOverview}`
+    : seedSentence || baseOverview || event.rawBody;
+  const summary = compactOverviewForDocument(summarySource);
   const segment = detectRestaurantSegment(summary);
   const goals = event.parsed.goals.length > 0 ? dedupe(event.parsed.goals) : defaultKickoffGoals(summary);
   const actionItems =
