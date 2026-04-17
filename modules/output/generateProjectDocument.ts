@@ -131,13 +131,8 @@ function appendRecordBullets(label: string, rec: Record<string, unknown>, lines:
   return added;
 }
 
-function formatUserProfileContextSection(profile: UserProfileContext, tier: string, ownerEmail?: string): string {
+function formatUserProfileContextSection(profile: UserProfileContext): string {
   const lines: string[] = [];
-  if (ownerEmail?.trim()) {
-    lines.push(`- Account email: ${ownerEmail.trim()}`);
-  }
-  lines.push(`- Tier: ${tier}`);
-
   let extras = 0;
   const cs = profile.communicationStyle;
   if (cs.tone) {
@@ -165,18 +160,6 @@ function formatUserProfileContextSection(profile: UserProfileContext, tier: stri
   }
   if (sow.business) {
     lines.push(`- Business: ${sow.business}`);
-    extras += 1;
-  }
-  if (sow.industry) {
-    lines.push(`- Industry: ${sow.industry}`);
-    extras += 1;
-  }
-  if (sow.project_type) {
-    lines.push(`- Project type: ${sow.project_type}`);
-    extras += 1;
-  }
-  if (sow.project_stage) {
-    lines.push(`- Project stage: ${sow.project_stage}`);
     extras += 1;
   }
 
@@ -214,7 +197,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
       ? context.recentUpdatesLog.map((line) => `- ${line}`).join("\n")
       : "(none)";
   const pendingSuggestionsBlock = formatPendingSuggestions(payload);
-  const userProfileBlock = formatUserProfileContextSection(userProfile, context.tier, context.ownerEmail ?? undefined);
+  const userProfileBlock = formatUserProfileContextSection(userProfile);
 
   return [
     "# PROJECT FILE",
