@@ -51,4 +51,12 @@ describe("generateRPMSuggestions", () => {
     const lines = generateRPMSuggestions(baseProject(), p);
     expect(lines.some((l) => /mvp/i.test(l))).toBe(true);
   });
+
+  it("uses marketing-flavored suggestions when copy implies marketing", () => {
+    const p = baseProject();
+    p.summary = "Launch a Google Ads campaign for our spring promotion";
+    const lines = generateRPMSuggestions(p, baseProfile());
+    expect(lines.some((l) => /campaign|channel|creative|ICP/i.test(l))).toBe(true);
+    expect(lines.some((l) => /target users before building more scope/i.test(l))).toBe(false);
+  });
 });

@@ -2,6 +2,9 @@ export type Tier = "freemium" | "solopreneur" | "agency";
 export type PlanPackage = "solo" | "agency";
 export type ProjectStatus = "active" | "paused" | "completed";
 
+/** Playbook for kickoff defaults and system RPM suggestions (see projectDomain.ts). */
+export type ProjectDomain = "general" | "tech_product" | "marketing" | "sales" | "operations";
+
 export type ActorRole = "user" | "rpm" | "master";
 
 export type RPMSuggestionSource = "inbound" | "system";
@@ -79,6 +82,8 @@ export function emptyUserProfileContext(): UserProfileContext {
 export interface ProjectContext {
   projectId: string;
   userId: string;
+  /** When unset, consumers may infer from summary/goals (see inferProjectDomainFromText). */
+  projectDomain?: ProjectDomain;
   /** Short code for subjects and routing, e.g. pjt-a1b2c3d4 (display as [PJT-A1B2C3D4]). */
   projectCode?: string;
   projectName?: string;

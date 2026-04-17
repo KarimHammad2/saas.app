@@ -1,5 +1,5 @@
 import { getMasterUserEmail } from "@/lib/env";
-import type { NormalizedEmailEvent, UserProfileStructuredContext } from "@/modules/contracts/types";
+import type { NormalizedEmailEvent, ProjectDomain, UserProfileStructuredContext } from "@/modules/contracts/types";
 import type { JsonRecord } from "@/modules/domain/userProfileMerge";
 import { buildKickoffSummary } from "@/modules/domain/kickoff";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
@@ -18,6 +18,7 @@ interface KickoffRepository {
   getActiveRpm(projectId: string): Promise<string | null>;
   assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void>;
   setKickoffCompleted(projectId: string): Promise<void>;
+  setProjectDomain(projectId: string, domain: ProjectDomain): Promise<void>;
 }
 
 export async function runKickoffFlow(
@@ -27,6 +28,7 @@ export async function runKickoffFlow(
   projectId: string,
 ): Promise<void> {
   const kickoff = buildKickoffSummary(event);
+  await repo.setProjectDomain(projectId, kickoff.projectDomain);
   await repo.storeSummary(projectId, kickoff.summary);
   await repo.updateGoals(projectId, kickoff.goals);
   await repo.appendActionItems(projectId, kickoff.actionItems);

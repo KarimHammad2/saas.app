@@ -57,6 +57,9 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("Always format updates using the exact project update structure in this document");
     expect(content).toContain("Only include sections that changed");
     expect(content).toContain("End important working sessions by giving the user a ready-to-send update for Frank");
+    expect(content).toContain("### Project direction changes (pivot / new focus)");
+    expect(content).toContain("Phrasing that is reliably detected");
+    expect(content).toContain("Project Name:");
     const sectionOrder = [
       "## Project Metadata",
       "## User Profile Context",

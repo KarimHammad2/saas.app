@@ -41,6 +41,29 @@ Keeping Frank updated:
  - Keep updates concise and structured
  - End important working sessions by giving the user a ready-to-send update for Frank
 
+### Project direction changes (pivot / new focus)
+
+When the user changes what they are building or their main focus (for example from a landing page to marketing, or from one product idea to another), the orchestration layer detects that from **natural language in the email body** (the same text the user sends to Frank), not from the LLM chat. Labeled sections alone are not enough for that detection unless they also write a clear pivot sentence in the body.
+
+**Phrasing that is reliably detected** — include at least one of these ideas in a short sentence or two, and name both the old direction and the new one where possible:
+
+ - Words like **instead**, **rather than**, **switching to**, **pivot** / **pivoting**, **changing direction**
+ - Sentences like **We are no longer …** followed by what they want **now** or **instead** (for example: *We are no longer building X, now we want Y* or *Instead we want …*)
+
+Put that pivot language in the **opening lines** of the message they will email to Frank (before or after structured blocks). A vague update without pivot cues may update goals or notes but **not** refresh the stored project overview or project name the same way.
+
+**Optional structured blocks** (parsed from labeled sections — use these exact headings):
+
+ - \`Project Name:\` then a bullet line with the exact title when they want a specific project name. If they skip this, the system may still derive a short name from the new scope sentence.
+ - \`Goals:\`, \`Tasks:\`, \`Completed:\`, \`Decisions:\`, \`Risks:\`, \`Notes:\` — same rules as elsewhere; only include sections that changed.
+
+**What you (the LLM) should do when the user pivots:**
+
+ - Briefly acknowledge the new direction in your reply.
+ - Explain that Frank needs an **email** containing both (1) a **pivot sentence** using the patterns above and (2) any updated \`Goals:\` / \`Tasks:\` / \`Notes:\` they care about.
+ - Give them a **ready-to-send example** they can paste into email to Frank: start with the pivot paragraph, then optional labeled blocks. Use real labels (\`Project Name:\`, \`Goals:\`, etc.) and bullet lines under each, matching how sections appear in this file.
+ - Remind them to **reply in the existing project thread** and keep the **project code in the subject** (for example \`[PJT-…]\`) when their client shows it, so the update attaches to the right project.
+
 The user may copy your structured updates and send them by email to Frank.`;
 
 function formatBulletSection(values: string[], emptyPlaceholder: string): string {

@@ -58,6 +58,7 @@ const repoState = {
   deletePendingSystemSuggestionsForProject: vi.fn(),
   incrementProjectUsageCount: vi.fn(),
   setKickoffCompleted: vi.fn(),
+  setProjectDomain: vi.fn(),
   approveSuggestion: vi.fn(),
   rejectSuggestion: vi.fn(),
   addAdditionalEmails: vi.fn(),
@@ -120,6 +121,7 @@ vi.mock("@/modules/memory/repository", async () => {
       deletePendingSystemSuggestionsForProject = repoState.deletePendingSystemSuggestionsForProject;
       incrementProjectUsageCount = repoState.incrementProjectUsageCount;
       setKickoffCompleted = repoState.setKickoffCompleted;
+      setProjectDomain = repoState.setProjectDomain;
       approveSuggestion = repoState.approveSuggestion;
       rejectSuggestion = repoState.rejectSuggestion;
       addAdditionalEmails = repoState.addAdditionalEmails;
@@ -196,6 +198,7 @@ describe("processInboundEmail", () => {
       transactionHistory: [],
     });
     repoState.getPendingSuggestions.mockResolvedValue([]);
+    repoState.setProjectDomain.mockResolvedValue(undefined);
     repoState.getUserProfile.mockResolvedValue(emptyUserProfile);
     repoState.mergeStructuredUserProfileContext.mockResolvedValue(undefined);
     repoState.patchUserProfileContextJson.mockResolvedValue(undefined);
@@ -1676,6 +1679,8 @@ describe("processInboundEmail", () => {
 
     await processInboundEmail(event);
     expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("web dashboard"));
+    expect(repoState.updateProjectName).toHaveBeenCalledWith("p1", "Web Dashboard");
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Project renamed to: Web Dashboard");
     expect(
       repoState.updateNotes.mock.calls.some(
         (call) =>
@@ -1728,6 +1733,7 @@ describe("processInboundEmail", () => {
 
     await processInboundEmail(event);
     expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("web dashboard for agencies"));
+    expect(repoState.updateProjectName).toHaveBeenCalledWith("p1", "Web Dashboard Agencies");
   });
 
   it("keeps existing goals/tasks and does not create a new project on threaded scope pivot", async () => {
@@ -1793,6 +1799,7 @@ describe("processInboundEmail", () => {
     expect(repoState.updateGoals).toHaveBeenCalledWith("p-thread", []);
     expect(repoState.appendActionItems).toHaveBeenCalledWith("p-thread", []);
     expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p-thread", expect.stringContaining("shared spreadsheet workflow for gyms"));
+    expect(repoState.updateProjectName).toHaveBeenCalledWith("p-thread", "Shared Spreadsheet Workflow Gyms");
   });
 
   it("updates overview to the new direction for two-sentence pivot phrasing", async () => {
@@ -1855,12 +1862,54 @@ describe("processInboundEmail", () => {
 
     await processInboundEmail(event);
     expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p-two-sentence", "a shared spreadsheet workflow for gyms");
+    expect(repoState.updateProjectName).toHaveBeenCalledWith("p-two-sentence", "Shared Spreadsheet Workflow Gyms");
     expect(repoState.updateNotes).toHaveBeenCalledWith(
       "p-two-sentence",
       [expect.stringContaining("Scope changed from a mobile app to a shared spreadsheet workflow for gyms")],
       event.timestamp,
     );
     expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p-two-sentence", "Scope changed");
+  });
+
+  it("does not derive project name from scope when explicit Project Name is present", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_scope_explicit_name",
+      provider: "resend",
+      providerEventId: "m_scope_explicit_name",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Direction change",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Project Name:\n- Custom Pivot Name\n\nWe are no longer doing mobile app for habits, now it's a web dashboard",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        projectName: "Custom Pivot Name",
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateProjectName).toHaveBeenCalledTimes(1);
+    expect(repoState.updateProjectName).toHaveBeenCalledWith("p1", "Custom Pivot Name");
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Project renamed to: Custom Pivot Name");
+    expect(repoState.appendRecentUpdate).not.toHaveBeenCalledWith("p1", "Project renamed to: Web Dashboard");
   });
 
   it("allows cc participant to reply in same thread without creating a new project", async () => {

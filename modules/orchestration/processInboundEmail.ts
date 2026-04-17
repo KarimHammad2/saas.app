@@ -312,6 +312,22 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await repo.updateSummaryDisplay(project.id, toBrief);
     await repo.updateNotes(project.id, [`Scope changed from ${fromBrief} to ${toBrief}`], event.timestamp);
     await repo.appendRecentUpdate(project.id, "Scope changed");
+
+    if (!requestedProjectName) {
+      const placeholderOverview = "(new scope)";
+      const nameSeed =
+        scopeTransition.toScope?.trim() ||
+        (toBrief.trim() && toBrief.trim().toLowerCase() !== placeholderOverview ? toBrief.trim() : "");
+      if (nameSeed) {
+        const currentNameNorm = normalizeProjectNameCandidate(project.name || "");
+        const fallbackLabel = currentNameNorm || "Project";
+        const derived = normalizeProjectNameCandidate(generateShortProjectName(nameSeed, fallbackLabel));
+        if (derived && derived.toLowerCase() !== (currentNameNorm || "").toLowerCase()) {
+          await repo.updateProjectName(project.id, derived);
+          await repo.appendRecentUpdate(project.id, `Project renamed to: ${derived}`);
+        }
+      }
+    }
   }
 
   await repo.updateDecisions(project.id, event.parsed.decisions);
@@ -415,7 +431,9 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const recipients = buildRecipientList(projectState);
 
   const isWelcome = shouldRunKickoff;
-  const nextSteps = isWelcome ? [...getKickoffFollowUpQuestions(), ...defaultNextSteps()] : defaultNextSteps();
+  const nextSteps = isWelcome
+    ? [...getKickoffFollowUpQuestions(projectState.projectDomain ?? "general"), ...defaultNextSteps()]
+    : defaultNextSteps();
 
   return {
     recipients,

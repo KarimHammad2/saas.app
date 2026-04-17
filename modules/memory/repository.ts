@@ -3,6 +3,7 @@ import { getSupabaseAdminClient } from "@/lib/supabase";
 import type {
   CommunicationStyleContext,
   ProjectContext,
+  ProjectDomain,
   ProjectStatus,
   RPMSuggestion,
   RPMSuggestionSource,
@@ -23,6 +24,7 @@ import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
+import { parseStoredProjectDomain } from "@/modules/domain/projectDomain";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 
 function formatNoteDatePrefix(iso?: string): string {
@@ -963,6 +965,13 @@ export class MemoryRepository {
     }
   }
 
+  async setProjectDomain(projectId: string, domain: ProjectDomain): Promise<void> {
+    const { error } = await this.supabase.from("projects").update({ project_domain: domain }).eq("id", projectId);
+    if (error) {
+      throw new Error(`Failed to set project domain: ${error.message}`);
+    }
+  }
+
   async assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void> {
     const normalizedRpm = normalizeEmail(rpmEmail);
     if (!isEmail(normalizedRpm)) {
@@ -1820,7 +1829,9 @@ export class MemoryRepository {
 
     const { data: project, error: projectError } = await this.supabase
       .from("projects")
-      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, participant_emails")
+      .select(
+        "id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, participant_emails, project_domain",
+      )
       .eq("id", projectId)
       .single<{
         id: string;
@@ -1833,6 +1844,7 @@ export class MemoryRepository {
         reminder_balance: number;
         usage_count: number;
         participant_emails: unknown;
+        project_domain: string | null;
       }>();
 
     if (projectError || !project) {
@@ -1873,10 +1885,12 @@ export class MemoryRepository {
 
     const tier = userRow?.tier ?? "freemium";
     const entitlements = resolvePlanEntitlements(tier);
+    const projectDomain = parseStoredProjectDomain(project.project_domain ?? undefined);
     return {
       projectId: project.id,
       userId: project.user_id,
       projectCode: typeof project.project_code === "string" ? project.project_code : undefined,
+      ...(projectDomain ? { projectDomain } : {}),
       projectName: typeof project.name === "string" ? project.name : undefined,
       projectStatus: normalizeProjectStatus(project.status),
       ownerDisplayName: userRow?.display_name?.trim() ? userRow.display_name : undefined,
