@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectContext, UserProfileContext } from "@/modules/contracts/types";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
 import { generateRPMSuggestions } from "@/modules/domain/rpmSuggestions";
 
 const baseProject = (): ProjectContext => ({
@@ -25,16 +26,7 @@ const baseProject = (): ProjectContext => ({
   transactionHistory: [],
 });
 
-const baseProfile = (): UserProfileContext => ({
-  communicationStyle: "",
-  preferences: {},
-  constraints: {},
-  onboardingData: "",
-  salesCallTranscripts: [],
-  longTermInstructions: "",
-  behaviorModifiers: {},
-  structuredContext: {},
-});
+const baseProfile = (): UserProfileContext => emptyUserProfileContext();
 
 describe("generateRPMSuggestions", () => {
   it("returns actionable suggestions for empty project", () => {

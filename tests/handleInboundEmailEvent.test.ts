@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
 import type { InboundProcessingResult } from "@/modules/orchestration/processInboundEmail";
 import { ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
@@ -68,6 +69,7 @@ describe("handleInboundEmailEvent", () => {
           tier: "freemium",
           transactionHistory: [],
         },
+        userProfile: emptyUserProfileContext(),
         pendingSuggestions: [],
         nextSteps: [],
         isWelcome: false,
@@ -122,6 +124,7 @@ describe("handleInboundEmailEvent", () => {
           tier: "freemium",
           transactionHistory: [],
         },
+        userProfile: emptyUserProfileContext(),
         pendingSuggestions: [],
         nextSteps: [],
         isWelcome: false,
@@ -168,6 +171,7 @@ describe("handleInboundEmailEvent", () => {
           tier: "freemium",
           transactionHistory: [],
         },
+        userProfile: emptyUserProfileContext(),
         pendingSuggestions: [],
         nextSteps: [],
         isWelcome: false,

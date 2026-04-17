@@ -165,10 +165,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     log.info("duplicate inbound event ignored", { provider: event.provider, providerEventId: event.providerEventId });
     const projectState = await repo.getProjectState(project.id);
     const pendingSuggestions = await repo.getPendingSuggestions(ownerUserId, project.id);
+    const userProfile = await repo.getUserProfile(ownerUserId);
     return {
       recipients: buildRecipientList(projectState),
       payload: {
         context: projectState,
+        userProfile,
         pendingSuggestions,
         nextSteps: defaultNextSteps(),
         isWelcome: false,
@@ -182,6 +184,9 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       },
     };
   }
+
+  await repo.ensureUserProfileRow(ownerUserId);
+  await repo.ensureUserProfileRow(user.id);
 
   const accessState = await repo.getProjectState(project.id);
   const activeRpmEmail = await repo.getActiveRpm(project.id);
@@ -324,15 +329,16 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   if (meaningfulMergedNotes.length > 0) {
     await repo.appendRecentUpdate(project.id, `Notes updated (${meaningfulMergedNotes.length} item${meaningfulMergedNotes.length > 1 ? "s" : ""}).`);
   }
-  await repo.mergeStructuredUserProfileContext(
-    user.id,
-    inferMemorySignals({
-      summary: event.parsed.summary ?? event.rawBody,
-      rawBody: event.rawBody,
-      goals: event.parsed.goals,
-      notes: event.parsed.notes,
-    }),
-  );
+  const inferredMemory = inferMemorySignals({
+    summary: event.parsed.summary ?? event.rawBody,
+    rawBody: event.rawBody,
+    goals: event.parsed.goals,
+    notes: event.parsed.notes,
+  });
+  await repo.mergeStructuredUserProfileContext(user.id, inferredMemory.sowSignals);
+  if (Object.keys(inferredMemory.constraints).length > 0) {
+    await repo.patchUserProfileContextJson(user.id, { constraints: inferredMemory.constraints });
+  }
 
   if (event.parsed.userProfileContext && canModifyUserProfile(role)) {
     await repo.storeUserProfileContext(user.id, event.parsed.userProfileContext);
@@ -415,6 +421,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     recipients,
     payload: {
       context: projectState,
+      userProfile: userProfileForRpm,
       pendingSuggestions,
       nextSteps,
       isWelcome,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 
 vi.mock("@/modules/email/sendEmail", () => ({
@@ -25,6 +26,7 @@ const mockedSendEmail = vi.mocked(sendEmail);
 function buildPayload(isWelcome: boolean): ProjectEmailPayload {
   return {
     isWelcome,
+    userProfile: emptyUserProfileContext(),
     context: {
       projectId: "p1",
       userId: "u1",
@@ -98,6 +100,7 @@ describe("sendProjectEmail", () => {
     const attachment = call?.attachments?.find((a) => a.filename === "project-document.md");
     expect(attachment?.content).toContain("# PROJECT FILE");
     expect(attachment?.content).toContain("## Project Metadata");
+    expect(attachment?.content).toContain("## User Profile Context");
     expect(attachment?.content).toContain("Project Name:");
     expect(attachment?.content).toContain("- AI Real Estate Copilot");
     expect(attachment?.content).toContain("- Active");

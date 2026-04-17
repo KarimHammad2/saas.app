@@ -1,5 +1,6 @@
 import { getMasterUserEmail } from "@/lib/env";
 import type { NormalizedEmailEvent, UserProfileStructuredContext } from "@/modules/contracts/types";
+import type { JsonRecord } from "@/modules/domain/userProfileMerge";
 import { buildKickoffSummary } from "@/modules/domain/kickoff";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
 
@@ -13,6 +14,7 @@ interface KickoffRepository {
     userId: string,
     patch: Partial<UserProfileStructuredContext>,
   ): Promise<void>;
+  patchUserProfileContextJson(userId: string, patch: JsonRecord): Promise<void>;
   getActiveRpm(projectId: string): Promise<string | null>;
   assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void>;
   setKickoffCompleted(projectId: string): Promise<void>;
@@ -40,7 +42,10 @@ export async function runKickoffFlow(
     goals: kickoff.goals,
     notes: kickoff.initialNotes,
   });
-  await repo.mergeStructuredUserProfileContext(userId, inferred);
+  await repo.mergeStructuredUserProfileContext(userId, inferred.sowSignals);
+  if (Object.keys(inferred.constraints).length > 0) {
+    await repo.patchUserProfileContextJson(userId, { constraints: inferred.constraints });
+  }
 
   const activeRpm = await repo.getActiveRpm(projectId);
   if (!activeRpm) {

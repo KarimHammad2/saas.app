@@ -1,17 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
 import { NonRetryableInboundError } from "@/modules/orchestration/errors";
 
-const emptyUserProfile = {
-  communicationStyle: "",
-  preferences: {},
-  constraints: {},
-  onboardingData: "",
-  salesCallTranscripts: [] as string[],
-  longTermInstructions: "",
-  behaviorModifiers: {},
-  structuredContext: {},
-};
+const emptyUserProfile = emptyUserProfileContext();
 
 const defaultMockProject = {
   id: "p1",
@@ -29,6 +21,7 @@ const defaultMockProject = {
 
 const repoState = {
   registerInboundEvent: vi.fn(),
+  ensureUserProfileRow: vi.fn(),
   getOrCreateUserByEmail: vi.fn(),
   findProjectByCodeAndUser: vi.fn(),
   findProjectByCode: vi.fn(),
@@ -59,6 +52,7 @@ const repoState = {
   getUserProfile: vi.fn(),
   replaceStructuredUserProfileContext: vi.fn(),
   mergeStructuredUserProfileContext: vi.fn(),
+  patchUserProfileContextJson: vi.fn(),
   updateUserDisplayNameIfEmpty: vi.fn(),
   storeRPMSuggestion: vi.fn(),
   deletePendingSystemSuggestionsForProject: vi.fn(),
@@ -89,6 +83,7 @@ vi.mock("@/modules/memory/repository", async () => {
     ...actual,
     MemoryRepository: class {
       registerInboundEvent = repoState.registerInboundEvent;
+      ensureUserProfileRow = repoState.ensureUserProfileRow;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
       findProjectByCodeAndUser = repoState.findProjectByCodeAndUser;
       findProjectByCode = repoState.findProjectByCode;
@@ -119,6 +114,7 @@ vi.mock("@/modules/memory/repository", async () => {
       getUserProfile = repoState.getUserProfile;
       replaceStructuredUserProfileContext = repoState.replaceStructuredUserProfileContext;
       mergeStructuredUserProfileContext = repoState.mergeStructuredUserProfileContext;
+      patchUserProfileContextJson = repoState.patchUserProfileContextJson;
       updateUserDisplayNameIfEmpty = repoState.updateUserDisplayNameIfEmpty;
       storeRPMSuggestion = repoState.storeRPMSuggestion;
       deletePendingSystemSuggestionsForProject = repoState.deletePendingSystemSuggestionsForProject;
@@ -141,6 +137,7 @@ vi.mock("@/modules/memory/repository", async () => {
 describe("processInboundEmail", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    repoState.ensureUserProfileRow.mockResolvedValue(undefined);
     classifyInboundIntentMock.mockReturnValue({
       isNewProjectIntent: true,
       isGreetingOnly: false,
@@ -201,6 +198,7 @@ describe("processInboundEmail", () => {
     repoState.getPendingSuggestions.mockResolvedValue([]);
     repoState.getUserProfile.mockResolvedValue(emptyUserProfile);
     repoState.mergeStructuredUserProfileContext.mockResolvedValue(undefined);
+    repoState.patchUserProfileContextJson.mockResolvedValue(undefined);
     repoState.storeRPMSuggestion.mockImplementation(async (userId, projectId, _from, content, source) => ({
       id: "s1",
       userId,

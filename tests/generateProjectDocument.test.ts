@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 
 function buildPayload(): ProjectEmailPayload {
   return {
     isWelcome: false,
+    userProfile: emptyUserProfileContext(),
     context: {
       projectId: "p1",
       userId: "u1",
@@ -56,6 +58,8 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("Only include sections that changed");
     expect(content).toContain("End important working sessions by giving the user a ready-to-send update for Frank");
     const sectionOrder = [
+      "## Project Metadata",
+      "## User Profile Context",
       "## Instructions to LLM",
       "## Project Overview",
       "## Goals",

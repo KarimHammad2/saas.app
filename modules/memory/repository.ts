@@ -1,6 +1,7 @@
 import { getMasterUserEmail } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase";
 import type {
+  CommunicationStyleContext,
   ProjectContext,
   ProjectStatus,
   RPMSuggestion,
@@ -11,6 +12,12 @@ import type {
   UserProfileContext,
   UserProfileStructuredContext,
 } from "@/modules/contracts/types";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
+import { mergeUniqueStringsPreserveOrder, normalizeListItemKey } from "@/modules/domain/mergeUniqueStrings";
+
+export { mergeUniqueStringsPreserveOrder } from "@/modules/domain/mergeUniqueStrings";
+import { deepMergeUserProfileContext, type JsonRecord } from "@/modules/domain/userProfileMerge";
+import { parseSowSignalsFromUnknown } from "@/modules/domain/sowSignalsPatch";
 import { normalizeMessageId } from "@/modules/email/messageId";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { resolvePlanEntitlements } from "@/modules/domain/entitlements";
@@ -59,39 +66,116 @@ export interface ClaimedInboundEmailJob {
 }
 
 function emptyProfile(): UserProfileContext {
-  return {
-    communicationStyle: "",
-    preferences: {},
-    constraints: {},
-    onboardingData: "",
-    salesCallTranscripts: [],
-    longTermInstructions: "",
-    behaviorModifiers: {},
-    structuredContext: {},
-  };
+  return emptyUserProfileContext();
 }
 
-function parseStructuredContextJson(value: unknown): UserProfileStructuredContext {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function normalizeRawContextJson(raw: unknown): JsonRecord {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return {};
   }
-  const o = value as Record<string, unknown>;
-  const prefs = o.preferences;
-  const preferencesList = Array.isArray(o.preferencesList)
-    ? o.preferencesList.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean)
+  const o = raw as JsonRecord;
+  if (o.sowSignals !== undefined) {
+    return { ...o };
+  }
+  const flatKeys = [
+    "role",
+    "business",
+    "industry",
+    "project_type",
+    "project_stage",
+    "preferencesList",
+    "tone",
+    "business_type",
+    "goals_style",
+  ];
+  const hasNested = [
+    "communicationStyle",
+    "longTermInstructions",
+    "constraints",
+    "preferences",
+    "behaviorModifiers",
+    "onboardingData",
+  ].some((k) => o[k] !== undefined);
+  const hasFlatSow = flatKeys.some((k) => o[k] !== undefined);
+  if (hasNested) {
+    if (hasFlatSow) {
+      const sow = parseSowSignalsFromUnknown(o);
+      const rest = { ...o };
+      for (const k of flatKeys) {
+        delete rest[k];
+      }
+      if (Array.isArray(o.preferencesList)) {
+        delete rest.preferencesList;
+      }
+      return { ...rest, sowSignals: sow as unknown as JsonRecord };
+    }
+    return { ...o };
+  }
+  if (hasFlatSow) {
+    return { sowSignals: parseSowSignalsFromUnknown(o) as unknown as JsonRecord };
+  }
+  return { ...o };
+}
+
+function mergeJsonRecords(base: Record<string, unknown>, overlay: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  return { ...(base ?? {}), ...(overlay ?? {}) };
+}
+
+function parseOnboardingJson(legacyText: string, fromContext: unknown): Record<string, unknown> {
+  if (fromContext && typeof fromContext === "object" && !Array.isArray(fromContext)) {
+    return fromContext as Record<string, unknown>;
+  }
+  const t = legacyText?.trim();
+  if (t) {
+    return { notes: t };
+  }
+  return {};
+}
+
+function rowToUserProfileContext(data: {
+  communication_style: string;
+  preferences: Record<string, unknown> | null;
+  constraints: Record<string, unknown> | null;
+  onboarding_data: string;
+  sales_call_transcripts: unknown;
+  long_term_instructions: string;
+  behavior_modifiers: Record<string, unknown> | null;
+  context: unknown;
+}): UserProfileContext {
+  const normalized = normalizeRawContextJson(data.context);
+  const commFromJson =
+    typeof normalized.communicationStyle === "object" &&
+    normalized.communicationStyle !== null &&
+    !Array.isArray(normalized.communicationStyle)
+      ? (normalized.communicationStyle as CommunicationStyleContext)
+      : {};
+  const communicationStyle: CommunicationStyleContext = { ...commFromJson };
+  if (data.communication_style?.trim()) {
+    if (!communicationStyle.tone) {
+      communicationStyle.tone = data.communication_style.trim();
+    }
+  }
+
+  const longTermList = Array.isArray(normalized.longTermInstructions)
+    ? normalized.longTermInstructions.filter((e): e is string => typeof e === "string")
     : [];
+  const fromLegacyText = (data.long_term_instructions ?? "")
+    .split(/\n\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const mergedLong = mergeUniqueStringsPreserveOrder(longTermList, fromLegacyText);
+
+  const sow = parseSowSignalsFromUnknown(normalized.sowSignals);
+
   return {
-    role: typeof o.role === "string" ? o.role : undefined,
-    business: typeof o.business === "string" ? o.business : undefined,
-    preferencesList: preferencesList.length > 0 ? preferencesList : undefined,
-    business_type: typeof o.business_type === "string" ? o.business_type : undefined,
-    goals_style: typeof o.goals_style === "string" ? o.goals_style : undefined,
-    tone: typeof o.tone === "string" ? o.tone : undefined,
-    industry: typeof o.industry === "string" ? o.industry : undefined,
-    project_type: typeof o.project_type === "string" ? o.project_type : undefined,
-    project_stage: typeof o.project_stage === "string" ? o.project_stage : undefined,
-    preferences:
-      prefs && typeof prefs === "object" && !Array.isArray(prefs) ? (prefs as Record<string, unknown>) : undefined,
+    communicationStyle,
+    preferences: mergeJsonRecords(data.preferences ?? {}, (normalized.preferences as Record<string, unknown>) ?? {}),
+    constraints: mergeJsonRecords(data.constraints ?? {}, (normalized.constraints as Record<string, unknown>) ?? {}),
+    onboardingData: parseOnboardingJson(data.onboarding_data, normalized.onboardingData),
+    salesCallTranscripts: asStringArray(data.sales_call_transcripts),
+    longTermInstructions: mergedLong,
+    behaviorModifiers: mergeJsonRecords(data.behavior_modifiers ?? {}, (normalized.behaviorModifiers as Record<string, unknown>) ?? {}),
+    structuredContext: sow,
   };
 }
 
@@ -124,42 +208,6 @@ function asStringArray(value: unknown): string[] {
 
 function dedupePreserveOrder(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => entry.trim()).filter(Boolean)));
-}
-
-/** Normalize for case-insensitive list dedupe; collapse internal whitespace. */
-function normalizeListItemKey(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-/** Merge incoming into existing, preserving first-seen casing and skipping case-duplicates. */
-export function mergeUniqueStringsPreserveOrder(existing: string[], incoming: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of existing) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const key = normalizeListItemKey(trimmed);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(trimmed);
-  }
-  for (const raw of incoming) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const key = normalizeListItemKey(trimmed);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(trimmed);
-  }
-  return out;
 }
 
 function noteSemanticKey(line: string): string {
@@ -275,36 +323,6 @@ function parseSuggestionIntoStructuredContext(content: string): Partial<UserProf
   }
 
   return patch;
-}
-
-function applyStructuredPatch(
-  existing: UserProfileStructuredContext,
-  patch: Partial<UserProfileStructuredContext>,
-): UserProfileStructuredContext {
-  const next: UserProfileStructuredContext = {
-    ...existing,
-  };
-
-  if (patch.role) {
-    next.role = patch.role;
-  }
-  if (patch.business) {
-    next.business = patch.business;
-  }
-  if (patch.preferencesList && patch.preferencesList.length > 0) {
-    next.preferencesList = dedupePreserveOrder([...(existing.preferencesList ?? []), ...patch.preferencesList]);
-  }
-  if (patch.industry) {
-    next.industry = patch.industry;
-  }
-  if (patch.project_type) {
-    next.project_type = patch.project_type;
-  }
-  if (patch.project_stage) {
-    next.project_stage = patch.project_stage;
-  }
-
-  return next;
 }
 
 export class MemoryRepository {
@@ -1200,42 +1218,86 @@ export class MemoryRepository {
     }
   }
 
-  async storeUserProfileContext(userId: string, contextText: string): Promise<void> {
-    const profile = await this.getUserProfile(userId);
-    const updatedLongTerm = [profile.longTermInstructions, contextText].filter(Boolean).join("\n\n");
-    const { error } = await this.supabase
+  /**
+   * Ensures a `user_profiles` row exists (e.g. legacy users created before profile rows).
+   * Context JSON stays `{}` until the first merge/store; reads still return `emptyUserProfileContext()` when the row is missing.
+   */
+  async ensureUserProfileRow(userId: string): Promise<void> {
+    const { data, error } = await this.supabase
       .from("user_profiles")
-      .upsert(
-        {
-          user_id: userId,
-          long_term_instructions: updatedLongTerm,
-        },
-        { onConflict: "user_id" },
-      );
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle<{ user_id: string }>();
+
     if (error) {
-      throw new Error(`Failed to store user profile context: ${error.message}`);
+      throw new Error(`Failed to check user profile row: ${error.message}`);
+    }
+    if (data) {
+      return;
+    }
+
+    const { error: insertError } = await this.supabase.from("user_profiles").insert({ user_id: userId });
+    if (insertError && insertError.code !== "23505") {
+      throw new Error(`Failed to create user profile row: ${insertError.message}`);
     }
   }
 
-  async replaceStructuredUserProfileContext(userId: string, next: UserProfileStructuredContext): Promise<void> {
+  private async readNormalizedContextJson(userId: string): Promise<JsonRecord> {
+    const { data, error } = await this.supabase
+      .from("user_profiles")
+      .select("context")
+      .eq("user_id", userId)
+      .maybeSingle<{ context: unknown }>();
+
+    if (error) {
+      throw new Error(`Failed to read user profile context: ${error.message}`);
+    }
+    return normalizeRawContextJson(data?.context ?? {});
+  }
+
+  private async persistContextJson(userId: string, context: JsonRecord): Promise<void> {
+    const longTerm = Array.isArray(context.longTermInstructions)
+      ? context.longTermInstructions.filter((e): e is string => typeof e === "string")
+      : [];
+    const longText = longTerm.join("\n\n");
     const { error } = await this.supabase.from("user_profiles").upsert(
       {
         user_id: userId,
-        context: next as unknown as Record<string, unknown>,
+        context: context as unknown as Record<string, unknown>,
+        long_term_instructions: longText,
       },
       { onConflict: "user_id" },
     );
     if (error) {
-      throw new Error(`Failed to store structured user profile: ${error.message}`);
+      throw new Error(`Failed to persist user profile context: ${error.message}`);
     }
+  }
+
+  /** Deep-merge patch into `user_profiles.context` JSONB (never replaces unrelated keys). */
+  async patchUserProfileContextJson(userId: string, patch: JsonRecord): Promise<void> {
+    const base = await this.readNormalizedContextJson(userId);
+    const merged = deepMergeUserProfileContext(base, patch);
+    await this.persistContextJson(userId, merged);
+  }
+
+  async storeUserProfileContext(userId: string, contextText: string): Promise<void> {
+    const trimmed = contextText.trim();
+    if (!trimmed) {
+      return;
+    }
+    await this.patchUserProfileContextJson(userId, { longTermInstructions: [trimmed] });
+  }
+
+  async replaceStructuredUserProfileContext(userId: string, next: UserProfileStructuredContext): Promise<void> {
+    const base = await this.readNormalizedContextJson(userId);
+    await this.persistContextJson(userId, { ...base, sowSignals: next as unknown as JsonRecord });
   }
 
   async mergeStructuredUserProfileContext(userId: string, patch: Partial<UserProfileStructuredContext>): Promise<void> {
     if (Object.keys(patch).length === 0) {
       return;
     }
-    const profile = await this.getUserProfile(userId);
-    await this.replaceStructuredUserProfileContext(userId, applyStructuredPatch(profile.structuredContext, patch));
+    await this.patchUserProfileContextJson(userId, { sowSignals: patch as unknown as JsonRecord });
   }
 
   async updateUserDisplayNameIfEmpty(userId: string, displayName: string | null): Promise<void> {
@@ -1458,13 +1520,9 @@ export class MemoryRepository {
     if (suggestion.source === "inbound") {
       await this.storeUserProfileContext(userId, suggestion.content);
 
-      const profile = await this.getUserProfile(userId);
       const structuredPatch = parseSuggestionIntoStructuredContext(suggestion.content);
       if (Object.keys(structuredPatch).length > 0) {
-        await this.replaceStructuredUserProfileContext(
-          userId,
-          applyStructuredPatch(profile.structuredContext, structuredPatch),
-        );
+        await this.mergeStructuredUserProfileContext(userId, structuredPatch);
       }
     }
   }
@@ -1731,16 +1789,7 @@ export class MemoryRepository {
       return emptyProfile();
     }
 
-    return {
-      communicationStyle: data.communication_style ?? "",
-      preferences: data.preferences ?? {},
-      constraints: data.constraints ?? {},
-      onboardingData: data.onboarding_data ?? "",
-      salesCallTranscripts: asStringArray(data.sales_call_transcripts),
-      longTermInstructions: data.long_term_instructions ?? "",
-      behaviorModifiers: data.behavior_modifiers ?? {},
-      structuredContext: parseStructuredContextJson(data.context),
-    };
+    return rowToUserProfileContext(data);
   }
 
   async getProjectState(projectId: string): Promise<ProjectContext> {

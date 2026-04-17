@@ -73,6 +73,7 @@ export function validateProjectDocumentForAttachment(document: string): void {
   }
   const requiredHeadings = [
     "## Project Metadata",
+    "## User Profile Context",
     "## Instructions to LLM",
     "## Project Overview",
     "## Goals",

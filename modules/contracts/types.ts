@@ -26,7 +26,7 @@ export interface TransactionEvent {
   projectRemainder: number;
 }
 
-/** SOW-aligned structured profile (stored in user_profiles.context jsonb). */
+/** SOW-aligned structured profile (stored in user_profiles.context jsonb under `sowSignals`). */
 export interface UserProfileStructuredContext {
   role?: string;
   business?: string;
@@ -40,15 +40,40 @@ export interface UserProfileStructuredContext {
   project_stage?: string;
 }
 
+/** Nested keys in user_profiles.context JSONB (global user memory, not project data). */
+export interface CommunicationStyleContext {
+  tone?: string;
+  format?: string;
+  verbosity?: string;
+}
+
+export type UserProfileJsonRecord = Record<string, unknown>;
+
 export interface UserProfileContext {
-  communicationStyle: string;
-  preferences: Record<string, unknown>;
-  constraints: Record<string, unknown>;
-  onboardingData: string;
+  communicationStyle: CommunicationStyleContext;
+  preferences: UserProfileJsonRecord;
+  constraints: UserProfileJsonRecord;
+  onboardingData: UserProfileJsonRecord;
   salesCallTranscripts: string[];
-  longTermInstructions: string;
-  behaviorModifiers: Record<string, unknown>;
+  /** Long-running instructions (from UserProfile: sections, etc.). */
+  longTermInstructions: string[];
+  behaviorModifiers: UserProfileJsonRecord;
+  /** SOW / inferred signals; persisted as `sowSignals` in JSONB. */
   structuredContext: UserProfileStructuredContext;
+}
+
+/** Default profile when the user has not stored context yet, or before their first `UserProfile:` / inferred update. */
+export function emptyUserProfileContext(): UserProfileContext {
+  return {
+    communicationStyle: {},
+    preferences: {},
+    constraints: {},
+    onboardingData: {},
+    salesCallTranscripts: [],
+    longTermInstructions: [],
+    behaviorModifiers: {},
+    structuredContext: {},
+  };
 }
 
 export interface ProjectContext {

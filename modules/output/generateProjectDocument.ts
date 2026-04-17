@@ -1,3 +1,4 @@
+import type { UserProfileContext } from "@/modules/contracts/types";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import { dedupePreserveOrder } from "@/modules/output/presentationHelpers";
@@ -114,8 +115,88 @@ function formatPendingSuggestions(payload: ProjectEmailPayload): string {
   return lines.length > 0 ? lines.join("\n") : "(none)";
 }
 
+function appendRecordBullets(label: string, rec: Record<string, unknown>, lines: string[]): number {
+  let added = 0;
+  for (const [k, v] of Object.entries(rec)) {
+    if (v === undefined || v === null) {
+      continue;
+    }
+    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (!s.trim()) {
+      continue;
+    }
+    lines.push(`- ${label}${k}: ${s}`);
+    added += 1;
+  }
+  return added;
+}
+
+function formatUserProfileContextSection(profile: UserProfileContext, tier: string, ownerEmail?: string): string {
+  const lines: string[] = [];
+  if (ownerEmail?.trim()) {
+    lines.push(`- Account email: ${ownerEmail.trim()}`);
+  }
+  lines.push(`- Tier: ${tier}`);
+
+  let extras = 0;
+  const cs = profile.communicationStyle;
+  if (cs.tone) {
+    lines.push(`- Tone: ${cs.tone}`);
+    extras += 1;
+  }
+  if (cs.format) {
+    lines.push(`- Format: ${cs.format}`);
+    extras += 1;
+  }
+  if (cs.verbosity) {
+    lines.push(`- Verbosity: ${cs.verbosity}`);
+    extras += 1;
+  }
+
+  extras += appendRecordBullets("Preference ", profile.preferences, lines);
+  extras += appendRecordBullets("Constraint ", profile.constraints, lines);
+  extras += appendRecordBullets("Onboarding ", profile.onboardingData, lines);
+  extras += appendRecordBullets("Behavior ", profile.behaviorModifiers, lines);
+
+  const sow = profile.structuredContext;
+  if (sow.role) {
+    lines.push(`- Role: ${sow.role}`);
+    extras += 1;
+  }
+  if (sow.business) {
+    lines.push(`- Business: ${sow.business}`);
+    extras += 1;
+  }
+  if (sow.industry) {
+    lines.push(`- Industry: ${sow.industry}`);
+    extras += 1;
+  }
+  if (sow.project_type) {
+    lines.push(`- Project type: ${sow.project_type}`);
+    extras += 1;
+  }
+  if (sow.project_stage) {
+    lines.push(`- Project stage: ${sow.project_stage}`);
+    extras += 1;
+  }
+
+  for (const block of profile.longTermInstructions) {
+    const t = block.trim();
+    if (t) {
+      lines.push(`- ${t}`);
+      extras += 1;
+    }
+  }
+
+  if (extras === 0) {
+    lines.push("- (No additional user preferences recorded yet.)");
+  }
+
+  return lines.join("\n");
+}
+
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
-  const { context } = payload;
+  const { context, userProfile } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
   const projectName = (context.projectName || "").trim() || "Untitled Project";
   const projectStatus = formatProjectStatusLabel(context.projectStatus);
@@ -133,6 +214,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
       ? context.recentUpdatesLog.map((line) => `- ${line}`).join("\n")
       : "(none)";
   const pendingSuggestionsBlock = formatPendingSuggestions(payload);
+  const userProfileBlock = formatUserProfileContextSection(userProfile, context.tier, context.ownerEmail ?? undefined);
 
   return [
     "# PROJECT FILE",
@@ -141,6 +223,14 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     "Project Name:",
     `- ${projectName}`,
+    "",
+    "---",
+    "",
+    "## User Profile Context",
+    "",
+    "Global memory about the user (not project data). It stays minimal until they send preferences (e.g. a UserProfile: block) or we infer details from their messages.",
+    "",
+    userProfileBlock,
     "",
     "---",
     "",

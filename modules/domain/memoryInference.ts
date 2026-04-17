@@ -1,10 +1,16 @@
 import type { UserProfileStructuredContext } from "@/modules/contracts/types";
+import type { JsonRecord } from "@/modules/domain/userProfileMerge";
 
 interface MemoryInferenceInput {
   summary?: string | null;
   rawBody?: string | null;
   goals?: string[];
   notes?: string[];
+}
+
+export interface MemoryInferenceResult {
+  sowSignals: Partial<UserProfileStructuredContext>;
+  constraints: JsonRecord;
 }
 
 function compactText(parts: Array<string | null | undefined>): string {
@@ -68,7 +74,22 @@ function inferProjectStage(text: string): string | undefined {
   return undefined;
 }
 
-export function inferMemorySignals(input: MemoryInferenceInput): Partial<UserProfileStructuredContext> {
+function inferConstraintHints(text: string): JsonRecord {
+  const lowered = text.toLowerCase();
+  const out: JsonRecord = {};
+  if (/\blow budget\b|\bdon't have much budget\b|\bno budget\b|\bnot much budget\b|\b(?:very|pretty) tight budget\b|\b(?:tight|small) budget\b/.test(lowered)) {
+    out.budget = "low";
+  }
+  if (/\b(?:evenings?|nights?|only at night)\b|only (?:after|in the) evening\b/.test(lowered)) {
+    out.availability = "evenings";
+  }
+  if (/\b(?:weekends?|saturday|sunday)\b.*\b(?:only|available)\b|\bonly (?:on )?weekends?\b/.test(lowered)) {
+    out.availability = "weekends";
+  }
+  return out;
+}
+
+export function inferMemorySignals(input: MemoryInferenceInput): MemoryInferenceResult {
   const source = compactText([
     input.summary,
     input.rawBody,
@@ -76,16 +97,24 @@ export function inferMemorySignals(input: MemoryInferenceInput): Partial<UserPro
     ...(input.notes ?? []),
   ]);
   if (!source) {
-    return {};
+    return { sowSignals: {}, constraints: {} };
   }
 
   const industry = inferIndustry(source);
   const projectType = inferProjectType(source);
   const projectStage = inferProjectStage(source);
+  const constraints = inferConstraintHints(source);
 
-  return {
-    industry,
-    project_type: projectType,
-    project_stage: projectStage,
-  };
+  const sowSignals: Partial<UserProfileStructuredContext> = {};
+  if (industry) {
+    sowSignals.industry = industry;
+  }
+  if (projectType) {
+    sowSignals.project_type = projectType;
+  }
+  if (projectStage) {
+    sowSignals.project_stage = projectStage;
+  }
+
+  return { sowSignals, constraints };
 }

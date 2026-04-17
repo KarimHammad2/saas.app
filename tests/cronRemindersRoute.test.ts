@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyUserProfileContext } from "@/modules/contracts/types";
 
 const listProjectsForReminder = vi.fn();
 const getProjectState = vi.fn();
 const getPendingSuggestions = vi.fn();
+const getUserProfile = vi.fn();
 const reserveReminderSlot = vi.fn();
 const releaseReminderSlot = vi.fn();
 const storeOutboundThreadMapping = vi.fn();
@@ -13,6 +15,7 @@ vi.mock("@/modules/memory/repository", () => ({
     listProjectsForReminder = listProjectsForReminder;
     getProjectState = getProjectState;
     getPendingSuggestions = getPendingSuggestions;
+    getUserProfile = getUserProfile;
     reserveReminderSlot = reserveReminderSlot;
     releaseReminderSlot = releaseReminderSlot;
     storeOutboundThreadMapping = storeOutboundThreadMapping;
@@ -43,6 +46,7 @@ describe("GET /api/cron/reminders", () => {
     listProjectsForReminder.mockResolvedValue([]);
     reserveReminderSlot.mockResolvedValue("2026-03-27T00:00:00.000Z");
     sendProjectEmail.mockResolvedValue({ outboundMessageId: "reminder-out-id" });
+    getUserProfile.mockResolvedValue(emptyUserProfileContext());
   });
 
   it("returns 401 without bearer token", async () => {
