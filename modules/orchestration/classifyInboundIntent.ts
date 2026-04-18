@@ -38,7 +38,7 @@ const STRONG_OVERRIDE_PATTERNS: RegExp[] = [
   /\bkick\s+off\s+(?:a|the|new)\s+project\b/i,
   /\bkick\s+off\s+project\b/i,
   /\bnew\s+project\b/i,
-  /\bi\s+(?:want|would\s+like|(?:['\u2019]?d)\s+like|need)\s+to\s+(?:build|create|make|develop|design|launch|start|plan|setup|set\s+up|automate|organize|manage|track)\b/i,
+  /\bi\s+(?:want|would\s+like|(?:['\u2019]?d)\s+like|need)\s+to\s+(?:build|create|make|develop|design|launch|start|plan|setup|set\s+up|automate|organize|manage|track|run|promote|grow)\b/i,
   /\bi\s+need\s+help\s+with\b/i,
   /\b(?:build|create|develop|design|launch|plan|setup|set\s+up|automate|organize|manage|track)\s+(?:a|an|the|my|our|new)\s+(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|project)\b/i,
   /\b(?:build|create|develop|design|launch|plan|setup|set\s+up|automate|organize|manage|track)\s+(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|project)\b/i,
@@ -61,6 +61,10 @@ const PROJECT_INTENT_PATTERNS: RegExp[] = [
   /\b(?:build|create|develop|design|launch|plan|setup|set\s+up|automate|organize|manage|track)\s+(?:a|an|the|my|our|new)?\s*(?:app|website|platform|system|dashboard|tool|saas|software|product|startup|business|automation|crm|api|project)\b/i,
   /\b(?:i\s+have\s+an?\s+idea|here'?s?\s+(?:the\s+)?(?:project|idea|plan|concept))\b/i,
   /\b(?:roadmap|sprint|backlog|feature\s+list|user\s+story|milestone)\b/i,
+  // Paid marketing / GTM (often no "build an app" phrasing).
+  /\b(?:google|meta|facebook|linkedin|tiktok|microsoft)\s+ads?\b/i,
+  /\b(?:paid\s+search|ppc\b|sem\b|display\s+ads?|retargeting|remarketing|lead\s+gen|demand\s+gen|marketing\s+campaign)\b/i,
+  /\b(?:get|generate|attract|drive)\s+(?:more\s+)?(?:new\s+)?leads\b/i,
 ];
 
 const WORD_COUNT_STRONG_SIGNAL = 30;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectContext, UserProfileContext } from "@/modules/contracts/types";
 import { emptyUserProfileContext } from "@/modules/contracts/types";
+import { stableVariantIndex } from "@/modules/domain/playbookVariant";
 import { generateRPMSuggestions } from "@/modules/domain/rpmSuggestions";
 
 const baseProject = (): ProjectContext => ({
@@ -58,5 +59,32 @@ describe("generateRPMSuggestions", () => {
     const lines = generateRPMSuggestions(p, baseProfile());
     expect(lines.some((l) => /campaign|channel|creative|ICP/i.test(l))).toBe(true);
     expect(lines.some((l) => /target users before building more scope/i.test(l))).toBe(false);
+  });
+
+  it("RPM marketing copy differs by projectId variant", () => {
+    const mk = (projectId: string) => {
+      const p = baseProject();
+      p.projectId = projectId;
+      p.projectDomain = "marketing";
+      p.summary = "campaign";
+      return generateRPMSuggestions(p, baseProfile()).join("\n");
+    };
+    let id0: string | null = null;
+    let id1: string | null = null;
+    for (let i = 0; i < 200; i++) {
+      const id = `rpm-variant-${i}`;
+      if (stableVariantIndex(id) === 0 && !id0) {
+        id0 = id;
+      }
+      if (stableVariantIndex(id) === 1 && !id1) {
+        id1 = id;
+      }
+      if (id0 && id1) {
+        break;
+      }
+    }
+    expect(id0).not.toBeNull();
+    expect(id1).not.toBeNull();
+    expect(mk(id0!)).not.toBe(mk(id1!));
   });
 });

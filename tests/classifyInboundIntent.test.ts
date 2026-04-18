@@ -96,6 +96,17 @@ describe("classifyInboundIntent", () => {
       expect(result.reason).toContain("strong-override");
     });
 
+    it("regression: Google Ads / lead gen without build-an-app phrasing", () => {
+      const body = [
+        "Hi Frank",
+        "",
+        "I want to run google ads for my business to get new leads",
+      ].join("\n");
+      const result = classifyInboundIntent("New", body);
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.reason).toContain("strong-override");
+    });
+
     it("short clear intent: I'm building a platform for freelancers", () => {
       const result = classifyInboundIntent("no subject", "I'm building a platform for freelancers");
       expect(result.isNewProjectIntent).toBe(true);

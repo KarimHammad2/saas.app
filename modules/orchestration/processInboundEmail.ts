@@ -11,6 +11,7 @@ import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
+import { stableVariantIndex, type PlaybookVariant } from "@/modules/domain/playbookVariant";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
 import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
 import { generateShortProjectName, normalizeProjectNameCandidate } from "@/modules/domain/projectName";
@@ -431,8 +432,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const recipients = buildRecipientList(projectState);
 
   const isWelcome = shouldRunKickoff;
+  const playbookVariant = stableVariantIndex(project.id) as PlaybookVariant;
   const nextSteps = isWelcome
-    ? [...getKickoffFollowUpQuestions(projectState.projectDomain ?? "general"), ...defaultNextSteps()]
+    ? [
+        ...getKickoffFollowUpQuestions(projectState.projectDomain ?? "general", playbookVariant),
+        ...defaultNextSteps(),
+      ]
     : defaultNextSteps();
 
   return {

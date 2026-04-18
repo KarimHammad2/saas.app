@@ -27,7 +27,7 @@ export async function runKickoffFlow(
   userId: string,
   projectId: string,
 ): Promise<void> {
-  const kickoff = buildKickoffSummary(event);
+  const kickoff = buildKickoffSummary(event, projectId);
   await repo.setProjectDomain(projectId, kickoff.projectDomain);
   await repo.storeSummary(projectId, kickoff.summary);
   await repo.updateGoals(projectId, kickoff.goals);

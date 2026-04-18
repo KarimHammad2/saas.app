@@ -57,13 +57,6 @@ Put that pivot language in the **opening lines** of the message they will email 
  - \`Project Name:\` then a bullet line with the exact title when they want a specific project name. If they skip this, the system may still derive a short name from the new scope sentence.
  - \`Goals:\`, \`Tasks:\`, \`Completed:\`, \`Decisions:\`, \`Risks:\`, \`Notes:\` — same rules as elsewhere; only include sections that changed.
 
-**What you (the LLM) should do when the user pivots:**
-
- - Briefly acknowledge the new direction in your reply.
- - Explain that Frank needs an **email** containing both (1) a **pivot sentence** using the patterns above and (2) any updated \`Goals:\` / \`Tasks:\` / \`Notes:\` they care about.
- - Give them a **ready-to-send example** they can paste into email to Frank: start with the pivot paragraph, then optional labeled blocks. Use real labels (\`Project Name:\`, \`Goals:\`, etc.) and bullet lines under each, matching how sections appear in this file.
- - Remind them to **reply in the existing project thread** and keep the **project code in the subject** (for example \`[PJT-…]\`) when their client shows it, so the update attaches to the right project.
-
 The user may copy your structured updates and send them by email to Frank.`;
 
 function formatBulletSection(values: string[], emptyPlaceholder: string): string {
