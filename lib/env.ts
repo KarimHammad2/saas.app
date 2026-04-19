@@ -56,12 +56,15 @@ export function getInboundTriggerEmail(): string {
   return "frank@saas2.app";
 }
 
-/** Internal senders blocked from triggering inbound workflow (merged with domain aliases). */
+/**
+ * Internal senders blocked from triggering inbound workflow (merged with domain aliases).
+ * Note: MASTER_USER_EMAIL is intentionally not listed — that address is often the default RPM and must be able to reply to Frank.
+ */
 export function getInternalInboundSenderBlocklist(): string[] {
   const trigger = getInboundTriggerEmail();
   const domain = trigger.includes("@") ? trigger.split("@")[1]! : "saas2.app";
 
-  const builtIn = new Set<string>([trigger, getMasterUserEmail(), `message@${domain}`, `contact@${domain}`, `system@${domain}`]);
+  const builtIn = new Set<string>([trigger, `message@${domain}`, `contact@${domain}`, `system@${domain}`]);
 
   const extra = process.env.INTERNAL_INBOUND_SENDERS?.split(",") ?? [];
   for (const raw of extra) {

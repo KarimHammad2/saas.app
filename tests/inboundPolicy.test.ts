@@ -97,14 +97,14 @@ describe("shouldProcessInboundEmail", () => {
     expect(d).toEqual({ ok: false, reason: "internal_sender" });
   });
 
-  it("rejects internal sender daniel", () => {
+  it("allows master email when To includes Frank (default RPM replies to Frank)", () => {
     const d = shouldProcessInboundEmail(
       baseEvent({
         to: ["frank@saas2.app"],
         from: "daniel@saassquared.com",
       }),
     );
-    expect(d).toEqual({ ok: false, reason: "internal_sender" });
+    expect(d).toEqual({ ok: true });
   });
 
   it("rejects internal sender message@ alias", () => {
