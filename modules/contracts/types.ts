@@ -202,7 +202,8 @@ export interface NormalizedEmailEvent {
     } | null;
     transactionEvent: TransactionEvent | null;
     approvals: {
-      suggestionId: string;
+      /** When null, the inbound processor resolves the pending suggestion for this project (oldest first). */
+      suggestionId: string | null;
       decision: "approve" | "reject";
     }[];
     additionalEmails: string[];

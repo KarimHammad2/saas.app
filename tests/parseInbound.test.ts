@@ -548,6 +548,17 @@ Approve suggestion 123`,
     expect(parsed.parsed.approvals).toEqual([{ suggestionId: "123", decision: "approve" }]);
     expect(parsed.parsed.notes).toEqual([]);
   });
+
+  it("parses bare approve or reject without a suggestion id", () => {
+    expect(parseNormalizedContent("approve").approvals).toEqual([{ suggestionId: null, decision: "approve" }]);
+    expect(parseNormalizedContent("reject").approvals).toEqual([{ suggestionId: null, decision: "reject" }]);
+    expect(parseNormalizedContent("Approved.").approvals).toEqual([{ suggestionId: null, decision: "approve" }]);
+  });
+
+  it("prefers explicit approve/reject suggestion ids over bare words", () => {
+    const mixed = parseNormalizedContent("approve suggestion keep-me\napprove");
+    expect(mixed.approvals).toEqual([{ suggestionId: "keep-me", decision: "approve" }]);
+  });
 });
 
 describe("parseNormalizedContent extended project sections", () => {

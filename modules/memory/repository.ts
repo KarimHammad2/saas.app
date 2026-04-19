@@ -247,7 +247,7 @@ function buildProtectedTransactionSuggestionContent(proposerEmail: string, event
     `Buffer: ${event.bufferHours}`,
     `SaaS2 Fee: ${event.saas2Fee}`,
     `Project Remainder: ${event.projectRemainder}`,
-    "Reply with: approve suggestion <id> to confirm this transaction.",
+    "Reply with approve or reject to confirm this transaction (or approve suggestion <id> if you prefer).",
   ].join(" | ");
 }
 
@@ -1279,6 +1279,18 @@ export class MemoryRepository {
       .eq("project_id", projectId);
     if (error) {
       throw new Error(`Failed to append action items: ${error.message}`);
+    }
+  }
+
+  /** Full replace of in-progress tasks (Tasks: / Action Items: from RPM). Allows empty array to clear. */
+  async replaceActionItems(projectId: string, items: string[]): Promise<void> {
+    const normalized = items.map((i) => i.trim()).filter(Boolean);
+    const { error } = await this.supabase
+      .from("project_states")
+      .update({ action_items: normalized, tasks: normalized })
+      .eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to replace action items: ${error.message}`);
     }
   }
 

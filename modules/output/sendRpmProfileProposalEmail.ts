@@ -20,7 +20,7 @@ function escapeHtmlText(text: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function buildProposalHtml(suggestionContent: string, suggestionId: string, frankEmail: string): string {
+function buildProposalHtml(suggestionContent: string, frankEmail: string): string {
   const lines = suggestionContent.trim().split(/\n+/);
   const bodyParagraphs = lines.map((line) => `<p>${escapeHtmlText(line)}</p>`).join("\n");
   return [
@@ -31,14 +31,14 @@ function buildProposalHtml(suggestionContent: string, suggestionId: string, fran
     "<h2>Your decision</h2>",
     `<p>Reply to <strong>${escapeHtmlText(frankEmail)}</strong> with one of:</p>`,
     "<ul>",
-    `<li><code>approve suggestion ${escapeHtmlText(suggestionId)}</code></li>`,
-    `<li><code>reject suggestion ${escapeHtmlText(suggestionId)}</code></li>`,
+    "<li><code>approve</code></li>",
+    "<li><code>reject</code></li>",
     "</ul>",
     '<p class="email-footer">No project file is attached until you approve. After approval, you and your RPM will receive the updated project document as usual.</p>',
   ].join("\n");
 }
 
-function buildProposalText(suggestionContent: string, suggestionId: string, frankEmail: string): string {
+function buildProposalText(suggestionContent: string, frankEmail: string): string {
   return [
     "Profile update proposed",
     "",
@@ -52,9 +52,9 @@ function buildProposalText(suggestionContent: string, suggestionId: string, fran
     "",
     `Reply to ${frankEmail} with one of:`,
     "",
-    `  approve suggestion ${suggestionId}`,
+    "  approve",
     "",
-    `  reject suggestion ${suggestionId}`,
+    "  reject",
     "",
     "No project file is attached until you approve. After approval, you and your RPM will receive the updated project document as usual.",
   ].join("\n");
@@ -80,9 +80,8 @@ export async function sendRpmProfileProposalEmail(input: SendRpmProfileProposalE
   }
   const projectName = input.context.projectName?.trim() || "Untitled Project";
   const frankEmail = getInboundTriggerEmail();
-  const suggestionId = input.suggestion.id.trim();
-  const text = buildProposalText(input.suggestion.content, suggestionId, frankEmail);
-  const innerHtml = buildProposalHtml(input.suggestion.content, suggestionId, frankEmail);
+  const text = buildProposalText(input.suggestion.content, frankEmail);
+  const innerHtml = buildProposalHtml(input.suggestion.content, frankEmail);
   const html = wrapEmailDocument(innerHtml);
 
   const subject = `Action required: profile suggestion — ${projectName} ${formatProjectCodeBracket(projectCode)}`.trim();

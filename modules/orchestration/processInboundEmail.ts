@@ -257,7 +257,7 @@ function defaultNextSteps(): string[] {
     'Use "UserProfile:" for profile context updates.',
     'Use "UserProfile Suggestion:" for RPM-proposed profile updates.',
     "Use transaction blocks and explicit approvals to record financial events.",
-    'Use "approve suggestion <id>" or "reject suggestion <id>" to resolve pending proposals.',
+    'Reply with "approve" or "reject" to resolve pending proposals (or "approve suggestion <id>" / "reject suggestion <id>" for a specific id).',
   ];
 }
 
@@ -517,7 +517,14 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
     }
   }
-  if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.tasks || contentEvent.parsed.projectSectionPresence.actionItems) {
+  const hasTasksOrActionItemsHeading =
+    contentEvent.parsed.projectSectionPresence.tasks || contentEvent.parsed.projectSectionPresence.actionItems;
+  if (rpmStructuredMode && hasTasksOrActionItemsHeading) {
+    await repo.replaceActionItems(project.id, contentEvent.parsed.actionItems);
+    if (contentEvent.parsed.actionItems.length > 0) {
+      await repo.appendRecentUpdate(project.id, `Tasks updated: ${contentEvent.parsed.actionItems.join("; ")}`);
+    }
+  } else if (!rpmStructuredMode || hasTasksOrActionItemsHeading) {
     await repo.appendActionItems(project.id, contentEvent.parsed.actionItems);
     if (contentEvent.parsed.actionItems.length > 0) {
       await repo.appendRecentUpdate(project.id, `Task(s) added: ${contentEvent.parsed.actionItems.join("; ")}`);
@@ -667,12 +674,22 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   for (const approval of contentEvent.parsed.approvals) {
-    if (canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
-      if (approval.decision === "approve") {
-        await repo.approveSuggestion(ownerUserId, approval.suggestionId, event.from);
-      } else {
-        await repo.rejectSuggestion(ownerUserId, approval.suggestionId, event.from);
+    if (!canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
+      continue;
+    }
+    let suggestionId = approval.suggestionId;
+    if (!suggestionId) {
+      const pending = await repo.getPendingSuggestions(ownerUserId, project.id);
+      const next = pending[0];
+      if (!next) {
+        continue;
       }
+      suggestionId = next.id;
+    }
+    if (approval.decision === "approve") {
+      await repo.approveSuggestion(ownerUserId, suggestionId, event.from);
+    } else {
+      await repo.rejectSuggestion(ownerUserId, suggestionId, event.from);
     }
   }
 

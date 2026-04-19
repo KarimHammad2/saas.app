@@ -68,6 +68,7 @@ const repoState = {
   updateGoals: vi.fn(),
   replaceGoals: vi.fn(),
   appendActionItems: vi.fn(),
+  replaceActionItems: vi.fn(),
   replaceActionItem: vi.fn(),
   markTasksCompleted: vi.fn(),
   updateDecisions: vi.fn(),
@@ -138,6 +139,7 @@ vi.mock("@/modules/memory/repository", async () => {
       updateGoals = repoState.updateGoals;
       replaceGoals = repoState.replaceGoals;
       appendActionItems = repoState.appendActionItems;
+      replaceActionItems = repoState.replaceActionItems;
       replaceActionItem = repoState.replaceActionItem;
       markTasksCompleted = repoState.markTasksCompleted;
       updateDecisions = repoState.updateDecisions;
@@ -1293,6 +1295,59 @@ describe("processInboundEmail", () => {
     await processInboundEmail(event);
     expect(repoState.approveSuggestion).toHaveBeenCalledWith("u1", "abc123", "user@example.com");
     expect(repoState.rejectSuggestion).toHaveBeenCalledWith("u1", "def456", "user@example.com");
+  });
+
+  it("resolves bare approve to the oldest pending suggestion for the project", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getPendingSuggestions.mockResolvedValue([
+      {
+        id: "oldest-pending",
+        userId: "u1",
+        projectId: "p1",
+        fromEmail: "rpm@example.com",
+        content: "User prefers weekly updates",
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        source: "inbound",
+      },
+    ]);
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_bare_approve",
+      provider: "resend",
+      providerEventId: "m_bare_approve",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: profile [PJT-A1B2C3D4]",
+      inReplyTo: null,
+      references: [],
+      rawBody: "approve",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [{ suggestionId: null, decision: "approve" }],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
+    expect(repoState.approveSuggestion).toHaveBeenCalledWith("u1", "oldest-pending", "user@example.com");
   });
 
   it("does not allow RPM role to approve/reject suggestions by email", async () => {
@@ -3391,5 +3446,143 @@ Prefer concise updates.
     await processInboundEmail(event);
     expect(repoState.updateGoals).toHaveBeenCalledWith("p1", ["Owner goal"]);
     expect(repoState.replaceGoals).not.toHaveBeenCalled();
+  });
+
+  it("calls replaceActionItems for RPM when Tasks section is present on existing project", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const rawBody = "Tasks:\n- Wire API\n- Update dashboard\n";
+    const parsed = parseNormalizedContent(rawBody);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_tasks_replace",
+      provider: "resend",
+      providerEventId: "m_rpm_tasks_replace",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    repoState.replaceActionItems.mockClear();
+    repoState.appendActionItems.mockClear();
+    await processInboundEmail(event);
+    expect(repoState.replaceActionItems).toHaveBeenCalledWith("p1", ["Wire API", "Update dashboard"]);
+    expect(repoState.appendActionItems).not.toHaveBeenCalled();
+  });
+
+  it("calls replaceActionItems with empty list when RPM sends Tasks heading with no bullets", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const rawBody = "Tasks:\n";
+    const parsed = parseNormalizedContent(rawBody);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_tasks_clear",
+      provider: "resend",
+      providerEventId: "m_rpm_tasks_clear",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    repoState.replaceActionItems.mockClear();
+    repoState.appendActionItems.mockClear();
+    await processInboundEmail(event);
+    expect(repoState.replaceActionItems).toHaveBeenCalledWith("p1", []);
+    expect(repoState.appendActionItems).not.toHaveBeenCalled();
+  });
+
+  it("uses appendActionItems for owner when Tasks section is present", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const rawBody = "Tasks:\n- Owner task\n";
+    const parsed = parseNormalizedContent(rawBody);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_owner_tasks_append",
+      provider: "resend",
+      providerEventId: "m_owner_tasks_append",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    repoState.replaceActionItems.mockClear();
+    repoState.appendActionItems.mockClear();
+    await processInboundEmail(event);
+    expect(repoState.appendActionItems).toHaveBeenCalledWith("p1", ["Owner task"]);
+    expect(repoState.replaceActionItems).not.toHaveBeenCalled();
   });
 });

@@ -488,17 +488,46 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
   return event;
 }
 
-function parseApprovals(content: string): Array<{ suggestionId: string; decision: "approve" | "reject" }> {
-  const approvals: Array<{ suggestionId: string; decision: "approve" | "reject" }> = [];
+function parseBareSuggestionDecision(content: string): "approve" | "reject" | null {
+  const lines = content.split("\n").map((line) =>
+    line
+      .replace(/^\s*[-*+]\s+/, "")
+      .replace(/^\s*\d+[.)]\s+/, "")
+      .trim(),
+  );
+  for (const line of lines) {
+    if (!line) {
+      continue;
+    }
+    const normalized = line.replace(/\.$/, "").trim().toLowerCase();
+    if (normalized === "approve" || normalized === "approved") {
+      return "approve";
+    }
+    if (normalized === "reject" || normalized === "rejected") {
+      return "reject";
+    }
+  }
+  return null;
+}
+
+function parseApprovals(content: string): Array<{ suggestionId: string | null; decision: "approve" | "reject" }> {
+  const explicit: Array<{ suggestionId: string | null; decision: "approve" | "reject" }> = [];
   const approveRegex = /approve suggestion\s+([a-z0-9-]{1,64})/gi;
   for (const match of content.matchAll(approveRegex)) {
-    approvals.push({ suggestionId: match[1], decision: "approve" });
+    explicit.push({ suggestionId: match[1], decision: "approve" });
   }
   const rejectRegex = /reject suggestion\s+([a-z0-9-]{1,64})/gi;
   for (const match of content.matchAll(rejectRegex)) {
-    approvals.push({ suggestionId: match[1], decision: "reject" });
+    explicit.push({ suggestionId: match[1], decision: "reject" });
   }
-  return approvals;
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  const bare = parseBareSuggestionDecision(content);
+  if (bare) {
+    return [{ suggestionId: null, decision: bare }];
+  }
+  return [];
 }
 
 function parseAdditionalEmails(content: string): string[] {
