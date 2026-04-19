@@ -12,6 +12,11 @@ describe("resolvePlanEntitlements", () => {
     expect(entitlements.package).toBe("agency");
     expect(entitlements.allowCollaborators).toBe(true);
   });
+
+  it("disables human oversight on freemium", () => {
+    expect(resolvePlanEntitlements("freemium").allowHumanOversight).toBe(false);
+    expect(resolvePlanEntitlements("solopreneur").allowHumanOversight).toBe(true);
+  });
 });
 
 describe("filterParticipantEmailsByEntitlements", () => {

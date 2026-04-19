@@ -1886,6 +1886,7 @@ export class MemoryRepository {
     const tier = userRow?.tier ?? "freemium";
     const entitlements = resolvePlanEntitlements(tier);
     const projectDomain = parseStoredProjectDomain(project.project_domain ?? undefined);
+    const activeRpmEmail = await this.getActiveRpm(projectId);
     return {
       projectId: project.id,
       userId: project.user_id,
@@ -1900,6 +1901,7 @@ export class MemoryRepository {
           : userRow?.email?.trim()
             ? userRow.email.toLowerCase()
             : undefined,
+      ...(activeRpmEmail ? { activeRpmEmail: activeRpmEmail.trim().toLowerCase() } : {}),
       summary: state?.summary ?? "",
       initialSummary: typeof state?.initial_summary === "string" ? state.initial_summary : "",
       currentStatus: typeof state?.current_status === "string" ? state.current_status : "",

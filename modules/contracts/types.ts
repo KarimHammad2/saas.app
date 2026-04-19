@@ -90,6 +90,8 @@ export interface ProjectContext {
   projectStatus: ProjectStatus;
   ownerDisplayName?: string;
   ownerEmail?: string;
+  /** Active human RPM from rpm_assignments; included when present for outbound routing and docs. */
+  activeRpmEmail?: string;
   summary: string;
   /** First kickoff overview text; used for rule-based overview regeneration (Phase 2). */
   initialSummary: string;
@@ -180,5 +182,7 @@ export interface NormalizedEmailEvent {
     }[];
     additionalEmails: string[];
     projectName?: string | null;
+    /** Free-text body under Correction: or RPM Correction: (applied when sender is the assigned RPM). */
+    correction?: string | null;
   };
 }

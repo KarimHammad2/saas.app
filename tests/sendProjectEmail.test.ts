@@ -93,7 +93,7 @@ describe("sendProjectEmail", () => {
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.bcc).toBe("daniel@saassquared.com");
+    expect(call?.bcc).toBeUndefined();
     expect(call?.subject).toBe("Your project has been initialized — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-kickoff");
 
@@ -138,7 +138,7 @@ describe("sendProjectEmail", () => {
     await sendProjectEmail(["user@example.com"], payload);
 
     const call = mockedSendEmail.mock.calls[0]?.[0];
-    expect(call?.bcc).toBe("daniel@saassquared.com");
+    expect(call?.bcc).toBeUndefined();
     expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
     expect(call?.html).toContain("Here is your updated project file.");
     expect(call?.text).not.toContain("Project: AI SaaS for real estate");
@@ -156,7 +156,7 @@ describe("sendProjectEmail", () => {
     expect(call?.headers?.["X-SaaS2-Message-Type"]).toBe("project-reminder");
   });
 
-  it("dedupes admin BCC with the default RPM BCC", async () => {
+  it("includes admin BCC when enabled", async () => {
     mockedGetRuntimeConfig.mockResolvedValue({
       adminBccEnabled: true,
       adminBccAddress: "daniel@saassquared.com",

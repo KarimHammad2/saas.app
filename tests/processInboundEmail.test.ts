@@ -195,6 +195,7 @@ describe("processInboundEmail", () => {
       reminderBalance: 3,
       usageCount: 0,
       tier: "freemium",
+      featureFlags: { collaborators: false, oversight: false },
       transactionHistory: [],
     });
     repoState.getPendingSuggestions.mockResolvedValue([]);
@@ -2070,5 +2071,292 @@ describe("processInboundEmail", () => {
 
     await expect(processInboundEmail(event)).rejects.toMatchObject({ name: "ClarificationRequiredError" });
     expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("includes active RPM in recipients when tier has human oversight", async () => {
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: "user@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "solopreneur",
+      featureFlags: { collaborators: false, oversight: true },
+      activeRpmEmail: "rpm@example.com",
+      transactionHistory: [],
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_recip_rpm",
+      provider: "resend",
+      providerEventId: "m_recip_rpm",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Summary: hello",
+      parsed: {
+        summary: "hello",
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    const result = await processInboundEmail(event);
+    expect(result.recipients.sort()).toEqual(["rpm@example.com", "user@example.com"].sort());
+  });
+
+  it("merges inferred memory to project owner when inbound sender is RPM", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, user_id: "u1" });
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u-rpm",
+        email: "rpm@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_infer",
+      provider: "resend",
+      providerEventId: "m_rpm_infer",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: [PJT-A1B2C3D4]",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody: "Notes:\n- Client wants a retail analytics SaaS MVP.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: ["- Client wants a retail analytics SaaS MVP."],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ project_type: "SaaS" }),
+    );
+  });
+
+  it("records RPM Correction lines when sender is the assigned RPM", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u-rpm",
+        email: "rpm@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_corr",
+      provider: "resend",
+      providerEventId: "m_rpm_corr",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody: "Correction:\nThe launch window is 4 weeks, not 2.\n",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        correction: "The launch window is 4 weeks, not 2.",
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.updateNotes).toHaveBeenCalledWith(
+      "p1",
+      expect.arrayContaining(["RPM correction: The launch window is 4 weeks, not 2."]),
+      event.timestamp,
+    );
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith(
+      "p1",
+      expect.stringContaining("RPM correction recorded:"),
+    );
+  });
+
+  it("does not assign default RPM at kickoff when owner tier is freemium", async () => {
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValueOnce({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const rawBody = "I want to build a small tool for tracking invoices.";
+    const event: NormalizedEmailEvent = {
+      eventId: "e_kickoff_free",
+      provider: "resend",
+      providerEventId: "m_kickoff_free",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New idea",
+      inReplyTo: null,
+      references: [],
+      rawBody,
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [rawBody],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.assignRpm).not.toHaveBeenCalled();
+  });
+
+  it("assigns default RPM at kickoff when owner tier is solopreneur", async () => {
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValueOnce({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: "user@example.com",
+      summary: "",
+      initialSummary: "",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "solopreneur",
+      featureFlags: { collaborators: false, oversight: true },
+      transactionHistory: [],
+    });
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "solopreneur",
+        created_at: new Date().toISOString(),
+      },
+      created: true,
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const rawBody = "I want to build a billing reminder app.";
+    const event: NormalizedEmailEvent = {
+      eventId: "e_kickoff_solo",
+      provider: "resend",
+      providerEventId: "m_kickoff_solo",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New project",
+      inReplyTo: null,
+      references: [],
+      rawBody,
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [rawBody],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.assignRpm).toHaveBeenCalled();
   });
 });

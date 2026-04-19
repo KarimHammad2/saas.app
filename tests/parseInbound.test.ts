@@ -81,6 +81,28 @@ Reject suggestion def-456
     expect(parsed.parsed.approvals[1]).toEqual({ suggestionId: "def-456", decision: "reject" });
   });
 
+  it("extracts Correction and RPM Correction bodies", () => {
+    const onlyCorrection = parseInbound(
+      {
+        from: "rpm@example.com",
+        subject: "Re: Update",
+        text: "Correction:\nThe timeline should be 4 weeks, not 2.\n",
+      },
+      "resend",
+    );
+    expect(onlyCorrection.parsed.correction).toContain("4 weeks");
+
+    const rpmPrefixed = parseInbound(
+      {
+        from: "rpm@example.com",
+        subject: "Re: Update",
+        text: "RPM Correction:\nUse the March 15 deadline.\n",
+      },
+      "resend",
+    );
+    expect(rpmPrefixed.parsed.correction).toContain("March 15");
+  });
+
   it("parses markdown-style section headers and dedupes list entries", () => {
     const payload = {
       from: "User <user@example.com>",

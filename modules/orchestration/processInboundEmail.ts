@@ -9,6 +9,7 @@ import { collectParticipantEmailsFromEvent } from "@/modules/email/participantEm
 import { parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "@/modules/domain/entitlements";
+import { buildProjectEmailRecipientList } from "@/modules/domain/projectEmailRecipients";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { stableVariantIndex, type PlaybookVariant } from "@/modules/domain/playbookVariant";
@@ -19,7 +20,12 @@ import { runKickoffFlow } from "@/modules/domain/kickoffService";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
-import { canApproveTransaction, canModifyUserProfile, canProposeUserProfile, resolveActorRole } from "@/modules/domain/rbac";
+import {
+  canApplyInboundUserProfileEdit,
+  canApproveTransaction,
+  canProposeUserProfile,
+  resolveActorRole,
+} from "@/modules/domain/rbac";
 import { canSenderUpdateProject } from "@/modules/domain/projectAccess";
 import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
@@ -168,7 +174,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const pendingSuggestions = await repo.getPendingSuggestions(ownerUserId, project.id);
     const userProfile = await repo.getUserProfile(ownerUserId);
     return {
-      recipients: buildRecipientList(projectState),
+      recipients: buildProjectEmailRecipientList(projectState),
       payload: {
         context: projectState,
         userProfile,
@@ -236,7 +242,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const shouldRunKickoff = !project.kickoff_completed_at;
   if (shouldRunKickoff) {
-    await runKickoffFlow(repo, event, user.id, project.id);
+    await runKickoffFlow(repo, event, user.id, project.id, accessState.tier);
   }
 
   const ownerEmailForRole = accessState.ownerEmail ?? user.email;
@@ -340,11 +346,21 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await repo.appendRecentUpdate(project.id, `Risk(s) added: ${event.parsed.risks.join("; ")}`);
   }
   await repo.updateRecommendations(project.id, event.parsed.recommendations);
-  const mergedNotes = [...event.parsed.notes, ...unmatchedCompletionNotes, ...unknownNotesFromTaskIntents];
+  const rpmCorrectionNotes =
+    role === "rpm" && event.parsed.correction?.trim()
+      ? [`RPM correction: ${event.parsed.correction.trim()}`]
+      : [];
+  const mergedNotes = [...event.parsed.notes, ...rpmCorrectionNotes, ...unmatchedCompletionNotes, ...unknownNotesFromTaskIntents];
   await repo.updateNotes(project.id, mergedNotes, event.timestamp);
   const meaningfulMergedNotes = mergedNotes.map((n) => n.trim()).filter((n) => n.length > 0 && !isIgnoredNoteInput(n));
   if (meaningfulMergedNotes.length > 0) {
     await repo.appendRecentUpdate(project.id, `Notes updated (${meaningfulMergedNotes.length} item${meaningfulMergedNotes.length > 1 ? "s" : ""}).`);
+  }
+  if (role === "rpm" && event.parsed.correction?.trim()) {
+    await repo.appendRecentUpdate(
+      project.id,
+      `RPM correction recorded: ${event.parsed.correction.trim().slice(0, 240)}${event.parsed.correction.trim().length > 240 ? "…" : ""}`,
+    );
   }
   const inferredMemory = inferMemorySignals({
     summary: event.parsed.summary ?? event.rawBody,
@@ -352,13 +368,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     goals: event.parsed.goals,
     notes: event.parsed.notes,
   });
-  await repo.mergeStructuredUserProfileContext(user.id, inferredMemory.sowSignals);
+  await repo.mergeStructuredUserProfileContext(ownerUserId, inferredMemory.sowSignals);
   if (Object.keys(inferredMemory.constraints).length > 0) {
-    await repo.patchUserProfileContextJson(user.id, { constraints: inferredMemory.constraints });
+    await repo.patchUserProfileContextJson(ownerUserId, { constraints: inferredMemory.constraints });
   }
 
-  if (event.parsed.userProfileContext && canModifyUserProfile(role)) {
-    await repo.storeUserProfileContext(user.id, event.parsed.userProfileContext);
+  if (event.parsed.userProfileContext && canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
+    await repo.storeUserProfileContext(ownerUserId, event.parsed.userProfileContext);
   }
 
   if (event.parsed.rpmSuggestion && canProposeUserProfile(role)) {
@@ -366,7 +382,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   for (const approval of event.parsed.approvals) {
-    if (canModifyUserProfile(role)) {
+    if (canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
       if (approval.decision === "approve") {
         await repo.approveSuggestion(ownerUserId, approval.suggestionId, event.from);
       } else {
@@ -429,7 +445,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const projectState = await repo.getProjectState(project.id);
   const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(ownerUserId, project.id);
-  const recipients = buildRecipientList(projectState);
+  const recipients = buildProjectEmailRecipientList(projectState);
 
   const isWelcome = shouldRunKickoff;
   const playbookVariant = stableVariantIndex(project.id) as PlaybookVariant;
@@ -457,11 +473,4 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       duplicate: false,
     },
   };
-}
-
-function buildRecipientList(projectState: { ownerEmail?: string; participants: string[] }): string[] {
-  const raw = [projectState.ownerEmail, ...projectState.participants].filter(
-    (entry): entry is string => typeof entry === "string" && entry.includes("@"),
-  );
-  return Array.from(new Set(raw.map((e) => e.trim().toLowerCase())));
 }

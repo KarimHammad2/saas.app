@@ -17,6 +17,14 @@ export function resolvePlanEntitlements(tier: Tier): PlanEntitlements {
     };
   }
 
+  if (tier === "freemium") {
+    return {
+      package: "solo",
+      allowCollaborators: false,
+      allowHumanOversight: false,
+    };
+  }
+
   return {
     package: "solo",
     allowCollaborators: false,

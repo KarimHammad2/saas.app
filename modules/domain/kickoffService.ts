@@ -1,5 +1,11 @@
 import { getMasterUserEmail } from "@/lib/env";
-import type { NormalizedEmailEvent, ProjectDomain, UserProfileStructuredContext } from "@/modules/contracts/types";
+import type {
+  NormalizedEmailEvent,
+  ProjectDomain,
+  Tier,
+  UserProfileStructuredContext,
+} from "@/modules/contracts/types";
+import { resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import type { JsonRecord } from "@/modules/domain/userProfileMerge";
 import { buildKickoffSummary } from "@/modules/domain/kickoff";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
@@ -26,6 +32,7 @@ export async function runKickoffFlow(
   event: NormalizedEmailEvent,
   userId: string,
   projectId: string,
+  ownerTier: Tier,
 ): Promise<void> {
   const kickoff = buildKickoffSummary(event, projectId);
   await repo.setProjectDomain(projectId, kickoff.projectDomain);
@@ -50,7 +57,8 @@ export async function runKickoffFlow(
   }
 
   const activeRpm = await repo.getActiveRpm(projectId);
-  if (!activeRpm) {
+  const oversight = resolvePlanEntitlements(ownerTier).allowHumanOversight;
+  if (!activeRpm && oversight) {
     await repo.assignRpm(projectId, getMasterUserEmail(), "system@saas2.app");
   }
 

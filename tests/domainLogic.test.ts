@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getNextTier } from "@/modules/domain/pricing";
-import { canApproveTransaction, canModifyUserProfile, resolveActorRole } from "@/modules/domain/rbac";
+import {
+  canApplyInboundUserProfileEdit,
+  canApproveTransaction,
+  canModifyUserProfile,
+  resolveActorRole,
+} from "@/modules/domain/rbac";
 
 describe("domain logic", () => {
   it("transitions freemium to solopreneur on transaction", () => {
@@ -50,5 +55,18 @@ describe("domain logic", () => {
     expect(role).toBe("rpm");
     expect(canModifyUserProfile(role)).toBe(false);
     expect(canApproveTransaction(role)).toBe(false);
+  });
+
+  it("allows inbound UserProfile edits only from owner or master", () => {
+    expect(
+      canApplyInboundUserProfileEdit("user", "owner@example.com", "owner@example.com"),
+    ).toBe(true);
+    expect(
+      canApplyInboundUserProfileEdit("user", "other@example.com", "owner@example.com"),
+    ).toBe(false);
+    expect(canApplyInboundUserProfileEdit("master", "anyone@example.com", "owner@example.com")).toBe(
+      true,
+    );
+    expect(canApplyInboundUserProfileEdit("rpm", "rpm@example.com", "owner@example.com")).toBe(false);
   });
 });

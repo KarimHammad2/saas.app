@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { getMasterUserEmail } from "@/lib/env";
 import { wrapEmailDocument } from "@/modules/email/buildHtmlEmail";
 import { normalizeMessageId } from "@/modules/email/messageId";
 import { sendEmail } from "@/modules/email/sendEmail";
@@ -7,8 +8,6 @@ import { getRuntimeConfig } from "@/modules/config/runtimeConfig";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
 import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailKind, ProjectEmailPayload } from "@/modules/output/types";
-
-const DEFAULT_RPM_BCC = "daniel@saassquared.com";
 
 function formatProjectCodeBracket(projectCode: string): string {
   const hex = projectCode.replace(/^pjt-/i, "").toUpperCase();
@@ -49,18 +48,11 @@ function buildEmailSubject(payload: ProjectEmailPayload, baseSubject: string): s
   return `${baseSubject} — ${projectName} ${formatProjectCodeBracket(projectCode)}`.trim();
 }
 
-function buildBccList(kind: ProjectEmailKind, adminBcc?: string | null, adminBccEnabled?: boolean): string | undefined {
-  const recipients = new Set<string>();
-
-  if (adminBccEnabled && adminBcc) {
-    recipients.add(adminBcc.trim().toLowerCase());
+function buildBccList(adminBcc?: string | null, adminBccEnabled?: boolean): string | undefined {
+  if (!adminBccEnabled || !adminBcc?.trim()) {
+    return undefined;
   }
-
-  if (kind === "kickoff" || kind === "update") {
-    recipients.add(DEFAULT_RPM_BCC);
-  }
-
-  return recipients.size > 0 ? Array.from(recipients).join(",") : undefined;
+  return adminBcc.trim().toLowerCase();
 }
 
 export function validateProjectDocumentForAttachment(document: string): void {
@@ -124,12 +116,13 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
         : kind === "welcome"
           ? "project-welcome"
           : "project-update";
-  const bcc = buildBccList(kind, runtime.adminBccAddress, runtime.adminBccEnabled);
+  const bcc = buildBccList(runtime.adminBccAddress, runtime.adminBccEnabled);
+  const allowMasterUserInBcc = Boolean(bcc && bcc === getMasterUserEmail());
 
   await sendEmail({
     to: to.join(","),
     bcc,
-    allowMasterUserInBcc: true,
+    allowMasterUserInBcc,
     subject: finalSubject,
     text,
     html,

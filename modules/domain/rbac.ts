@@ -30,6 +30,25 @@ export function canModifyUserProfile(role: ActorRole): boolean {
   return role === "user" || role === "master";
 }
 
+/** UserProfile: / approvals only from the project owner or master (not collaborators misclassified as user). */
+export function canApplyInboundUserProfileEdit(
+  role: ActorRole,
+  senderEmail: string,
+  ownerEmail: string | null | undefined,
+): boolean {
+  if (!canModifyUserProfile(role)) {
+    return false;
+  }
+  if (role === "master") {
+    return true;
+  }
+  const owner = ownerEmail?.trim().toLowerCase() ?? "";
+  if (!owner) {
+    return false;
+  }
+  return senderEmail.trim().toLowerCase() === owner;
+}
+
 export function canProposeUserProfile(role: ActorRole): boolean {
   return role === "user" || role === "rpm" || role === "master";
 }

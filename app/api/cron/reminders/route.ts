@@ -1,5 +1,6 @@
 import { getCronSecret, getReminderIdleDays } from "@/lib/env";
 import { log } from "@/lib/log";
+import { buildProjectEmailRecipientList } from "@/modules/domain/projectEmailRecipients";
 import { buildReminderEmailPayload } from "@/modules/email/templates/projectEmailTemplates";
 import { MemoryRepository } from "@/modules/memory/repository";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
@@ -32,7 +33,8 @@ async function runReminders(): Promise<{ sent: number; candidates: number }> {
       const pending = await repo.getPendingSuggestions(c.userId);
       const userProfile = await repo.getUserProfile(c.userId);
       const payload = buildReminderEmailPayload(state, pending, userProfile);
-      const { outboundMessageId } = await sendProjectEmail([c.userEmail], payload);
+      const recipients = buildProjectEmailRecipientList(state);
+      const { outboundMessageId } = await sendProjectEmail(recipients.length > 0 ? recipients : [c.userEmail], payload);
       await repo.storeOutboundThreadMapping(outboundMessageId, c.projectId);
       sent += 1;
     } catch (e) {

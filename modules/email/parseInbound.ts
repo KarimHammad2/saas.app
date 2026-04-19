@@ -31,6 +31,8 @@ const SPECIAL_SECTION_LABELS = [
   "UserProfile",
   "Context",
   "UserProfile Suggestion",
+  "RPM Correction",
+  "Correction",
   "Project Name",
   "Team Emails",
   "Additional Emails",
@@ -680,6 +682,9 @@ export function parseNormalizedContent(content: string) {
   const notesSection = filterIgnoredNoteLines(dedupeListValues(toBulletList(extractSection(normalizedContent, "Notes"))));
   const userProfileContext = extractSection(normalizedContent, "UserProfile") || extractSection(normalizedContent, "Context");
   const rpmSuggestionContent = extractSection(normalizedContent, "UserProfile Suggestion");
+  const correctionBody =
+    extractSection(normalizedContent, "RPM Correction") || extractSection(normalizedContent, "Correction");
+  const correctionContent = correctionBody.trim();
   const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
   const approvals = parseApprovals(content);
   const additionalEmails = parseAdditionalEmails(normalizedContent);
@@ -695,6 +700,7 @@ export function parseNormalizedContent(content: string) {
     notesSection.length > 0 ||
     Boolean(userProfileContext) ||
     Boolean(rpmSuggestionContent) ||
+    Boolean(correctionContent) ||
     Boolean(transactionEvent) ||
     approvals.length > 0;
 
@@ -736,6 +742,7 @@ export function parseNormalizedContent(content: string) {
     approvals,
     additionalEmails,
     projectName,
+    correction: correctionContent || null,
   };
 }
 
