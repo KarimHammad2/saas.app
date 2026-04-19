@@ -17,6 +17,7 @@ import { emptyUserProfileContext } from "@/modules/contracts/types";
 import { mergeUniqueStringsPreserveOrder, normalizeListItemKey } from "@/modules/domain/mergeUniqueStrings";
 
 export { mergeUniqueStringsPreserveOrder } from "@/modules/domain/mergeUniqueStrings";
+import { applyApprovedInboundRpmSuggestionToContext } from "@/modules/domain/rpmApprovedProfileContext";
 import { deepMergeUserProfileContext, type JsonRecord } from "@/modules/domain/userProfileMerge";
 import { parseSowSignalsFromUnknown } from "@/modules/domain/sowSignalsPatch";
 import { normalizeMessageId } from "@/modules/email/messageId";
@@ -226,10 +227,6 @@ function asStringArray(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
 }
 
-function dedupePreserveOrder(values: string[]): string[] {
-  return Array.from(new Set(values.map((entry) => entry.trim()).filter(Boolean)));
-}
-
 function noteSemanticKey(line: string): string {
   const t = line.trim();
   const withoutDate = t.replace(/^\[\d{4}-\d{2}-\d{2}\]\s*/, "");
@@ -303,46 +300,6 @@ function parseProtectedTransactionSuggestion(
       projectRemainder,
     },
   };
-}
-
-function parseSuggestionIntoStructuredContext(content: string): Partial<UserProfileStructuredContext> {
-  const text = content.trim();
-  if (!text) {
-    return {};
-  }
-
-  const lowered = text.toLowerCase();
-  const patch: Partial<UserProfileStructuredContext> = {};
-
-  // Deterministic extraction only; no guessing.
-  const roleMatch = lowered.match(/\b(?:i am|i'm|im)\s+(?:a|an)?\s*([a-z][a-z\s-]{2,40})\s+building\b/);
-  if (roleMatch?.[1]) {
-    patch.role = roleMatch[1].replace(/\s+/g, " ").trim();
-  } else if (/\bsolo founder\b/.test(lowered)) {
-    patch.role = "solo founder";
-  }
-
-  const businessMatch = lowered.match(/\bbuilding\s+(?:a|an)?\s*([a-z0-9][a-z0-9\s-]{1,40})\b/);
-  if (businessMatch?.[1]) {
-    patch.business = businessMatch[1].replace(/\s+/g, " ").trim().replace(/[.!,;:]$/, "");
-  } else if (/\bsaas\b/.test(lowered)) {
-    patch.business = "SaaS";
-  }
-
-  const preferenceMatches = [
-    ...text.matchAll(/\b(?:prefers?|preference|likes?|wants?)\s+([a-z0-9][a-z0-9\s-]{2,60})/gi),
-    ...text.matchAll(/\b(short answers?|concise answers?|brief answers?)\b/gi),
-  ];
-  const preferenceList = dedupePreserveOrder(
-    preferenceMatches
-      .map((match) => (match[1] ?? match[0] ?? "").trim().replace(/[.!,;:]$/, ""))
-      .filter(Boolean),
-  );
-  if (preferenceList.length > 0) {
-    patch.preferencesList = preferenceList;
-  }
-
-  return patch;
 }
 
 export class MemoryRepository {
@@ -1550,6 +1507,20 @@ export class MemoryRepository {
     await this.patchUserProfileContextJson(userId, { sowSignals: patch as unknown as JsonRecord });
   }
 
+  /**
+   * Approved inbound RPM profile suggestion: replace `longTermInstructions` and `sowSignals` with this
+   * suggestion only (does not append to prior instructions or merge structured fields).
+   */
+  async applyApprovedInboundRpmSuggestion(userId: string, suggestionContent: string): Promise<void> {
+    const trimmed = suggestionContent.trim();
+    if (!trimmed) {
+      return;
+    }
+    const base = await this.readNormalizedContextJson(userId);
+    const next = applyApprovedInboundRpmSuggestionToContext(base, suggestionContent);
+    await this.persistContextJson(userId, next);
+  }
+
   async updateUserDisplayNameIfEmpty(userId: string, displayName: string | null): Promise<void> {
     const trimmed = displayName?.trim();
     if (!trimmed) {
@@ -1768,12 +1739,7 @@ export class MemoryRepository {
     }
 
     if (suggestion.source === "inbound") {
-      await this.storeUserProfileContext(userId, suggestion.content);
-
-      const structuredPatch = parseSuggestionIntoStructuredContext(suggestion.content);
-      if (Object.keys(structuredPatch).length > 0) {
-        await this.mergeStructuredUserProfileContext(userId, structuredPatch);
-      }
+      await this.applyApprovedInboundRpmSuggestion(userId, suggestion.content);
     }
   }
 
