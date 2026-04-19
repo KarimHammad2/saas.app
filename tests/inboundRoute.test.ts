@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundParseError } from "@/modules/email/parseInbound";
+import { EMPTY_PROJECT_SECTION_PRESENCE } from "@/modules/contracts/types";
 import type { EmailProvider } from "@/modules/email/providers/types";
 import { POST } from "@/app/api/inbound/route";
 import { getEmailProvider } from "@/modules/email/providers";
@@ -42,6 +43,7 @@ function buildProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
     references: [],
     rawBody: "Summary:\nHello",
     parsed: {
+      projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
       summary: "Hello",
       currentStatus: null,
       goals: [],
@@ -127,6 +129,7 @@ describe("POST /api/inbound", () => {
       references: [],
       rawBody: "Hi, I want to build a SaaS for restaurants.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "Hi, I want to build a SaaS for restaurants.",
         currentStatus: null,
         goals: [],
@@ -182,6 +185,7 @@ describe("POST /api/inbound", () => {
       references: [],
       rawBody: "Summary:\nHello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "Hello",
         currentStatus: null,
         goals: [],

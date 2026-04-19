@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { EMPTY_PROJECT_SECTION_PRESENCE } from "@/modules/contracts/types";
 import { shouldProcessInboundEmail } from "@/modules/email/inboundPolicy";
 
 function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEmailEvent {
@@ -17,6 +18,7 @@ function baseEvent(overrides: Partial<NormalizedEmailEvent> = {}): NormalizedEma
     references: [],
     rawBody: "Summary:\nHi",
     parsed: {
+      projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
       summary: "Hi",
       currentStatus: null,
       goals: [],

@@ -6,7 +6,12 @@ import {
 import { log } from "@/lib/log";
 import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
 import { collectParticipantEmailsFromEvent } from "@/modules/email/participantEmails";
-import { parseNormalizedContent, parseProjectCodeFromSubject, prepareInboundPlainText } from "@/modules/email/parseInbound";
+import {
+  hasAnyProjectMemoryPresence,
+  parseNormalizedContent,
+  parseProjectCodeFromSubject,
+  prepareInboundPlainText,
+} from "@/modules/email/parseInbound";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import { buildProjectEmailRecipientList } from "@/modules/domain/projectEmailRecipients";
@@ -220,6 +225,32 @@ async function resolveInboundProject(
   });
 }
 
+function shouldRequireRpmStructuredProjectClarification(
+  parsed: NormalizedEmailEvent["parsed"],
+  rawBody: string,
+): boolean {
+  if (isIgnoredNoteInput(rawBody)) {
+    return false;
+  }
+  if (hasAnyProjectMemoryPresence(parsed.projectSectionPresence)) {
+    return false;
+  }
+  if (
+    parsed.projectStatus ||
+    parsed.userProfileContext ||
+    parsed.rpmSuggestion ||
+    parsed.correction ||
+    parsed.assignRpmEmail ||
+    parsed.transactionEvent ||
+    parsed.approvals.length > 0 ||
+    parsed.additionalEmails.length > 0 ||
+    parsed.projectName
+  ) {
+    return false;
+  }
+  return rawBody.trim().length > 0;
+}
+
 function defaultNextSteps(): string[] {
   return [
     "Reply with labeled sections (Goals:, Tasks:, Notes:) for reliable parsing.",
@@ -274,6 +305,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       : event;
 
   let project: ProjectRecord;
+  /** True when this inbound creates the project row (kickoff path); RPM structured rules do not apply. */
+  let projectCreatedThisInbound = false;
   if (pendingCcConfirmation?.project_id) {
     const existing = await repo.findProjectById(pendingCcConfirmation.project_id);
     if (!existing) {
@@ -289,6 +322,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       createdByUserId: user.id,
     });
     project = created.project;
+    projectCreatedThisInbound = true;
   } else {
     const resolved = await resolveInboundProject(repo, user.id, event, {
       currentTier: user.tier,
@@ -296,6 +330,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       sourceInboundEventId: event.eventId,
     });
     project = resolved.project;
+    projectCreatedThisInbound = resolved.created;
   }
 
   const ownerUserId = project.user_id;
@@ -345,6 +380,28 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       status: 403,
     });
   }
+
+  const ownerEmailForRole = accessState.ownerEmail ?? user.email;
+  const role = resolveActorRole({
+    senderEmail: event.from,
+    primaryUserEmail: ownerEmailForRole,
+    activeRpmEmail,
+  });
+
+  if (
+    role === "rpm" &&
+    !projectCreatedThisInbound &&
+    shouldRequireRpmStructuredProjectClarification(contentEvent.parsed, contentEvent.rawBody)
+  ) {
+    throw new ClarificationRequiredError("RPM project update requires labeled sections.", {
+      senderEmail: event.from,
+      senderSubject: event.subject,
+      intentReason: "rpm_unstructured_project_update",
+      clarificationKind: "rpm_structured_project",
+    });
+  }
+
+  const rpmStructuredMode = role === "rpm" && !projectCreatedThisInbound;
 
   const requestedProjectName = normalizeProjectNameCandidate(contentEvent.parsed.projectName || "");
   const currentProjectName = normalizeProjectNameCandidate(project.name || "");
@@ -433,16 +490,10 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  const ownerEmailForRole = accessState.ownerEmail ?? user.email;
-  const activeRpmForRole = await repo.getActiveRpm(project.id);
-  const role = resolveActorRole({
-    senderEmail: event.from,
-    primaryUserEmail: ownerEmailForRole,
-    activeRpmEmail: activeRpmForRole,
-  });
-
   if (contentEvent.parsed.summary && getAllowOverviewOverride()) {
-    await repo.updateSummaryDisplay(project.id, contentEvent.parsed.summary);
+    if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.summary) {
+      await repo.updateSummaryDisplay(project.id, contentEvent.parsed.summary);
+    }
   }
   if (contentEvent.parsed.projectStatus) {
     await repo.updateProjectStatus(project.id, contentEvent.parsed.projectStatus);
@@ -453,53 +504,76 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await repo.updateCurrentStatus(project.id, contentEvent.parsed.currentStatus);
     await repo.appendRecentUpdate(project.id, `Status updated: ${contentEvent.parsed.currentStatus}`);
   }
-  await repo.updateGoals(project.id, contentEvent.parsed.goals);
-  if (contentEvent.parsed.goals.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
+  if (rpmStructuredMode) {
+    if (contentEvent.parsed.projectSectionPresence.goals) {
+      await repo.replaceGoals(project.id, contentEvent.parsed.goals);
+      if (contentEvent.parsed.goals.length > 0) {
+        await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
+      }
+    }
+  } else {
+    await repo.updateGoals(project.id, contentEvent.parsed.goals);
+    if (contentEvent.parsed.goals.length > 0) {
+      await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
+    }
   }
-  await repo.appendActionItems(project.id, contentEvent.parsed.actionItems);
-  if (contentEvent.parsed.actionItems.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Task(s) added: ${contentEvent.parsed.actionItems.join("; ")}`);
+  if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.tasks || contentEvent.parsed.projectSectionPresence.actionItems) {
+    await repo.appendActionItems(project.id, contentEvent.parsed.actionItems);
+    if (contentEvent.parsed.actionItems.length > 0) {
+      await repo.appendRecentUpdate(project.id, `Task(s) added: ${contentEvent.parsed.actionItems.join("; ")}`);
+    }
   }
   const stateAfterTasks = await repo.getProjectState(project.id);
-  const detectedCompleted = detectCompletedTasks(contentEvent.rawBody, stateAfterTasks.actionItems);
+  const detectedCompleted = rpmStructuredMode
+    ? []
+    : detectCompletedTasks(contentEvent.rawBody, stateAfterTasks.actionItems);
   const fromSection = filterCompletedToKnownTasks(contentEvent.parsed.completedTasks, stateAfterTasks.actionItems);
-  const allCompleted = mergeUniqueStringsPreserveOrder(fromSection, detectedCompleted);
-  await repo.markTasksCompleted(project.id, allCompleted);
+  const allCompleted = rpmStructuredMode
+    ? contentEvent.parsed.projectSectionPresence.completed ? fromSection : []
+    : mergeUniqueStringsPreserveOrder(fromSection, detectedCompleted);
+  if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.completed) {
+    await repo.markTasksCompleted(project.id, allCompleted);
+  }
 
   if (allCompleted.length > 0) {
     await repo.appendRecentUpdate(project.id, `Task(s) completed: ${allCompleted.join("; ")}`);
   }
 
   const stateAfterCompletion = await repo.getProjectState(project.id);
-  const unmatchedCompletionNotes = extractUnmatchedCompletionNotes(contentEvent.rawBody, allCompleted);
-  const taskIntentEvents = applyTaskIntents(
-    contentEvent.rawBody,
-    stateAfterCompletion.actionItems,
-    stateAfterCompletion.completedTasks,
-  );
-  const fallbackScopeTransition = detectProjectScopeChange(contentEvent.rawBody)
-    ? extractScopeTransition(contentEvent.rawBody)
-    : null;
+  const unmatchedCompletionNotes = rpmStructuredMode
+    ? []
+    : extractUnmatchedCompletionNotes(contentEvent.rawBody, allCompleted);
+  const taskIntentEvents = rpmStructuredMode
+    ? []
+    : applyTaskIntents(
+        contentEvent.rawBody,
+        stateAfterCompletion.actionItems,
+        stateAfterCompletion.completedTasks,
+      );
+  const fallbackScopeTransition =
+    !rpmStructuredMode && detectProjectScopeChange(contentEvent.rawBody) ? extractScopeTransition(contentEvent.rawBody) : null;
   const scopeEvent = taskIntentEvents.find((ev) => ev.intent === "SCOPE_CHANGE");
   const scopeTransition = {
     fromScope: scopeEvent?.fromScope || fallbackScopeTransition?.fromScope,
     toScope: scopeEvent?.toScope || fallbackScopeTransition?.toScope,
   };
   const unknownNotesFromTaskIntents: string[] = [];
-  for (const ev of taskIntentEvents) {
-    if (ev.intent === "UPDATE_TASK" && ev.matchedTask && ev.updatedText) {
-      await repo.replaceActionItem(project.id, ev.matchedTask, ev.updatedText);
-    } else if (ev.intent === "CREATE_TASK" && !ev.matchedTask && ev.taskHint.trim()) {
-      await repo.appendActionItems(project.id, [ev.taskHint.trim()]);
-    } else if (ev.intent === "SCOPE_CHANGE") {
-      continue;
-    } else if (ev.intent === "UNKNOWN" && ev.rawSentence.trim()) {
-      unknownNotesFromTaskIntents.push(ev.rawSentence.trim());
+  if (!rpmStructuredMode) {
+    for (const ev of taskIntentEvents) {
+      if (ev.intent === "UPDATE_TASK" && ev.matchedTask && ev.updatedText) {
+        await repo.replaceActionItem(project.id, ev.matchedTask, ev.updatedText);
+      } else if (ev.intent === "CREATE_TASK" && !ev.matchedTask && ev.taskHint.trim()) {
+        await repo.appendActionItems(project.id, [ev.taskHint.trim()]);
+      } else if (ev.intent === "SCOPE_CHANGE") {
+        continue;
+      } else if (ev.intent === "UNKNOWN" && ev.rawSentence.trim()) {
+        unknownNotesFromTaskIntents.push(ev.rawSentence.trim());
+      }
     }
   }
 
-  const scopeChanged = Boolean(scopeEvent) || detectProjectScopeChange(contentEvent.rawBody);
+  const scopeChanged =
+    !rpmStructuredMode && (Boolean(scopeEvent) || detectProjectScopeChange(contentEvent.rawBody));
   if (scopeChanged) {
     const fromBrief = scopeTransition.fromScope || compactOverviewForDocument(priorSnapshot.summary).slice(0, 120) || "(previous)";
     const toBrief =
@@ -528,25 +602,33 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  await repo.updateDecisions(project.id, contentEvent.parsed.decisions);
-  if (contentEvent.parsed.decisions.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Decision(s) added: ${contentEvent.parsed.decisions.join("; ")}`);
+  if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.decisions) {
+    await repo.updateDecisions(project.id, contentEvent.parsed.decisions);
+    if (contentEvent.parsed.decisions.length > 0) {
+      await repo.appendRecentUpdate(project.id, `Decision(s) added: ${contentEvent.parsed.decisions.join("; ")}`);
+    }
   }
-  await repo.updateRisks(project.id, contentEvent.parsed.risks);
-  if (contentEvent.parsed.risks.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Risk(s) added: ${contentEvent.parsed.risks.join("; ")}`);
+  if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.risks) {
+    await repo.updateRisks(project.id, contentEvent.parsed.risks);
+    if (contentEvent.parsed.risks.length > 0) {
+      await repo.appendRecentUpdate(project.id, `Risk(s) added: ${contentEvent.parsed.risks.join("; ")}`);
+    }
   }
-  await repo.updateRecommendations(project.id, contentEvent.parsed.recommendations);
+  if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.recommendations) {
+    await repo.updateRecommendations(project.id, contentEvent.parsed.recommendations);
+  }
   const rpmCorrectionNotes =
     role === "rpm" && contentEvent.parsed.correction?.trim()
       ? [`RPM correction: ${contentEvent.parsed.correction.trim()}`]
       : [];
-  const priorNoteSources = [...contentEvent.parsed.notes, ...rpmCorrectionNotes, ...unmatchedCompletionNotes];
+  const notesFromParsed =
+    rpmStructuredMode && !contentEvent.parsed.projectSectionPresence.notes ? [] : contentEvent.parsed.notes;
+  const priorNoteSources = [...notesFromParsed, ...rpmCorrectionNotes, ...unmatchedCompletionNotes];
   const filteredUnknownFromTaskIntents = filterUnknownNotesSubsumedByPriorNotes(
     unknownNotesFromTaskIntents,
     priorNoteSources,
   );
-  const mergedNotes = [...contentEvent.parsed.notes, ...rpmCorrectionNotes, ...unmatchedCompletionNotes, ...filteredUnknownFromTaskIntents];
+  const mergedNotes = [...notesFromParsed, ...rpmCorrectionNotes, ...unmatchedCompletionNotes, ...filteredUnknownFromTaskIntents];
   await repo.updateNotes(project.id, mergedNotes, event.timestamp);
   const meaningfulMergedNotes = mergedNotes.map((n) => n.trim()).filter((n) => n.length > 0 && !isIgnoredNoteInput(n));
   if (meaningfulMergedNotes.length > 0) {
@@ -558,15 +640,17 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       `RPM correction recorded: ${contentEvent.parsed.correction.trim().slice(0, 240)}${contentEvent.parsed.correction.trim().length > 240 ? "…" : ""}`,
     );
   }
-  const inferredMemory = inferMemorySignals({
-    summary: contentEvent.parsed.summary ?? contentEvent.rawBody,
-    rawBody: contentEvent.rawBody,
-    goals: contentEvent.parsed.goals,
-    notes: contentEvent.parsed.notes,
-  });
-  await repo.mergeStructuredUserProfileContext(ownerUserId, inferredMemory.sowSignals);
-  if (Object.keys(inferredMemory.constraints).length > 0) {
-    await repo.patchUserProfileContextJson(ownerUserId, { constraints: inferredMemory.constraints });
+  if (!rpmStructuredMode || Boolean(contentEvent.parsed.userProfileContext?.trim())) {
+    const inferredMemory = inferMemorySignals({
+      summary: contentEvent.parsed.summary ?? contentEvent.rawBody,
+      rawBody: contentEvent.rawBody,
+      goals: contentEvent.parsed.goals,
+      notes: contentEvent.parsed.notes,
+    });
+    await repo.mergeStructuredUserProfileContext(ownerUserId, inferredMemory.sowSignals);
+    if (Object.keys(inferredMemory.constraints).length > 0) {
+      await repo.patchUserProfileContextJson(ownerUserId, { constraints: inferredMemory.constraints });
+    }
   }
 
   if (contentEvent.parsed.userProfileContext && canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {

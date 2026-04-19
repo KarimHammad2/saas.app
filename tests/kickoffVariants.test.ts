@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { EMPTY_PROJECT_SECTION_PRESENCE } from "@/modules/contracts/types";
 import { buildKickoffSummary, getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
 import { stableVariantIndex } from "@/modules/domain/playbookVariant";
 
@@ -18,6 +19,7 @@ function marketingKickoffEvent(): NormalizedEmailEvent {
     references: [],
     rawBody: "I want to run google ads for my business to get new leads",
     parsed: {
+      projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
       summary: null,
       currentStatus: null,
       goals: [],

@@ -3,7 +3,12 @@ import { log } from "@/lib/log";
 import { MemoryRepository } from "@/modules/memory/repository";
 import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
-import { sendCcMembershipConfirmationEmail, sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
+import {
+  sendCcMembershipConfirmationEmail,
+  sendClarificationEmail,
+  sendPdfResubmissionEmail,
+  sendRpmStructuredProjectClarificationEmail,
+} from "@/modules/orchestration/sendClarificationEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
 
@@ -41,8 +46,13 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
         senderEmail: error.senderEmail,
         senderSubject: error.senderSubject,
         intentReason: error.intentReason,
+        clarificationKind: error.clarificationKind,
       });
-      await sendClarificationEmail(error.senderEmail, error.senderSubject);
+      if (error.clarificationKind === "rpm_structured_project") {
+        await sendRpmStructuredProjectClarificationEmail(error.senderEmail, error.senderSubject);
+      } else {
+        await sendClarificationEmail(error.senderEmail, error.senderSubject);
+      }
       return { userId: null, projectId: null, duplicate: false, clarificationSent: true };
     }
     throw error;

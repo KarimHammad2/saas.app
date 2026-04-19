@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { EMPTY_PROJECT_SECTION_PRESENCE } from "@/modules/contracts/types";
 import { enrichUserProfileFromEmailSignals, extractProfileSignals } from "@/modules/domain/userProfileEnrichment";
 
 function baseEvent(rawBody: string): NormalizedEmailEvent {
@@ -17,6 +18,7 @@ function baseEvent(rawBody: string): NormalizedEmailEvent {
     references: [],
     rawBody,
     parsed: {
+      projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
       summary: null,
       currentStatus: null,
       goals: [],

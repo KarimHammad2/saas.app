@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
-import { emptyUserProfileContext } from "@/modules/contracts/types";
+import { EMPTY_PROJECT_SECTION_PRESENCE, emptyUserProfileContext } from "@/modules/contracts/types";
 import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
 import { generateShortProjectName } from "@/modules/domain/projectName";
 import { parseNormalizedContent } from "@/modules/email/parseInbound";
@@ -66,6 +66,7 @@ const repoState = {
   storeSummary: vi.fn(),
   updateSummaryDisplay: vi.fn(),
   updateGoals: vi.fn(),
+  replaceGoals: vi.fn(),
   appendActionItems: vi.fn(),
   replaceActionItem: vi.fn(),
   markTasksCompleted: vi.fn(),
@@ -135,6 +136,7 @@ vi.mock("@/modules/memory/repository", async () => {
       storeSummary = repoState.storeSummary;
       updateSummaryDisplay = repoState.updateSummaryDisplay;
       updateGoals = repoState.updateGoals;
+      replaceGoals = repoState.replaceGoals;
       appendActionItems = repoState.appendActionItems;
       replaceActionItem = repoState.replaceActionItem;
       markTasksCompleted = repoState.markTasksCompleted;
@@ -301,6 +303,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Summary: hello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "hello",
         currentStatus: null,
         goals: [],
@@ -348,6 +351,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
         summary: parsed.summary,
         currentStatus: parsed.currentStatus,
         goals: parsed.goals,
@@ -389,6 +393,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Status:\n- paused",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         projectStatus: "paused",
@@ -429,6 +434,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "I want to build a restaurant analytics SaaS with weekly KPI reports.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -471,6 +477,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "I'm working on a salon CRM with booking reminders and client notes.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -526,6 +533,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -583,6 +591,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -651,6 +660,7 @@ describe("processInboundEmail", () => {
       references: ["<outbound-test-msg-id@saas2.app>"],
       rawBody: "Tasks:\n- finalize dashboard filters",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -691,6 +701,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Project Name:\n- SMS SaaS Platform",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -732,6 +743,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Rename project to: SMS SaaS Platform",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -810,6 +822,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Tasks:\n- malicious update attempt",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -847,6 +860,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Summary: update",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "update",
         currentStatus: null,
         goals: [],
@@ -909,6 +923,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Tasks:\n- finalize analytics export",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -947,6 +962,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Goals:\n- Reach 100 beta users\nTasks:\n- Ship onboarding\nDecisions:\n- Weekly releases\nRisks:\n- QA bandwidth\nNotes:\n- Need clearer QA ownership",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: ["Reach 100 beta users"],
@@ -1020,6 +1036,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Auth is done",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1089,6 +1106,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Build authentication system is done",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1127,6 +1145,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "I'm a solo founder building SaaS and I prefer short answers.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1165,6 +1184,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "I want to build a SaaS for restaurants and start with an MVP.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1210,6 +1230,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Summary: hello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "hello",
         currentStatus: null,
         goals: [],
@@ -1248,6 +1269,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "approve suggestion abc123 reject suggestion def456",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1289,6 +1311,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "approve suggestion abc123 reject suggestion def456",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1330,6 +1353,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "UserProfile Suggestion:\nCapture one explicit decision under Decisions.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1377,6 +1401,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "UserProfile Suggestion:\nPrefer concise weekly summaries.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1420,6 +1445,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Summary: short update",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "short update",
         currentStatus: null,
         goals: [],
@@ -1459,6 +1485,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Transaction:\nHours Purchased: 10\nHourly Rate: 50",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1512,6 +1539,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Transaction:\nHours Purchased: 5\nHourly Rate: 100",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1604,6 +1632,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "This message has no labeled meaning; it should become notes.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1661,6 +1690,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Summary: hello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "hello",
         currentStatus: null,
         goals: [],
@@ -1705,6 +1735,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "hello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1747,6 +1778,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "done, thanks",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1792,6 +1824,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "I want to build a totally new thing.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1837,6 +1870,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "I want to build another product now.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1874,6 +1908,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "We are no longer doing mobile app for habits, now it's a web dashboard",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -1928,6 +1963,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "We are no longer doing mobile app for habits, now it's a web dashboard for agencies.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "Pivoted to a web dashboard for agencies.",
         currentStatus: null,
         goals: [],
@@ -1991,6 +2027,7 @@ describe("processInboundEmail", () => {
       references: ["<thread-msg@saas2.app>"],
       rawBody: "We are no longer building a mobile app. Instead we want a shared spreadsheet workflow for gyms.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2057,6 +2094,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "We are no longer building a mobile app. We want a shared spreadsheet workflow for gyms instead.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2101,6 +2139,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Project Name:\n- Custom Pivot Name\n\nWe are no longer doing mobile app for habits, now it's a web dashboard",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2193,6 +2232,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Quick update",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2256,6 +2296,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Quick note",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2310,6 +2351,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "yes add them please",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2380,6 +2422,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Yes, add them please",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2446,6 +2489,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "No, do not add",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2533,6 +2577,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Adding finance",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2582,6 +2627,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Need to update Alpha Dashboard soon.",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2645,6 +2691,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Summary: hello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "hello",
         currentStatus: null,
         goals: [],
@@ -2678,6 +2725,13 @@ describe("processInboundEmail", () => {
       created: false,
     });
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const rawBody = `Notes:
+- Client wants a retail analytics SaaS MVP.
+
+UserProfile:
+Prefer concise updates.
+`;
+    const parsed = parseNormalizedContent(rawBody);
     const event: NormalizedEmailEvent = {
       eventId: "e_rpm_infer",
       provider: "resend",
@@ -2690,22 +2744,26 @@ describe("processInboundEmail", () => {
       subject: "Re: [PJT-A1B2C3D4]",
       inReplyTo: "<thread@saas2.app>",
       references: [],
-      rawBody: "Notes:\n- Client wants a retail analytics SaaS MVP.",
+      rawBody,
       parsed: {
-        summary: null,
-        currentStatus: null,
-        goals: [],
-        actionItems: [],
-        completedTasks: [],
-        decisions: [],
-        risks: [],
-        recommendations: [],
-        notes: ["- Client wants a retail analytics SaaS MVP."],
-        userProfileContext: null,
-        rpmSuggestion: null,
-        transactionEvent: null,
-        approvals: [],
-        additionalEmails: [],
+        projectSectionPresence: parsed.projectSectionPresence,
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
       },
     };
     await processInboundEmail(event);
@@ -2742,6 +2800,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: "Correction:\nThe launch window is 4 weeks, not 2.\n",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2793,6 +2852,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2870,6 +2930,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -2948,6 +3009,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -3026,6 +3088,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody,
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: null,
         currentStatus: null,
         goals: [],
@@ -3102,6 +3165,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: body,
       parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
         summary: parsed.summary,
         currentStatus: parsed.currentStatus,
         goals: parsed.goals,
@@ -3182,6 +3246,7 @@ describe("processInboundEmail", () => {
       references: [],
       rawBody: body,
       parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
         summary: parsed.summary,
         currentStatus: parsed.currentStatus,
         goals: parsed.goals,
@@ -3204,5 +3269,127 @@ describe("processInboundEmail", () => {
     repoState.assignRpm.mockClear();
     await processInboundEmail(event);
     expect(repoState.assignRpm).not.toHaveBeenCalled();
+  });
+
+  it("throws rpm_structured_project clarification when RPM sends unstructured body on existing project", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const rawBody =
+      "We should pivot the roadmap and tighten scope without any labeled sections for the parser to latch onto.";
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_unstructured",
+      provider: "resend",
+      providerEventId: "m_rpm_unstructured",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update [PJT-A1B2C3D4]",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        ...parseNormalizedContent(rawBody),
+      },
+    };
+    await expect(processInboundEmail(event)).rejects.toMatchObject({
+      name: "ClarificationRequiredError",
+      clarificationKind: "rpm_structured_project",
+      intentReason: "rpm_unstructured_project_update",
+    });
+    expect(repoState.storeRawProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it("calls replaceGoals for RPM when Goals section is present on existing project", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const rawBody = "Goals:\n- Get 10 users\n- Ship MVP\n";
+    const parsed = parseNormalizedContent(rawBody);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_goals_replace",
+      provider: "resend",
+      providerEventId: "m_rpm_goals_replace",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    repoState.replaceGoals.mockClear();
+    repoState.updateGoals.mockClear();
+    await processInboundEmail(event);
+    expect(repoState.replaceGoals).toHaveBeenCalledWith("p1", ["Get 10 users", "Ship MVP"]);
+    expect(repoState.updateGoals).not.toHaveBeenCalled();
+  });
+
+  it("uses merge updateGoals for owner when Goals section is present", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const rawBody = "Goals:\n- Owner goal\n";
+    const parsed = parseNormalizedContent(rawBody);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_owner_goals_merge",
+      provider: "resend",
+      providerEventId: "m_owner_goals_merge",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        projectSectionPresence: parsed.projectSectionPresence,
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    repoState.replaceGoals.mockClear();
+    repoState.updateGoals.mockClear();
+    await processInboundEmail(event);
+    expect(repoState.updateGoals).toHaveBeenCalledWith("p1", ["Owner goal"]);
+    expect(repoState.replaceGoals).not.toHaveBeenCalled();
   });
 });

@@ -120,7 +120,7 @@ describe("resendProvider.parseInbound", () => {
     });
 
     expect(event.from).toBe("karim@example.com");
-    expect(event.parsed.summary).toBeNull();
+    expect(event.parsed.summary).toContain("Hydrated body");
     expect(event.parsed.goals).toEqual(["Continue flow"]);
     expect(event.attachments).toEqual([{ filename: "scope.pdf", contentType: "application/pdf", isPdf: true }]);
     expect(getReceivedEmail).toHaveBeenCalledOnce();

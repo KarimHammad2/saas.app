@@ -5,7 +5,12 @@ import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, Outb
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
-import { sendCcMembershipConfirmationEmail, sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
+import {
+  sendCcMembershipConfirmationEmail,
+  sendClarificationEmail,
+  sendPdfResubmissionEmail,
+  sendRpmStructuredProjectClarificationEmail,
+} from "@/modules/orchestration/sendClarificationEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 const { storeOutboundThreadMapping, recordOutboundEmailEvent } = vi.hoisted(() => ({
@@ -36,6 +41,7 @@ vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
   sendCcMembershipConfirmationEmail: vi.fn(),
   sendClarificationEmail: vi.fn(),
   sendPdfResubmissionEmail: vi.fn(),
+  sendRpmStructuredProjectClarificationEmail: vi.fn(),
 }));
 
 const mockedProcessInboundEmail = vi.mocked(processInboundEmail);
@@ -44,6 +50,7 @@ const mockedSendRpmProfileProposalEmail = vi.mocked(sendRpmProfileProposalEmail)
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
 const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
 const mockedSendCcMembershipConfirmationEmail = vi.mocked(sendCcMembershipConfirmationEmail);
+const mockedSendRpmStructuredProjectClarificationEmail = vi.mocked(sendRpmStructuredProjectClarificationEmail);
 
 describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
@@ -230,8 +237,31 @@ describe("handleInboundEmailEvent", () => {
       clarificationSent: true,
     });
     expect(mockedSendClarificationEmail).toHaveBeenCalledWith("user@example.com", "quick update");
+    expect(mockedSendRpmStructuredProjectClarificationEmail).not.toHaveBeenCalled();
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
     expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends RPM structured-project clarification when clarificationKind is rpm_structured_project", async () => {
+    mockedProcessInboundEmail.mockRejectedValue(
+      new ClarificationRequiredError("RPM project update requires labeled sections.", {
+        senderEmail: "rpm@example.com",
+        senderSubject: "Re: update",
+        intentReason: "rpm_unstructured_project_update",
+        clarificationKind: "rpm_structured_project",
+      }),
+    );
+
+    const response = await handleInboundEmailEvent({} as never);
+
+    expect(response).toMatchObject({
+      userId: null,
+      projectId: null,
+      clarificationSent: true,
+    });
+    expect(mockedSendRpmStructuredProjectClarificationEmail).toHaveBeenCalledWith("rpm@example.com", "Re: update");
+    expect(mockedSendClarificationEmail).not.toHaveBeenCalled();
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
   });
 
   it("sends owner-only CC confirmation prompt when process requires collaborator confirmation", async () => {

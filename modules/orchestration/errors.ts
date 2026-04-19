@@ -14,17 +14,24 @@ export class NonRetryableInboundError extends Error {
  * Thrown when an inbound email lacks sufficient intent to create a new project.
  * Caught by handleInboundEmailEvent to send a clarification reply instead.
  */
+export type ClarificationKind = "default" | "rpm_structured_project";
+
 export class ClarificationRequiredError extends Error {
   readonly senderEmail: string;
   readonly senderSubject: string;
   readonly intentReason: string;
+  readonly clarificationKind: ClarificationKind;
 
-  constructor(message: string, options: { senderEmail: string; senderSubject: string; intentReason: string }) {
+  constructor(
+    message: string,
+    options: { senderEmail: string; senderSubject: string; intentReason: string; clarificationKind?: ClarificationKind },
+  ) {
     super(message);
     this.name = "ClarificationRequiredError";
     this.senderEmail = options.senderEmail;
     this.senderSubject = options.senderSubject;
     this.intentReason = options.intentReason;
+    this.clarificationKind = options.clarificationKind ?? "default";
   }
 }
 

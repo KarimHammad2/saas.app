@@ -136,6 +136,31 @@ export interface TransactionRecord {
   createdAt: string;
 }
 
+/** Labeled project-memory headings detected in inbound body (for deterministic RPM apply rules). */
+export interface ProjectSectionPresence {
+  goals: boolean;
+  tasks: boolean;
+  actionItems: boolean;
+  completed: boolean;
+  decisions: boolean;
+  risks: boolean;
+  summary: boolean;
+  recommendations: boolean;
+  notes: boolean;
+}
+
+export const EMPTY_PROJECT_SECTION_PRESENCE: ProjectSectionPresence = {
+  goals: false,
+  tasks: false,
+  actionItems: false,
+  completed: false,
+  decisions: false,
+  risks: false,
+  summary: false,
+  recommendations: false,
+  notes: false,
+};
+
 export interface NormalizedEmailEvent {
   eventId: string;
   provider: string;
@@ -186,5 +211,7 @@ export interface NormalizedEmailEvent {
     correction?: string | null;
     /** First valid email under Assign RPM: (agency RPM selection via email). */
     assignRpmEmail?: string | null;
+    /** Which project-memory section headings appeared (including empty sections). */
+    projectSectionPresence: ProjectSectionPresence;
   };
 }

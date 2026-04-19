@@ -1382,6 +1382,15 @@ export class MemoryRepository {
     }
   }
 
+  /** Full replace of goals (e.g. labeled Goals: section). Allows empty array to clear. */
+  async replaceGoals(projectId: string, goals: string[]): Promise<void> {
+    const normalized = goals.map((g) => g.trim()).filter(Boolean);
+    const { error } = await this.supabase.from("project_states").update({ goals: normalized }).eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to replace goals: ${error.message}`);
+    }
+  }
+
   async updateDecisions(projectId: string, decisions: string[]): Promise<void> {
     if (decisions.length === 0) {
       return;

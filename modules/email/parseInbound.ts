@@ -1,5 +1,6 @@
-import type { NormalizedEmailEvent, ProjectStatus, TransactionEvent } from "@/modules/contracts/types";
+import type { NormalizedEmailEvent, ProjectSectionPresence, ProjectStatus, TransactionEvent } from "@/modules/contracts/types";
 import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
+import { mergeUniqueStringsPreserveOrder } from "@/modules/domain/mergeUniqueStrings";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { filterIgnoredNoteLines, isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { extractDisplayNameFromSenderRaw, tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
@@ -18,11 +19,14 @@ export class InboundParseError extends Error {
 const MEMORY_SECTION_LABELS = [
   "Goals",
   "Tasks",
+  "Action Items",
   "Completed",
   "Decisions",
   "Risks",
+  "Risk",
+  "Summary",
+  "Recommendations",
   "Notes",
-  // No aliases allowed for strict memory sections.
 ] as const;
 
 const SPECIAL_SECTION_LABELS = [
@@ -354,6 +358,48 @@ function extractSection(content: string, label: string): string {
   const regex = new RegExp(`(?:^|\\n)\\s*${escaped}:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${allLabels}):|$)`, "i");
   const match = content.match(regex);
   return match?.[1]?.trim() ?? "";
+}
+
+/** True when a `Label:` heading appears (empty body allowed). */
+export function hasSectionHeading(content: string, label: string): boolean {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\n)\\s*${escaped}\\s*:`, "im").test(content);
+}
+
+function parseSummaryBlock(sectionText: string): string | null {
+  const trimmed = sectionText.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return cleanOverviewText(trimmed);
+}
+
+export function buildProjectSectionPresence(normalizedContent: string): ProjectSectionPresence {
+  return {
+    goals: hasSectionHeading(normalizedContent, "Goals"),
+    tasks: hasSectionHeading(normalizedContent, "Tasks"),
+    actionItems: hasSectionHeading(normalizedContent, "Action Items"),
+    completed: hasSectionHeading(normalizedContent, "Completed"),
+    decisions: hasSectionHeading(normalizedContent, "Decisions"),
+    risks: hasSectionHeading(normalizedContent, "Risks") || hasSectionHeading(normalizedContent, "Risk"),
+    summary: hasSectionHeading(normalizedContent, "Summary"),
+    recommendations: hasSectionHeading(normalizedContent, "Recommendations"),
+    notes: hasSectionHeading(normalizedContent, "Notes"),
+  };
+}
+
+export function hasAnyProjectMemoryPresence(p: ProjectSectionPresence): boolean {
+  return (
+    p.goals ||
+    p.tasks ||
+    p.actionItems ||
+    p.completed ||
+    p.decisions ||
+    p.risks ||
+    p.summary ||
+    p.recommendations ||
+    p.notes
+  );
 }
 
 function normalizeSectionHeadings(content: string): string {
@@ -706,14 +752,22 @@ function extractInboundAttachments(root: Record<string, unknown>, source: Record
 
 export function parseNormalizedContent(content: string) {
   const normalizedContent = normalizeSectionHeadings(content);
+  const projectSectionPresence = buildProjectSectionPresence(normalizedContent);
   const projectStatus = normalizeProjectStatus(
     extractSection(normalizedContent, "Project Status") || extractSection(normalizedContent, "Status"),
   );
   const goals = dedupeListValues(toBulletList(extractSection(normalizedContent, "Goals")));
-  const actionItems = dedupeListValues(toBulletList(extractSection(normalizedContent, "Tasks")));
+  const tasksPart = dedupeListValues(toBulletList(extractSection(normalizedContent, "Tasks")));
+  const actionItemsPart = dedupeListValues(toBulletList(extractSection(normalizedContent, "Action Items")));
+  const actionItems = mergeUniqueStringsPreserveOrder(tasksPart, actionItemsPart);
   const completedTasks = dedupeListValues(toBulletList(extractSection(normalizedContent, "Completed")));
   const decisions = dedupeListValues(toBulletList(extractSection(normalizedContent, "Decisions")));
-  const risks = dedupeListValues(toBulletList(extractSection(normalizedContent, "Risks")));
+  const risksFromPlural = dedupeListValues(toBulletList(extractSection(normalizedContent, "Risks")));
+  const risksFromSingular = dedupeListValues(toBulletList(extractSection(normalizedContent, "Risk")));
+  const risks = mergeUniqueStringsPreserveOrder(risksFromPlural, risksFromSingular);
+  const recommendations = dedupeListValues(toBulletList(extractSection(normalizedContent, "Recommendations")));
+  const summarySectionRaw = extractSection(normalizedContent, "Summary");
+  const summaryFromSection = parseSummaryBlock(summarySectionRaw);
   const notesSection = filterIgnoredNoteLines(dedupeListValues(toBulletList(extractSection(normalizedContent, "Notes"))));
   const userProfileContext = extractSection(normalizedContent, "UserProfile") || extractSection(normalizedContent, "Context");
   const rpmSuggestionContent = extractSection(normalizedContent, "UserProfile Suggestion");
@@ -729,11 +783,14 @@ export function parseNormalizedContent(content: string) {
 
   const hasMeaning =
     Boolean(projectStatus) ||
+    hasAnyProjectMemoryPresence(projectSectionPresence) ||
     goals.length > 0 ||
     actionItems.length > 0 ||
     completedTasks.length > 0 ||
     decisions.length > 0 ||
     risks.length > 0 ||
+    recommendations.length > 0 ||
+    Boolean(summaryFromSection) ||
     notesSection.length > 0 ||
     Boolean(userProfileContext) ||
     Boolean(rpmSuggestionContent) ||
@@ -742,7 +799,13 @@ export function parseNormalizedContent(content: string) {
     Boolean(transactionEvent) ||
     approvals.length > 0;
 
-  const normalizedSummary = !hasMeaning ? extractSummaryFromText(content) : null;
+  let summary: string | null = null;
+  if (summaryFromSection) {
+    summary = summaryFromSection;
+  } else if (!hasMeaning) {
+    summary = extractSummaryFromText(content);
+  }
+
   let notes: string[];
   if (hasMeaning) {
     notes = notesSection;
@@ -751,14 +814,10 @@ export function parseNormalizedContent(content: string) {
   } else {
     notes = [content];
   }
-  if (hasMeaning && normalizedSummary) {
-    const summaryKey = normalizeForDedup(normalizedSummary);
-    notes = notes.filter((entry) => normalizeForDedup(entry) !== summaryKey);
-  }
   notes = filterIgnoredNoteLines(notes);
 
   return {
-    summary: normalizedSummary || null,
+    summary,
     currentStatus: null,
     projectStatus,
     goals,
@@ -766,7 +825,7 @@ export function parseNormalizedContent(content: string) {
     completedTasks,
     decisions,
     risks,
-    recommendations: [],
+    recommendations,
     notes,
     userProfileContext: userProfileContext || null,
     rpmSuggestion: rpmSuggestionContent
@@ -782,6 +841,7 @@ export function parseNormalizedContent(content: string) {
     projectName,
     correction: correctionContent || null,
     assignRpmEmail: assignRpmEmail ?? null,
+    projectSectionPresence,
   };
 }
 

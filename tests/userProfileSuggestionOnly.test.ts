@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import { EMPTY_PROJECT_SECTION_PRESENCE } from "@/modules/contracts/types";
 import { isUserProfileSuggestionOnlyInbound } from "@/modules/domain/userProfileSuggestionOnly";
 
 function baseParsed(overrides: Partial<NormalizedEmailEvent["parsed"]> = {}): NormalizedEmailEvent["parsed"] {
   return {
+    projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
     summary: null,
     currentStatus: null,
     goals: [],

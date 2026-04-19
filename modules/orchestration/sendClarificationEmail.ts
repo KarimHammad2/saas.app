@@ -39,6 +39,66 @@ export async function sendClarificationEmail(recipientEmail: string, originalSub
 }
 
 /**
+ * RPM reply when a project update had no labeled project-memory sections (Goals, Tasks, etc.).
+ */
+export async function sendRpmStructuredProjectClarificationEmail(recipientEmail: string, originalSubject: string): Promise<void> {
+  const replySubject = buildReplySubject(originalSubject);
+
+  const text = [
+    "Hey —",
+    "",
+    "I couldn’t detect a structured update.",
+    "",
+    "Please use one of the following labeled sections (each on its own line):",
+    "",
+    "Goals:",
+    "- ...",
+    "",
+    "Action Items:",
+    "- ...",
+    "",
+    "Risks:",
+    "- ...",
+    "",
+    "Summary:",
+    "(short overview text)",
+    "",
+    "Decisions:",
+    "- ...",
+    "",
+    "Recommendations:",
+    "- ...",
+    "",
+    "Notes:",
+    "- ...",
+    "",
+    "— Frank",
+  ].join("\n");
+
+  const html = `
+<p>Hey &mdash;</p>
+<p>I couldn&rsquo;t detect a structured update.</p>
+<p>Please use one of the following labeled sections (each on its own line):</p>
+<ul>
+<li><strong>Goals:</strong> with bullet lines</li>
+<li><strong>Action Items:</strong> with bullet lines</li>
+<li><strong>Risks:</strong> with bullet lines</li>
+<li><strong>Summary:</strong> short overview text</li>
+<li><strong>Decisions:</strong> / <strong>Recommendations:</strong> / <strong>Notes:</strong> as needed</li>
+</ul>
+<p>&mdash; Frank</p>
+`.trim();
+
+  await sendEmail({
+    to: recipientEmail,
+    subject: replySubject,
+    text,
+    html,
+    headers: { From: getDefaultFromEmail() },
+  });
+}
+
+/**
  * Sends a direct reply when an inbound email contains PDFs.
  */
 export async function sendPdfResubmissionEmail(recipientEmail: string, originalSubject: string): Promise<void> {

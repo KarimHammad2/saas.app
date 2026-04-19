@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_PROJECT_SECTION_PRESENCE } from "@/modules/contracts/types";
 import { NonRetryableInboundError } from "@/modules/orchestration/errors";
 
 const claimNextInboundEmailJob = vi.fn();
@@ -53,6 +54,7 @@ function buildJob(overrides: Record<string, unknown> = {}) {
       subject: "Hello",
       rawBody: "Summary:\nHello",
       parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
         summary: "Hello",
         currentStatus: null,
         goals: [],

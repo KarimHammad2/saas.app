@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { InboundParseError, isIgnoredNoteInput, parseInbound, parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
+import {
+  InboundParseError,
+  isIgnoredNoteInput,
+  parseInbound,
+  parseNormalizedContent,
+  parseProjectCodeFromSubject,
+} from "@/modules/email/parseInbound";
 
 describe("parseProjectCodeFromSubject", () => {
   it("extracts bracketed PJT code in lowercase db form", () => {
@@ -396,7 +402,7 @@ Notes:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.parsed.summary).toBeNull();
+    expect(parsed.parsed.summary).toContain("One line overview");
     expect(parsed.parsed.currentStatus).toBeNull();
     expect(parsed.parsed.projectStatus).toBe("completed");
     expect(parsed.parsed.notes).toEqual(["One line overview.", "Extra detail only in notes."]);
@@ -427,15 +433,15 @@ Notes:
     expect(parsed.parsed.projectStatus).toBe("paused");
   });
 
-  it("ignores unknown sections and Task aliases for memory updates", () => {
+  it("merges Action Items with Tasks and parses Recommendations", () => {
     const payload = {
       from: "user@example.com",
       subject: "Strict section parsing",
       text: `Action Items:
-- Alias should not parse
+- Alias line
 
 Recommendations:
-- Unknown memory section should be ignored
+- Stakeholder review
 
 Tasks:
 - Canonical task should parse
@@ -443,8 +449,8 @@ Tasks:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.parsed.actionItems).toEqual(["Canonical task should parse"]);
-    expect(parsed.parsed.recommendations).toEqual([]);
+    expect(parsed.parsed.actionItems).toEqual(["Canonical task should parse", "Alias line"]);
+    expect(parsed.parsed.recommendations).toEqual(["Stakeholder review"]);
   });
 
   it("normalizes recipient variants from strings and objects", () => {
@@ -541,5 +547,31 @@ Approve suggestion 123`,
     expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(0);
     expect(parsed.parsed.approvals).toEqual([{ suggestionId: "123", decision: "approve" }]);
     expect(parsed.parsed.notes).toEqual([]);
+  });
+});
+
+describe("parseNormalizedContent extended project sections", () => {
+  it("merges Tasks and Action Items with stable ordering", () => {
+    const raw = "Tasks:\n- First task\n\nAction Items:\n- Second task\n";
+    const p = parseNormalizedContent(raw);
+    expect(p.actionItems).toEqual(["First task", "Second task"]);
+    expect(p.projectSectionPresence.tasks).toBe(true);
+    expect(p.projectSectionPresence.actionItems).toBe(true);
+  });
+
+  it("merges Risk and Risks headings", () => {
+    const raw = "Risks:\n- Schedule risk\n\nRisk:\n- Budget risk\n";
+    const p = parseNormalizedContent(raw);
+    expect(p.risks).toEqual(["Schedule risk", "Budget risk"]);
+    expect(p.projectSectionPresence.risks).toBe(true);
+  });
+
+  it("parses Summary block and Recommendations lists", () => {
+    const raw = "Summary:\nLaunch readiness by Friday.\n\nRecommendations:\n- Add QA\n- Brief stakeholders\n";
+    const p = parseNormalizedContent(raw);
+    expect(p.summary).toContain("Launch readiness");
+    expect(p.recommendations).toEqual(["Add QA", "Brief stakeholders"]);
+    expect(p.projectSectionPresence.summary).toBe(true);
+    expect(p.projectSectionPresence.recommendations).toBe(true);
   });
 });
