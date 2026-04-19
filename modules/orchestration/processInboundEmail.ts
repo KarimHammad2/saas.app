@@ -26,6 +26,7 @@ import {
   canProposeUserProfile,
   resolveActorRole,
 } from "@/modules/domain/rbac";
+import { isUserProfileSuggestionOnlyInbound } from "@/modules/domain/userProfileSuggestionOnly";
 import { canSenderUpdateProject } from "@/modules/domain/projectAccess";
 import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
@@ -39,6 +40,10 @@ import { compactOverviewForDocument } from "@/modules/output/overviewText";
 export interface InboundProcessingResult {
   recipients: string[];
   payload: ProjectEmailPayload;
+  /** When `rpm_profile_proposal`, send lightweight proposal mail to owner instead of full project attachment. */
+  outboundMode: "full" | "rpm_profile_proposal";
+  /** Set when outboundMode is `rpm_profile_proposal` (inbound-stored suggestion row). */
+  rpmProfileProposal: RPMSuggestion | null;
   context: {
     userId: string;
     projectId: string;
@@ -167,6 +172,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const { project } = await resolveInboundProject(repo, user.id, event);
 
   const ownerUserId = project.user_id;
+  let inboundStoredRpmSuggestion: RPMSuggestion | null = null;
 
   if (!inserted) {
     log.info("duplicate inbound event ignored", { provider: event.provider, providerEventId: event.providerEventId });
@@ -183,6 +189,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
         isWelcome: false,
         emailKind: "update",
       },
+      outboundMode: "full",
+      rpmProfileProposal: null,
       context: {
         userId: user.id,
         projectId: project.id,
@@ -378,7 +386,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   if (event.parsed.rpmSuggestion && canProposeUserProfile(role)) {
-    await repo.storeRPMSuggestion(ownerUserId, project.id, event.from, event.parsed.rpmSuggestion.content);
+    inboundStoredRpmSuggestion = await repo.storeRPMSuggestion(
+      ownerUserId,
+      project.id,
+      event.from,
+      event.parsed.rpmSuggestion.content,
+    );
   }
 
   for (const approval of event.parsed.approvals) {
@@ -456,6 +469,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       ]
     : defaultNextSteps();
 
+  const proposalEligible =
+    !shouldRunKickoff &&
+    isUserProfileSuggestionOnlyInbound(event, role) &&
+    inboundStoredRpmSuggestion !== null;
+  const outboundMode = proposalEligible ? "rpm_profile_proposal" : "full";
+
   return {
     recipients,
     payload: {
@@ -466,6 +485,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       isWelcome,
       emailKind: isWelcome ? "kickoff" : "update",
     },
+    outboundMode,
+    rpmProfileProposal: proposalEligible ? inboundStoredRpmSuggestion : null,
     context: {
       userId: user.id,
       projectId: project.id,

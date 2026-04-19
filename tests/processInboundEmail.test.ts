@@ -1191,6 +1191,49 @@ describe("processInboundEmail", () => {
     expect(repoState.updateDecisions).toHaveBeenCalledWith("p1", []);
   });
 
+  it("sets outboundMode to rpm_profile_proposal for RPM-only UserProfile Suggestion", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_rpm_proposal_only",
+      provider: "resend",
+      providerEventId: "m_rpm_proposal_only",
+      timestamp: new Date().toISOString(),
+      from: "rpm@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Profile suggestion",
+      inReplyTo: null,
+      references: [],
+      rawBody: "UserProfile Suggestion:\nPrefer concise weekly summaries.",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: {
+          content: "Prefer concise weekly summaries.",
+          from: "rpm@example.com",
+          timestamp: new Date().toISOString(),
+        },
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.outboundMode).toBe("rpm_profile_proposal");
+    expect(result.rpmProfileProposal?.content).toContain("concise weekly");
+    expect(result.rpmProfileProposal?.id).toBe("s1");
+  });
+
   it("generates system suggestions as pending records (not confirmed state mutations)", async () => {
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {

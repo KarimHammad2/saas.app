@@ -5,6 +5,7 @@ import { ClarificationRequiredError, OutboundEmailDeliveryError } from "@/module
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
 import { sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
+import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
 
 export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
   if (event.attachments?.some((attachment) => attachment.isPdf)) {
@@ -36,25 +37,46 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
   if (!result.context.duplicate) {
     const repo = new MemoryRepository();
     try {
-      const { outboundMessageId } = await sendProjectEmail(result.recipients, result.payload);
-      await repo.storeOutboundThreadMapping(outboundMessageId, result.context.projectId);
-      await repo.recordOutboundEmailEvent({
-        projectId: result.context.projectId,
-        userId: result.context.userId,
-        inboundEventId: result.context.eventId,
-        kind: "project-update",
-        provider: event.provider,
-        status: "sent",
-        recipientCount: result.recipients.length,
-        messageId: outboundMessageId,
-      });
+      const ownerEmail = result.payload.context.ownerEmail?.trim();
+      if (result.outboundMode === "rpm_profile_proposal" && result.rpmProfileProposal && ownerEmail) {
+        const { outboundMessageId } = await sendRpmProfileProposalEmail({
+          ownerEmail,
+          context: result.payload.context,
+          suggestion: result.rpmProfileProposal,
+        });
+        await repo.storeOutboundThreadMapping(outboundMessageId, result.context.projectId);
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: "rpm-profile-proposal",
+          provider: event.provider,
+          status: "sent",
+          recipientCount: 1,
+          messageId: outboundMessageId,
+        });
+      } else {
+        const { outboundMessageId } = await sendProjectEmail(result.recipients, result.payload);
+        await repo.storeOutboundThreadMapping(outboundMessageId, result.context.projectId);
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: "project-update",
+          provider: event.provider,
+          status: "sent",
+          recipientCount: result.recipients.length,
+          messageId: outboundMessageId,
+        });
+      }
     } catch (error) {
       const causeMessage = error instanceof Error ? error.message : String(error);
       log.error("outbound project email failed", {
         eventId: result.context.eventId,
         projectId: result.context.projectId,
         userId: result.context.userId,
-        recipientCount: result.recipients.length,
+        recipientCount:
+          result.outboundMode === "rpm_profile_proposal" ? 1 : result.recipients.length,
         causeMessage,
       });
       try {
@@ -62,10 +84,11 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           projectId: result.context.projectId,
           userId: result.context.userId,
           inboundEventId: result.context.eventId,
-          kind: "project-update",
+          kind: result.outboundMode === "rpm_profile_proposal" ? "rpm-profile-proposal" : "project-update",
           provider: event.provider,
           status: "failed",
-          recipientCount: result.recipients.length,
+          recipientCount:
+            result.outboundMode === "rpm_profile_proposal" ? 1 : result.recipients.length,
           errorMessage: causeMessage,
         });
       } catch (auditError) {

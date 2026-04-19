@@ -49,6 +49,8 @@ describe("handleIncomingEmail", () => {
         isWelcome: false,
         emailKind: "update",
       },
+      outboundMode: "full",
+      rpmProfileProposal: null,
       context: {
         userId: "u1",
         projectId: "p1",

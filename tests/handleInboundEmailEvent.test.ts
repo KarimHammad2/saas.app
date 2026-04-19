@@ -4,6 +4,7 @@ import type { InboundProcessingResult } from "@/modules/orchestration/processInb
 import { ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
+import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
 import { sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
@@ -27,6 +28,10 @@ vi.mock("@/modules/output/sendProjectEmail", () => ({
   sendProjectEmail: vi.fn(),
 }));
 
+vi.mock("@/modules/output/sendRpmProfileProposalEmail", () => ({
+  sendRpmProfileProposalEmail: vi.fn(),
+}));
+
 vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
   sendClarificationEmail: vi.fn(),
   sendPdfResubmissionEmail: vi.fn(),
@@ -34,6 +39,7 @@ vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
 
 const mockedProcessInboundEmail = vi.mocked(processInboundEmail);
 const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
+const mockedSendRpmProfileProposalEmail = vi.mocked(sendRpmProfileProposalEmail);
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
 const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
 
@@ -41,6 +47,7 @@ describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockedSendProjectEmail.mockResolvedValue({ outboundMessageId: "outbound-test-msg-id" });
+    mockedSendRpmProfileProposalEmail.mockResolvedValue({ outboundMessageId: "rpm-proposal-msg-id" });
   });
 
   it("sends project email for non-duplicate inbound events", async () => {
@@ -75,6 +82,8 @@ describe("handleInboundEmailEvent", () => {
         isWelcome: false,
         emailKind: "update",
       },
+      outboundMode: "full",
+      rpmProfileProposal: null,
       context: {
         userId: "u1",
         projectId: "p1",
@@ -88,6 +97,7 @@ describe("handleInboundEmailEvent", () => {
 
     expect(response).toMatchObject({ userId: "u1", projectId: "p1", duplicate: false });
     expect(mockedSendProjectEmail).toHaveBeenCalledWith(result.recipients, result.payload);
+    expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
     expect(storeOutboundThreadMapping).toHaveBeenCalledWith("outbound-test-msg-id", "p1");
     expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -130,6 +140,8 @@ describe("handleInboundEmailEvent", () => {
         isWelcome: false,
         emailKind: "update",
       },
+      outboundMode: "full",
+      rpmProfileProposal: null,
       context: {
         userId: "u1",
         projectId: "p1",
@@ -143,6 +155,7 @@ describe("handleInboundEmailEvent", () => {
 
     expect(response).toMatchObject({ userId: "u1", projectId: "p1", duplicate: true });
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+    expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
   });
 
   it("throws typed outbound error when send fails", async () => {
@@ -177,6 +190,8 @@ describe("handleInboundEmailEvent", () => {
         isWelcome: false,
         emailKind: "update",
       },
+      outboundMode: "full",
+      rpmProfileProposal: null,
       context: {
         userId: "u1",
         projectId: "p1",
@@ -214,6 +229,7 @@ describe("handleInboundEmailEvent", () => {
     });
     expect(mockedSendClarificationEmail).toHaveBeenCalledWith("user@example.com", "quick update");
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+    expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
   });
 
   it("sends PDF resubmission email and skips inbound processing when attachment is PDF", async () => {
@@ -232,5 +248,81 @@ describe("handleInboundEmailEvent", () => {
     expect(mockedSendPdfResubmissionEmail).toHaveBeenCalledWith("user@example.com", "Please review this");
     expect(mockedProcessInboundEmail).not.toHaveBeenCalled();
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+    expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends lightweight RPM profile proposal email without project attachment", async () => {
+    const suggestion = {
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      userId: "u1",
+      projectId: "p1",
+      fromEmail: "rpm@example.com",
+      content: "The user prefers short weekly summaries.",
+      status: "pending" as const,
+      createdAt: new Date().toISOString(),
+      source: "inbound" as const,
+    };
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com", "rpm@example.com"],
+      payload: {
+        context: {
+          projectId: "p1",
+          userId: "u1",
+          projectCode: "pjt-a1b2c3d4",
+          projectName: "Demo",
+          ownerEmail: "owner@example.com",
+          projectStatus: "active",
+          summary: "s",
+          initialSummary: "s",
+          currentStatus: "",
+          goals: [],
+          actionItems: [],
+          completedTasks: [],
+          decisions: [],
+          risks: [],
+          recommendations: [],
+          notes: [],
+          participants: [],
+          recentUpdatesLog: [],
+          remainderBalance: 0,
+          reminderBalance: 3,
+          usageCount: 0,
+          tier: "solopreneur",
+          transactionHistory: [],
+        },
+        userProfile: emptyUserProfileContext(),
+        pendingSuggestions: [suggestion],
+        nextSteps: [],
+        isWelcome: false,
+        emailKind: "update",
+      },
+      outboundMode: "rpm_profile_proposal",
+      rpmProfileProposal: suggestion,
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_prop",
+        duplicate: false,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(mockedSendRpmProfileProposalEmail).toHaveBeenCalledOnce();
+    expect(mockedSendRpmProfileProposalEmail).toHaveBeenCalledWith({
+      ownerEmail: "owner@example.com",
+      context: result.payload.context,
+      suggestion,
+    });
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+    expect(storeOutboundThreadMapping).toHaveBeenCalledWith("rpm-proposal-msg-id", "p1");
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "rpm-profile-proposal",
+        status: "sent",
+        recipientCount: 1,
+      }),
+    );
   });
 });
