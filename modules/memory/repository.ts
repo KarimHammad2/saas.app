@@ -26,6 +26,7 @@ import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
 import { parseStoredProjectDomain } from "@/modules/domain/projectDomain";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
+import { planAgencyRpmReplacement } from "@/modules/domain/agencyTierRpm";
 
 function formatNoteDatePrefix(iso?: string): string {
   const d = iso ? new Date(iso) : new Date();
@@ -57,6 +58,8 @@ export interface ProjectRecord {
   usage_count: number;
   kickoff_completed_at: string | null;
   created_at: string;
+  created_by_email?: string | null;
+  created_by_user_id?: string | null;
 }
 
 export interface ClaimedInboundEmailJob {
@@ -910,16 +913,37 @@ export class MemoryRepository {
   /**
    * Always inserts a new project row (multi-project flow). Trigger assigns project_code if omitted.
    */
-  async createProjectForUser(userId: string, name = "New Project"): Promise<{ project: ProjectRecord; created: boolean }> {
+  async createProjectForUser(
+    userId: string,
+    name = "New Project",
+    options?: { createdByEmail?: string; createdByUserId?: string | null },
+  ): Promise<{ project: ProjectRecord; created: boolean }> {
     const ownerEmail = await this.getUserEmailById(userId);
     if (!ownerEmail) {
       throw new Error("Failed to resolve owner email for project creation.");
     }
     const trimmed = name.trim() || "New Project";
+    const insertRow: Record<string, unknown> = {
+      user_id: userId,
+      owner_email: ownerEmail,
+      name: trimmed.slice(0, 200),
+      status: "active",
+    };
+    if (options?.createdByEmail) {
+      const n = normalizeEmail(options.createdByEmail);
+      if (isEmail(n)) {
+        insertRow.created_by_email = n;
+      }
+    }
+    if (options?.createdByUserId) {
+      insertRow.created_by_user_id = options.createdByUserId;
+    }
     const { data: created, error: createError } = await this.supabase
       .from("projects")
-      .insert({ user_id: userId, owner_email: ownerEmail, name: trimmed.slice(0, 200), status: "active" })
-      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .insert(insertRow)
+      .select(
+        "id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at, created_by_email, created_by_user_id",
+      )
       .single<ProjectRecord>();
 
     if (createError || !created) {
@@ -997,6 +1021,78 @@ export class MemoryRepository {
 
     if (insertError) {
       throw new Error(`Failed to assign RPM: ${insertError.message}`);
+    }
+  }
+
+  async deactivateActiveRpm(projectId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from("rpm_assignments")
+      .update({ is_active: false })
+      .eq("project_id", projectId)
+      .eq("is_active", true);
+
+    if (error) {
+      throw new Error(`Failed to deactivate RPM assignment: ${error.message}`);
+    }
+  }
+
+  async getAgencyDefaultRpmEmail(userId: string): Promise<string | null> {
+    const { data, error } = await this.supabase
+      .from("users")
+      .select("agency_default_rpm_email")
+      .eq("id", userId)
+      .maybeSingle<{ agency_default_rpm_email: string | null }>();
+
+    if (error) {
+      throw new Error(`Failed to load agency default RPM: ${error.message}`);
+    }
+
+    const raw = data?.agency_default_rpm_email?.trim();
+    if (!raw) {
+      return null;
+    }
+    const normalized = normalizeEmail(raw);
+    return isEmail(normalized) ? normalized : null;
+  }
+
+  async setAgencyDefaultRpmEmail(userId: string, email: string | null): Promise<void> {
+    const normalized =
+      email === null || email.trim() === ""
+        ? null
+        : normalizeEmail(email);
+    if (normalized && !isEmail(normalized)) {
+      throw new Error("Agency default RPM email must be a valid email.");
+    }
+
+    const { error } = await this.supabase
+      .from("users")
+      .update({ agency_default_rpm_email: normalized })
+      .eq("id", userId);
+
+    if (error) {
+      throw new Error(`Failed to set agency default RPM: ${error.message}`);
+    }
+  }
+
+  /**
+   * When an account becomes agency: remove master user (Daniel) as operational RPM on all owned projects.
+   * Uses `agency_default_rpm_email` when set; otherwise clears the active RPM row.
+   */
+  async applyAgencyTierRpmTransition(userId: string): Promise<void> {
+    const master = getMasterUserEmail().trim().toLowerCase();
+    const agencyDefault = await this.getAgencyDefaultRpmEmail(userId);
+    const projects = await this.findProjectsOwnedByUser(userId);
+    for (const p of projects) {
+      const active = await this.getActiveRpm(p.id);
+      const plan = planAgencyRpmReplacement(master, active, agencyDefault);
+      if (plan === "noop") {
+        continue;
+      }
+      if (plan === "assign" && agencyDefault) {
+        await this.assignRpm(p.id, agencyDefault, "system@saas2.local");
+      } else {
+        await this.deactivateActiveRpm(p.id);
+      }
     }
   }
 

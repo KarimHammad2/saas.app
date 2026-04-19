@@ -151,7 +151,10 @@ async function resolveInboundProject(
     });
   }
 
-  return repo.createProjectForUser(userId, deriveProjectName(event));
+  return repo.createProjectForUser(userId, deriveProjectName(event), {
+    createdByEmail: event.from,
+    createdByUserId: userId,
+  });
 }
 
 function defaultNextSteps(): string[] {
@@ -404,24 +407,28 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  const emailCount = await repo.addAdditionalEmails(user.id, event.parsed.additionalEmails);
+  const priorAccountTier = accessState.tier;
+  const emailCount = await repo.addAdditionalEmails(ownerUserId, event.parsed.additionalEmails);
   const nextTier = getNextTier({
-    currentTier: user.tier,
+    currentTier: priorAccountTier,
     hasTransactionEvent: !!event.parsed.transactionEvent,
     totalAccountEmails: emailCount,
   });
 
-  if (nextTier !== user.tier) {
-    await repo.setUserTier(user.id, nextTier);
-    if (nextTier === "solopreneur" && !activeRpmEmail) {
-      await repo.assignRpm(project.id, getMasterUserEmail(), event.from);
+  if (nextTier !== priorAccountTier) {
+    await repo.setUserTier(ownerUserId, nextTier);
+    if (nextTier === "agency" && priorAccountTier !== "agency") {
+      await repo.applyAgencyTierRpmTransition(ownerUserId);
+    }
+    if (nextTier === "solopreneur") {
+      const rpmAfterTransition = await repo.getActiveRpm(project.id);
+      if (!rpmAfterTransition) {
+        await repo.assignRpm(project.id, getMasterUserEmail(), event.from);
+      }
     }
   }
 
-  let effectiveTier: Tier = nextTier;
-  if (!effectiveTier) {
-    effectiveTier = user.tier;
-  }
+  const effectiveTier: Tier = nextTier;
 
   if (event.parsed.transactionEvent) {
     const normalizedFinancials = applyTierFinancials(event.parsed.transactionEvent, effectiveTier);

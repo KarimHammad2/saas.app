@@ -23,6 +23,7 @@ interface KickoffRepository {
   patchUserProfileContextJson(userId: string, patch: JsonRecord): Promise<void>;
   getActiveRpm(projectId: string): Promise<string | null>;
   assignRpm(projectId: string, rpmEmail: string, assignedByEmail: string): Promise<void>;
+  getAgencyDefaultRpmEmail(userId: string): Promise<string | null>;
   setKickoffCompleted(projectId: string): Promise<void>;
   setProjectDomain(projectId: string, domain: ProjectDomain): Promise<void>;
 }
@@ -57,9 +58,16 @@ export async function runKickoffFlow(
   }
 
   const activeRpm = await repo.getActiveRpm(projectId);
-  const oversight = resolvePlanEntitlements(ownerTier).allowHumanOversight;
-  if (!activeRpm && oversight) {
-    await repo.assignRpm(projectId, getMasterUserEmail(), "system@saas2.app");
+  const entitlements = resolvePlanEntitlements(ownerTier);
+  if (!activeRpm && entitlements.allowHumanOversight) {
+    if (entitlements.package === "agency") {
+      const agencyRpm = await repo.getAgencyDefaultRpmEmail(userId);
+      if (agencyRpm) {
+        await repo.assignRpm(projectId, agencyRpm, "system@saas2.app");
+      }
+    } else {
+      await repo.assignRpm(projectId, getMasterUserEmail(), "system@saas2.app");
+    }
   }
 
   await repo.setKickoffCompleted(projectId);

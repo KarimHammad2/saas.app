@@ -64,6 +64,8 @@ const repoState = {
   addAdditionalEmails: vi.fn(),
   setUserTier: vi.fn(),
   assignRpm: vi.fn(),
+  applyAgencyTierRpmTransition: vi.fn(),
+  getAgencyDefaultRpmEmail: vi.fn(),
   storeTransactionEvent: vi.fn(),
   storeProtectedTransactionSuggestion: vi.fn(),
   snapshotProjectContext: vi.fn(),
@@ -127,6 +129,8 @@ vi.mock("@/modules/memory/repository", async () => {
       addAdditionalEmails = repoState.addAdditionalEmails;
       setUserTier = repoState.setUserTier;
       assignRpm = repoState.assignRpm;
+      applyAgencyTierRpmTransition = repoState.applyAgencyTierRpmTransition;
+      getAgencyDefaultRpmEmail = repoState.getAgencyDefaultRpmEmail;
       storeTransactionEvent = repoState.storeTransactionEvent;
       storeProtectedTransactionSuggestion = repoState.storeProtectedTransactionSuggestion;
       snapshotProjectContext = repoState.snapshotProjectContext;
@@ -223,6 +227,8 @@ describe("processInboundEmail", () => {
       createdAt: new Date().toISOString(),
       source: "inbound" as const,
     }));
+    repoState.applyAgencyTierRpmTransition.mockResolvedValue(undefined);
+    repoState.getAgencyDefaultRpmEmail.mockResolvedValue(null);
   });
 
   it("returns recipients and state payload", async () => {
@@ -343,7 +349,10 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Restaurant Analytics Saas Weekly KPI");
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Restaurant Analytics Saas Weekly KPI", {
+      createdByEmail: "user@example.com",
+      createdByUserId: "u1",
+    });
     expect(result.context.projectId).toBe("p1");
     expect(result.payload.emailKind).toBeDefined();
   });
@@ -382,7 +391,10 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Salon CRM Booking Reminders Client");
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Salon CRM Booking Reminders Client", {
+      createdByEmail: "user@example.com",
+      createdByUserId: "u1",
+    });
     expect(result.context.projectId).toBe("p1");
     expect(result.payload.emailKind).toBeDefined();
   });
@@ -434,7 +446,10 @@ describe("processInboundEmail", () => {
     };
 
     await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Platform Managing Client Projects Across");
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Platform Managing Client Projects Across", {
+      createdByEmail: "user@example.com",
+      createdByUserId: "u1",
+    });
     expect(repoState.storeSummary).toHaveBeenCalledWith(
       "p1",
       expect.stringContaining("Project focus: platform for managing client projects across our team."),
@@ -2069,6 +2084,90 @@ describe("processInboundEmail", () => {
     expect(repoState.createProjectForUser).not.toHaveBeenCalled();
   });
 
+  it("applies additional CC emails and tier transition to project owner account when sender is a collaborator", async () => {
+    const threadProject = {
+      ...defaultMockProject,
+      id: "p-agency",
+      user_id: "u-owner",
+      owner_email: "owner@example.com",
+    };
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
+    repoState.findProjectByThreadMessageId.mockResolvedValue(threadProject);
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u-collab",
+        email: "collab@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.addAdditionalEmails.mockResolvedValue(2);
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p-agency",
+      userId: "u-owner",
+      projectCode: "pjt-a1b2c3d4",
+      ownerEmail: "owner@example.com",
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: ["collab@example.com"],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "solopreneur",
+      featureFlags: { collaborators: true, oversight: true },
+      transactionHistory: [],
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_tier_owner",
+      provider: "resend",
+      providerEventId: "m_tier_owner",
+      timestamp: new Date().toISOString(),
+      from: "collab@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: ["newcc@example.com"],
+      subject: "Re: Update [PJT-A1B2C3D4]",
+      inReplyTo: "<thread-tier@saas2.app>",
+      references: [],
+      rawBody: "Adding finance",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: ["newcc@example.com"],
+      },
+    };
+
+    await processInboundEmail(event);
+
+    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u-owner", ["newcc@example.com"]);
+    expect(repoState.setUserTier).toHaveBeenCalledWith("u-owner", "agency");
+    expect(repoState.applyAgencyTierRpmTransition).toHaveBeenCalledWith("u-owner");
+  });
+
   it("requires clarification when non-thread email mentions one existing project without explicit thread/code context", async () => {
     classifyInboundIntentMock.mockReturnValue({
       isNewProjectIntent: false,
@@ -2401,5 +2500,161 @@ describe("processInboundEmail", () => {
     };
     await processInboundEmail(event);
     expect(repoState.assignRpm).toHaveBeenCalled();
+  });
+
+  it("does not assign master user as RPM at agency kickoff when agency default RPM is unset", async () => {
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValueOnce({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: "user@example.com",
+      summary: "",
+      initialSummary: "",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "agency",
+      featureFlags: { collaborators: true, oversight: true },
+      transactionHistory: [],
+    });
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: true,
+    });
+    repoState.getAgencyDefaultRpmEmail.mockResolvedValue(null);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const rawBody = "I want a client portal for our agency.";
+    const event: NormalizedEmailEvent = {
+      eventId: "e_kickoff_agency",
+      provider: "resend",
+      providerEventId: "m_kickoff_agency",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New project",
+      inReplyTo: null,
+      references: [],
+      rawBody,
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [rawBody],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.assignRpm).not.toHaveBeenCalled();
+  });
+
+  it("assigns agency default RPM at kickoff when tier is agency and default is configured", async () => {
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.createProjectForUser.mockResolvedValueOnce({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: "user@example.com",
+      summary: "",
+      initialSummary: "",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "agency",
+      featureFlags: { collaborators: true, oversight: true },
+      transactionHistory: [],
+    });
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: true,
+    });
+    repoState.getAgencyDefaultRpmEmail.mockResolvedValue("agency-rpm@example.com");
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const rawBody = "I want a client portal for our agency.";
+    const event: NormalizedEmailEvent = {
+      eventId: "e_kickoff_agency_rpm",
+      provider: "resend",
+      providerEventId: "m_kickoff_agency_rpm",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New project",
+      inReplyTo: null,
+      references: [],
+      rawBody,
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [rawBody],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.assignRpm).toHaveBeenCalledWith("p1", "agency-rpm@example.com", "system@saas2.app");
   });
 });
