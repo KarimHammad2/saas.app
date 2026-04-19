@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emptyUserProfileContext } from "@/modules/contracts/types";
 import type { InboundProcessingResult } from "@/modules/orchestration/processInboundEmail";
-import { ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
+import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
-import { sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
+import { sendCcMembershipConfirmationEmail, sendClarificationEmail, sendPdfResubmissionEmail } from "@/modules/orchestration/sendClarificationEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 const { storeOutboundThreadMapping, recordOutboundEmailEvent } = vi.hoisted(() => ({
@@ -33,6 +33,7 @@ vi.mock("@/modules/output/sendRpmProfileProposalEmail", () => ({
 }));
 
 vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
+  sendCcMembershipConfirmationEmail: vi.fn(),
   sendClarificationEmail: vi.fn(),
   sendPdfResubmissionEmail: vi.fn(),
 }));
@@ -42,6 +43,7 @@ const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
 const mockedSendRpmProfileProposalEmail = vi.mocked(sendRpmProfileProposalEmail);
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
 const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
+const mockedSendCcMembershipConfirmationEmail = vi.mocked(sendCcMembershipConfirmationEmail);
 
 describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
@@ -230,6 +232,31 @@ describe("handleInboundEmailEvent", () => {
     expect(mockedSendClarificationEmail).toHaveBeenCalledWith("user@example.com", "quick update");
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
     expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends owner-only CC confirmation prompt when process requires collaborator confirmation", async () => {
+    mockedProcessInboundEmail.mockRejectedValue(
+      new CcMembershipConfirmationRequiredError("cc confirmation required", {
+        ownerEmail: "owner@example.com",
+        senderSubject: "Re: New CRM",
+        candidateEmails: ["john@agency.com"],
+        confirmationId: "cc-confirm-1",
+      }),
+    );
+
+    const response = await handleInboundEmailEvent({} as never);
+
+    expect(response).toMatchObject({
+      userId: null,
+      projectId: null,
+      clarificationSent: true,
+    });
+    expect(mockedSendCcMembershipConfirmationEmail).toHaveBeenCalledWith({
+      recipientEmail: "owner@example.com",
+      originalSubject: "Re: New CRM",
+      candidateEmails: ["john@agency.com"],
+    });
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
   });
 
   it("sends PDF resubmission email and skips inbound processing when attachment is PDF", async () => {

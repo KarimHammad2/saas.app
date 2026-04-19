@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 import { emptyUserProfileContext } from "@/modules/contracts/types";
-import { NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { CcMembershipConfirmationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 
 const emptyUserProfile = emptyUserProfileContext();
 
@@ -63,6 +63,10 @@ const repoState = {
   rejectSuggestion: vi.fn(),
   addAdditionalEmails: vi.fn(),
   setUserTier: vi.fn(),
+  createOrReusePendingCcMembershipConfirmation: vi.fn(),
+  findLatestPendingCcMembershipConfirmation: vi.fn(),
+  resolveCcMembershipConfirmation: vi.fn(),
+  findProjectById: vi.fn(),
   assignRpm: vi.fn(),
   applyAgencyTierRpmTransition: vi.fn(),
   getAgencyDefaultRpmEmail: vi.fn(),
@@ -128,6 +132,10 @@ vi.mock("@/modules/memory/repository", async () => {
       rejectSuggestion = repoState.rejectSuggestion;
       addAdditionalEmails = repoState.addAdditionalEmails;
       setUserTier = repoState.setUserTier;
+      createOrReusePendingCcMembershipConfirmation = repoState.createOrReusePendingCcMembershipConfirmation;
+      findLatestPendingCcMembershipConfirmation = repoState.findLatestPendingCcMembershipConfirmation;
+      resolveCcMembershipConfirmation = repoState.resolveCcMembershipConfirmation;
+      findProjectById = repoState.findProjectById;
       assignRpm = repoState.assignRpm;
       applyAgencyTierRpmTransition = repoState.applyAgencyTierRpmTransition;
       getAgencyDefaultRpmEmail = repoState.getAgencyDefaultRpmEmail;
@@ -177,6 +185,23 @@ describe("processInboundEmail", () => {
     });
     repoState.getActiveRpm.mockResolvedValue("rpm@example.com");
     repoState.addAdditionalEmails.mockResolvedValue(1);
+    repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue(null);
+    repoState.resolveCcMembershipConfirmation.mockResolvedValue(undefined);
+    repoState.findProjectById.mockResolvedValue(defaultMockProject);
+    repoState.createOrReusePendingCcMembershipConfirmation.mockResolvedValue({
+      id: "cc_1",
+      owner_user_id: "u1",
+      project_id: "p1",
+      owner_email: "user@example.com",
+      candidate_emails: ["john@agency.com"],
+      status: "pending",
+      source_inbound_event_id: "e1",
+      source_subject: "subject",
+      source_raw_body: "body",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
@@ -456,6 +481,63 @@ describe("processInboundEmail", () => {
     );
   });
 
+  it("derives marketing kickoff name and overview from campaign intent, not greeting", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.createProjectForUser.mockResolvedValueOnce({
+      project: { ...defaultMockProject, kickoff_completed_at: null },
+      created: true,
+    });
+    const rawBody = [
+      "Hi Frank,",
+      "",
+      "This is a marketing project.",
+      "We want to launch an outbound lead-generation campaign for our agency.",
+      "",
+      "Project goal: Book qualified intro calls with potential clients.",
+    ].join("\n");
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_create_marketing_campaign",
+      provider: "resend",
+      providerEventId: "m_create_marketing_campaign",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "new",
+      inReplyTo: null,
+      references: [],
+      rawBody,
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [rawBody],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Outbound Lead-generation Campaign Agency", {
+      createdByEmail: "user@example.com",
+      createdByUserId: "u1",
+    });
+    expect(repoState.storeSummary).toHaveBeenCalledWith(
+      "p1",
+      expect.stringContaining("Project focus: an outbound lead-generation campaign for our agency."),
+    );
+  });
+
   it("resolves reply updates to the same project via In-Reply-To thread mapping", async () => {
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject, id: "p-thread" });
     repoState.getProjectState.mockResolvedValue({
@@ -676,7 +758,7 @@ describe("processInboundEmail", () => {
     expect(repoState.mergeProjectParticipants).not.toHaveBeenCalled();
   });
 
-  it("blocks new collaborator additions on solo package projects", async () => {
+  it("requires CC confirmation before collaborator additions on solo package projects", async () => {
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
       eventId: "e_solo_participant_gate",
@@ -709,8 +791,8 @@ describe("processInboundEmail", () => {
       },
     };
 
-    await processInboundEmail(event);
-    expect(repoState.mergeProjectParticipants).toHaveBeenCalledWith("p1", ["user@example.com"]);
+    await expect(processInboundEmail(event)).rejects.toBeInstanceOf(CcMembershipConfirmationRequiredError);
+    expect(repoState.createOrReusePendingCcMembershipConfirmation).toHaveBeenCalled();
   });
 
   it("prefers reply thread mapping over conflicting subject project code", async () => {
@@ -2084,6 +2166,163 @@ describe("processInboundEmail", () => {
     expect(repoState.createProjectForUser).not.toHaveBeenCalled();
   });
 
+  it("requires confirmation when freemium owner includes a new CC on existing project", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(defaultMockProject);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_cc_confirm_needed",
+      provider: "resend",
+      providerEventId: "m_cc_confirm_needed",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: ["john@agency.com"],
+      subject: "Re: update [PJT-A1B2C3D4]",
+      inReplyTo: "<thread-existing@saas2.app>",
+      references: [],
+      rawBody: "Quick note",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await expect(processInboundEmail(event)).rejects.toBeInstanceOf(CcMembershipConfirmationRequiredError);
+    expect(repoState.createOrReusePendingCcMembershipConfirmation).toHaveBeenCalled();
+    expect(repoState.mergeProjectParticipants).not.toHaveBeenCalledWith("p1", ["john@agency.com"]);
+  });
+
+  it("approves pending CC confirmation on flexible yes reply", async () => {
+    repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue({
+      id: "cc_pending_yes",
+      owner_user_id: "u1",
+      project_id: "p1",
+      owner_email: "user@example.com",
+      candidate_emails: ["john@agency.com"],
+      status: "pending",
+      source_inbound_event_id: "evt_old",
+      source_subject: "Re: New CRM",
+      source_raw_body: "we are building",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.addAdditionalEmails.mockResolvedValue(2);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_cc_yes",
+      provider: "resend",
+      providerEventId: "m_cc_yes",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: New CRM",
+      inReplyTo: "<thread-existing@saas2.app>",
+      references: [],
+      rawBody: "yes add them please",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.resolveCcMembershipConfirmation).toHaveBeenCalledWith({
+      confirmationId: "cc_pending_yes",
+      status: "approved",
+      resolvedByEmail: "user@example.com",
+    });
+    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", ["john@agency.com"]);
+    expect(repoState.setUserTier).toHaveBeenCalledWith("u1", "agency");
+    expect(repoState.mergeProjectParticipants).toHaveBeenCalledWith("p1", ["john@agency.com"]);
+  });
+
+  it("rejects pending kickoff confirmation on no reply and keeps tier unchanged", async () => {
+    repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue({
+      id: "cc_pending_no",
+      owner_user_id: "u1",
+      project_id: null,
+      owner_email: "user@example.com",
+      candidate_emails: ["john@agency.com"],
+      status: "pending",
+      source_inbound_event_id: "evt_old",
+      source_subject: "new",
+      source_raw_body: "build crm",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_cc_no",
+      provider: "resend",
+      providerEventId: "m_cc_no",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: new",
+      inReplyTo: null,
+      references: [],
+      rawBody: "No, do not add",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.resolveCcMembershipConfirmation).toHaveBeenCalledWith({
+      confirmationId: "cc_pending_no",
+      status: "rejected",
+      resolvedByEmail: "user@example.com",
+    });
+    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", []);
+    expect(repoState.setUserTier).not.toHaveBeenCalledWith("u1", "agency");
+  });
+
   it("applies additional CC emails and tier transition to project owner account when sender is a collaborator", async () => {
     const threadProject = {
       ...defaultMockProject,
@@ -2124,7 +2363,7 @@ describe("processInboundEmail", () => {
       remainderBalance: 0,
       reminderBalance: 3,
       usageCount: 0,
-      tier: "solopreneur",
+      tier: "agency",
       featureFlags: { collaborators: true, oversight: true },
       transactionHistory: [],
     });
@@ -2164,8 +2403,7 @@ describe("processInboundEmail", () => {
     await processInboundEmail(event);
 
     expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u-owner", ["newcc@example.com"]);
-    expect(repoState.setUserTier).toHaveBeenCalledWith("u-owner", "agency");
-    expect(repoState.applyAgencyTierRpmTransition).toHaveBeenCalledWith("u-owner");
+    expect(repoState.setUserTier).not.toHaveBeenCalledWith("u-owner", "agency");
   });
 
   it("requires clarification when non-thread email mentions one existing project without explicit thread/code context", async () => {

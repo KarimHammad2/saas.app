@@ -19,6 +19,7 @@ import { generateShortProjectName, normalizeProjectNameCandidate } from "@/modul
 import { runKickoffFlow } from "@/modules/domain/kickoffService";
 import { inferMemorySignals } from "@/modules/domain/memoryInference";
 import { getNextTier } from "@/modules/domain/pricing";
+import { parseCcMembershipDecision } from "@/modules/domain/ccMembershipDecision";
 import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domain/rpmSuggestions";
 import {
   canApplyInboundUserProfileEdit,
@@ -32,7 +33,7 @@ import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedT
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
 import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
 import { MemoryRepository, mergeUniqueStringsPreserveOrder, type ProjectRecord } from "@/modules/memory/repository";
-import { ClarificationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
+import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
@@ -79,6 +80,7 @@ async function resolveInboundProject(
   repo: MemoryRepository,
   userId: string,
   event: NormalizedEmailEvent,
+  options?: { currentTier: Tier; ownerEmail: string; sourceInboundEventId: string },
 ): Promise<{ project: ProjectRecord; created: boolean }> {
   const hasThreadContext = Boolean(event.inReplyTo) || event.references.length > 0;
   const code = parseProjectCodeFromSubject(event.subject);
@@ -151,6 +153,25 @@ async function resolveInboundProject(
     });
   }
 
+  const sender = event.from.trim().toLowerCase();
+  const kickoffCcCandidates = collectParticipantEmailsFromEvent(event).filter((email) => email !== sender);
+  if ((options?.currentTier === "freemium" || options?.currentTier === "solopreneur") && kickoffCcCandidates.length > 0) {
+    const pending = await repo.createOrReusePendingCcMembershipConfirmation({
+      ownerUserId: userId,
+      ownerEmail: options.ownerEmail,
+      candidateEmails: kickoffCcCandidates,
+      sourceInboundEventId: options.sourceInboundEventId,
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    throw new CcMembershipConfirmationRequiredError("CC membership confirmation required before kickoff creation.", {
+      ownerEmail: options.ownerEmail,
+      senderSubject: event.subject,
+      candidateEmails: kickoffCcCandidates,
+      confirmationId: pending.id,
+    });
+  }
+
   return repo.createProjectForUser(userId, deriveProjectName(event), {
     createdByEmail: event.from,
     createdByUserId: userId,
@@ -172,7 +193,63 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const inserted = await repo.registerInboundEvent(event.provider, event.providerEventId, event as unknown as Record<string, unknown>);
 
   const { user, created: userCreated } = await repo.getOrCreateUserByEmail(event.from);
-  const { project } = await resolveInboundProject(repo, user.id, event);
+  const pendingCcConfirmation = await repo.findLatestPendingCcMembershipConfirmation(user.id);
+  let approvedCcCandidates: string[] = [];
+  let rejectedPendingCc = false;
+  let resolvedFromPendingKickoff = false;
+
+  if (pendingCcConfirmation) {
+    const decision = parseCcMembershipDecision(event.rawBody);
+    if (decision === "approve") {
+      approvedCcCandidates = pendingCcConfirmation.candidate_emails;
+      await repo.resolveCcMembershipConfirmation({
+        confirmationId: pendingCcConfirmation.id,
+        status: "approved",
+        resolvedByEmail: event.from,
+      });
+      resolvedFromPendingKickoff = !pendingCcConfirmation.project_id;
+    } else if (decision === "reject") {
+      await repo.resolveCcMembershipConfirmation({
+        confirmationId: pendingCcConfirmation.id,
+        status: "rejected",
+        resolvedByEmail: event.from,
+      });
+      rejectedPendingCc = true;
+      resolvedFromPendingKickoff = !pendingCcConfirmation.project_id;
+    } else {
+      throw new CcMembershipConfirmationRequiredError("Pending CC membership confirmation requires explicit yes/no reply.", {
+        ownerEmail: pendingCcConfirmation.owner_email,
+        senderSubject: event.subject,
+        candidateEmails: pendingCcConfirmation.candidate_emails,
+        confirmationId: pendingCcConfirmation.id,
+      });
+    }
+  }
+
+  let project: ProjectRecord;
+  if (pendingCcConfirmation?.project_id) {
+    const existing = await repo.findProjectById(pendingCcConfirmation.project_id);
+    if (!existing) {
+      throw new NonRetryableInboundError("Pending CC confirmation references an unknown project.", {
+        code: "CC_CONFIRMATION_PROJECT_NOT_FOUND",
+        status: 404,
+      });
+    }
+    project = existing;
+  } else if (resolvedFromPendingKickoff) {
+    const created = await repo.createProjectForUser(user.id, deriveProjectName(event), {
+      createdByEmail: event.from,
+      createdByUserId: user.id,
+    });
+    project = created.project;
+  } else {
+    const resolved = await resolveInboundProject(repo, user.id, event, {
+      currentTier: user.tier,
+      ownerEmail: user.email,
+      sourceInboundEventId: event.eventId,
+    });
+    project = resolved.project;
+  }
 
   const ownerUserId = project.user_id;
   let inboundStoredRpmSuggestion: RPMSuggestion | null = null;
@@ -234,6 +311,37 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const entitlements = resolvePlanEntitlements(accessState.tier);
   const participantCandidates = collectParticipantEmailsFromEvent(event);
+  const existingParticipants = new Set((accessState.participants ?? []).map((email) => email.trim().toLowerCase()));
+  const ownerEmailNorm = (accessState.ownerEmail ?? "").trim().toLowerCase();
+  const senderEmailNorm = event.from.trim().toLowerCase();
+  const activeRpmNorm = (activeRpmEmail ?? "").trim().toLowerCase();
+  const newCcCandidates = participantCandidates.filter((email) => {
+    const n = email.trim().toLowerCase();
+    return Boolean(n) && n !== ownerEmailNorm && n !== senderEmailNorm && n !== activeRpmNorm && !existingParticipants.has(n);
+  });
+  if (
+    !rejectedPendingCc &&
+    approvedCcCandidates.length === 0 &&
+    accessState.tier !== "agency" &&
+    newCcCandidates.length > 0
+  ) {
+    const pending = await repo.createOrReusePendingCcMembershipConfirmation({
+      ownerUserId,
+      projectId: project.id,
+      ownerEmail: accessState.ownerEmail ?? user.email,
+      candidateEmails: newCcCandidates,
+      sourceInboundEventId: event.eventId,
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    throw new CcMembershipConfirmationRequiredError("CC membership confirmation required before adding collaborators.", {
+      ownerEmail: accessState.ownerEmail ?? user.email,
+      senderSubject: event.subject,
+      candidateEmails: newCcCandidates,
+      confirmationId: pending.id,
+    });
+  }
+
   const filteredParticipantCandidates = filterParticipantEmailsByEntitlements({
     candidateEmails: participantCandidates,
     existingParticipantEmails: accessState.participants,
@@ -242,6 +350,9 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     entitlements,
   });
   await repo.mergeProjectParticipants(project.id, filteredParticipantCandidates);
+  if (approvedCcCandidates.length > 0) {
+    await repo.mergeProjectParticipants(project.id, approvedCcCandidates);
+  }
 
   await repo.storeRawProjectUpdate(project.id, event.rawBody, event as unknown as Record<string, unknown>);
 
@@ -408,7 +519,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const priorAccountTier = accessState.tier;
-  const emailCount = await repo.addAdditionalEmails(ownerUserId, event.parsed.additionalEmails);
+  const accountEmailsToAdd = mergeUniqueStringsPreserveOrder(event.parsed.additionalEmails, approvedCcCandidates);
+  const emailCount = await repo.addAdditionalEmails(ownerUserId, accountEmailsToAdd);
   const nextTier = getNextTier({
     currentTier: priorAccountTier,
     hasTransactionEvent: !!event.parsed.transactionEvent,

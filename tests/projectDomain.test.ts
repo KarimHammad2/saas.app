@@ -5,6 +5,9 @@ describe("inferProjectDomainFromText", () => {
   it("classifies marketing copy", () => {
     expect(inferProjectDomainFromText(["Launch our Q2 Google Ads campaign for lead gen"])).toBe("marketing");
     expect(inferProjectDomainFromText(["SEO and content marketing for the new product"])).toBe("marketing");
+    expect(inferProjectDomainFromText(["We want to launch a new outbound campaign for our agency to get new leads"])).toBe(
+      "marketing",
+    );
   });
 
   it("classifies sales copy", () => {

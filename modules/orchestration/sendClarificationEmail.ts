@@ -72,3 +72,48 @@ export async function sendPdfResubmissionEmail(recipientEmail: string, originalS
     headers: { From: getDefaultFromEmail() },
   });
 }
+
+export async function sendCcMembershipConfirmationEmail(input: {
+  recipientEmail: string;
+  originalSubject: string;
+  candidateEmails: string[];
+}): Promise<void> {
+  const replySubject = buildReplySubject(input.originalSubject);
+  const listed = input.candidateEmails.map((email) => `- ${email}`).join("\n");
+  const text = [
+    `I noticed you included ${input.candidateEmails.join(", ")} (cc email).`,
+    "",
+    "Would you like to add them to your account?",
+    "Reply:",
+    '- "Yes, add them"',
+    '- "No"',
+    "",
+    "Detected CC emails:",
+    listed,
+    "",
+    "— Frank",
+  ].join("\n");
+
+  const html = `
+<p>I noticed you included ${input.candidateEmails.map((email) => `<strong>${email}</strong>`).join(", ")} (cc email).</p>
+<p>Would you like to add them to your account?</p>
+<p>Reply:</p>
+<ul>
+  <li>&quot;Yes, add them&quot;</li>
+  <li>&quot;No&quot;</li>
+</ul>
+<p>Detected CC emails:</p>
+<ul>
+  ${input.candidateEmails.map((email) => `<li>${email}</li>`).join("")}
+</ul>
+<p>&mdash; Frank</p>
+`.trim();
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: replySubject,
+    text,
+    html,
+    headers: { From: getDefaultFromEmail() },
+  });
+}

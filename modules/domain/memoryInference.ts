@@ -42,6 +42,13 @@ function inferIndustry(text: string): string | undefined {
 
 function inferProjectType(text: string): string | undefined {
   const lowered = text.toLowerCase();
+  if (
+    /\b(outbound campaign|marketing campaign|lead generation campaign|lead gen|demand gen|google ads|meta ads|facebook ads|linkedin ads|seo|sem|ppc)\b/.test(
+      lowered,
+    )
+  ) {
+    return "Marketing";
+  }
   if (/\bsaas\b/.test(lowered)) {
     return "SaaS";
   }

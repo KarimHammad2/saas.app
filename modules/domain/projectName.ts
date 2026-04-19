@@ -45,6 +45,12 @@ const FILLER_WORDS = new Set([
   "launch",
   "start",
   "project",
+  "is",
+  "our",
+  "marketing",
+  "objective",
+  "goal",
+  "frank",
 ]);
 
 function toTitleWord(word: string): string {
@@ -57,6 +63,14 @@ function toTitleWord(word: string): string {
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function stripSalutationAndBoilerplate(value: string): string {
+  return value
+    .replace(/^\s*(?:hi|hey|hello)\s+[a-z][a-z\s.'-]{0,40}[,!:]?\s*/i, "")
+    .replace(/^\s*this\s+is\s+(?:a|our)?\s*marketing\s+project[.:,\s-]*/i, "")
+    .replace(/^\s*project\s+goal\s*:\s*/i, "")
+    .trim();
 }
 
 function stripLeadingLabel(value: string): string {
@@ -87,7 +101,7 @@ export function normalizeProjectNameCandidate(input: string): string | null {
 }
 
 export function generateShortProjectName(input: string, fallback = "New Project"): string {
-  const normalized = normalizeWhitespace(input);
+  const normalized = normalizeWhitespace(stripSalutationAndBoilerplate(input));
   if (!normalized) {
     return fallback;
   }

@@ -12,6 +12,13 @@ function stripLeadingFillers(value: string): string {
   return output;
 }
 
+function stripSalutationAndFraming(value: string): string {
+  let output = value.trim();
+  output = output.replace(/^\s*(?:hi|hey|hello)\s+[a-z][a-z\s.'-]{0,40}[,!:]?\s*/i, "");
+  output = output.replace(/^\s*this\s+is\s+(?:a|our)?\s*marketing\s+project[.\s-]*/i, "");
+  return output.trim();
+}
+
 function normalizeSentence(value: string): string {
   const compact = normalizeSpacing(value)
     .replace(/\b(?:idk|i don't know)\b/gi, "")
@@ -83,7 +90,8 @@ export function cleanOverviewText(input: string): string {
     return "";
   }
 
-  const withoutFillers = stripLeadingFillers(normalized);
+  const withoutFraming = stripSalutationAndFraming(normalized);
+  const withoutFillers = stripLeadingFillers(withoutFraming || normalized);
   const sentence = normalizeSentence(withoutFillers || normalized);
   if (!sentence) {
     return "";

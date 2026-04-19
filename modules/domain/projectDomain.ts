@@ -38,10 +38,10 @@ export function inferProjectDomainFromText(parts: Array<string | null | undefine
   }
 
   if (
-    /\b(marketing campaign|go-?to-?market|gtm\b|demand gen|demand generation|content marketing|paid social|paid search|facebook ads|meta ads|google ads|linkedin ads|seo\b|sem\b|newsletter growth|email nurture|brand campaign|social media strategy|influencer|pr launch|press release|ad creative|media buy)\b/.test(
+    /\b(marketing campaign|outbound campaign|lead generation campaign|go-?to-?market|gtm\b|demand gen|demand generation|content marketing|paid social|paid search|facebook ads|meta ads|google ads|linkedin ads|seo\b|sem\b|newsletter growth|email nurture|brand campaign|social media strategy|influencer|pr launch|press release|ad creative|media buy)\b/.test(
       text,
     ) ||
-    /\b(launch (?:a |the )?campaign|run ads|ad spend|awareness campaign)\b/.test(text)
+    /\b(launch (?:a |the )?(?:outbound )?campaign|run ads|ad spend|awareness campaign)\b/.test(text)
   ) {
     return "marketing";
   }

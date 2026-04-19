@@ -28,6 +28,22 @@ export class ClarificationRequiredError extends Error {
   }
 }
 
+export class CcMembershipConfirmationRequiredError extends Error {
+  readonly ownerEmail: string;
+  readonly senderSubject: string;
+  readonly candidateEmails: string[];
+  readonly confirmationId: string;
+
+  constructor(message: string, options: { ownerEmail: string; senderSubject: string; candidateEmails: string[]; confirmationId: string }) {
+    super(message);
+    this.name = "CcMembershipConfirmationRequiredError";
+    this.ownerEmail = options.ownerEmail;
+    this.senderSubject = options.senderSubject;
+    this.candidateEmails = options.candidateEmails;
+    this.confirmationId = options.confirmationId;
+  }
+}
+
 export class OutboundEmailDeliveryError extends Error {
   readonly recipients: string[];
   readonly causeMessage: string;

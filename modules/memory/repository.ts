@@ -70,6 +70,21 @@ export interface ClaimedInboundEmailJob {
   attempts: number;
 }
 
+export interface CcMembershipConfirmationRecord {
+  id: string;
+  owner_user_id: string;
+  project_id: string | null;
+  owner_email: string;
+  candidate_emails: string[];
+  status: "pending" | "approved" | "rejected" | "expired";
+  source_inbound_event_id: string | null;
+  source_subject: string;
+  source_raw_body: string;
+  resolved_by_email: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
 function emptyProfile(): UserProfileContext {
   return emptyUserProfileContext();
 }
@@ -590,6 +605,127 @@ export class MemoryRepository {
     if (error) {
       throw new Error(`Failed to update user tier: ${error.message}`);
     }
+  }
+
+  async createOrReusePendingCcMembershipConfirmation(input: {
+    ownerUserId: string;
+    projectId?: string | null;
+    ownerEmail: string;
+    candidateEmails: string[];
+    sourceInboundEventId?: string | null;
+    sourceSubject: string;
+    sourceRawBody: string;
+  }): Promise<CcMembershipConfirmationRecord> {
+    const normalizedCandidates = Array.from(
+      new Set(input.candidateEmails.map(normalizeEmail).filter((email) => isEmail(email))),
+    );
+    const normalizedOwner = normalizeEmail(input.ownerEmail);
+    const { data: pendingRows, error: pendingError } = await this.supabase
+      .from("cc_membership_confirmations")
+      .select(
+        "id, owner_user_id, project_id, owner_email, candidate_emails, status, source_inbound_event_id, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .eq("owner_user_id", input.ownerUserId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (pendingError) {
+      throw new Error(`Failed to load pending CC confirmations: ${pendingError.message}`);
+    }
+
+    const matching = (pendingRows ?? []).find((row) => {
+      const rowCandidates = asStringArray(row.candidate_emails).map(normalizeEmail).sort();
+      const nextCandidates = [...normalizedCandidates].sort();
+      return rowCandidates.length === nextCandidates.length && rowCandidates.every((entry, idx) => entry === nextCandidates[idx]);
+    });
+    if (matching) {
+      return {
+        id: matching.id,
+        owner_user_id: matching.owner_user_id,
+        project_id: matching.project_id,
+        owner_email: matching.owner_email,
+        candidate_emails: asStringArray(matching.candidate_emails),
+        status: matching.status,
+        source_inbound_event_id: matching.source_inbound_event_id,
+        source_subject: matching.source_subject ?? "",
+        source_raw_body: matching.source_raw_body ?? "",
+        resolved_by_email: matching.resolved_by_email,
+        resolved_at: matching.resolved_at,
+        created_at: matching.created_at,
+      };
+    }
+
+    const { data: created, error: createError } = await this.supabase
+      .from("cc_membership_confirmations")
+      .insert({
+        owner_user_id: input.ownerUserId,
+        project_id: input.projectId ?? null,
+        owner_email: normalizedOwner,
+        candidate_emails: normalizedCandidates,
+        status: "pending",
+        source_inbound_event_id: input.sourceInboundEventId ?? null,
+        source_subject: input.sourceSubject,
+        source_raw_body: input.sourceRawBody,
+      })
+      .select(
+        "id, owner_user_id, project_id, owner_email, candidate_emails, status, source_inbound_event_id, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .single<CcMembershipConfirmationRecord>();
+    if (createError || !created) {
+      throw new Error(`Failed to create CC membership confirmation: ${createError?.message ?? "Unknown error"}`);
+    }
+    return { ...created, candidate_emails: asStringArray(created.candidate_emails) };
+  }
+
+  async findLatestPendingCcMembershipConfirmation(ownerUserId: string): Promise<CcMembershipConfirmationRecord | null> {
+    const { data, error } = await this.supabase
+      .from("cc_membership_confirmations")
+      .select(
+        "id, owner_user_id, project_id, owner_email, candidate_emails, status, source_inbound_event_id, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .eq("owner_user_id", ownerUserId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<CcMembershipConfirmationRecord>();
+    if (error) {
+      throw new Error(`Failed to load pending CC membership confirmation: ${error.message}`);
+    }
+    if (!data) {
+      return null;
+    }
+    return { ...data, candidate_emails: asStringArray(data.candidate_emails) };
+  }
+
+  async resolveCcMembershipConfirmation(input: {
+    confirmationId: string;
+    status: "approved" | "rejected" | "expired";
+    resolvedByEmail: string;
+  }): Promise<void> {
+    const { error } = await this.supabase
+      .from("cc_membership_confirmations")
+      .update({
+        status: input.status,
+        resolved_by_email: normalizeEmail(input.resolvedByEmail),
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", input.confirmationId)
+      .eq("status", "pending");
+    if (error) {
+      throw new Error(`Failed to resolve CC membership confirmation: ${error.message}`);
+    }
+  }
+
+  async findProjectById(projectId: string): Promise<ProjectRecord | null> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, created_at")
+      .eq("id", projectId)
+      .maybeSingle<ProjectRecord>();
+    if (error) {
+      throw new Error(`Failed to load project by id: ${error.message}`);
+    }
+    return data ?? null;
   }
 
   /**

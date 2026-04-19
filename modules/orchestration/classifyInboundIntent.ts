@@ -63,8 +63,9 @@ const PROJECT_INTENT_PATTERNS: RegExp[] = [
   /\b(?:roadmap|sprint|backlog|feature\s+list|user\s+story|milestone)\b/i,
   // Paid marketing / GTM (often no "build an app" phrasing).
   /\b(?:google|meta|facebook|linkedin|tiktok|microsoft)\s+ads?\b/i,
-  /\b(?:paid\s+search|ppc\b|sem\b|display\s+ads?|retargeting|remarketing|lead\s+gen|demand\s+gen|marketing\s+campaign)\b/i,
+  /\b(?:paid\s+search|ppc\b|sem\b|display\s+ads?|retargeting|remarketing|lead\s+gen|demand\s+gen|marketing\s+campaign|outbound\s+campaign|lead\s+generation\s+campaign)\b/i,
   /\b(?:get|generate|attract|drive)\s+(?:more\s+)?(?:new\s+)?leads\b/i,
+  /\b(?:outbound|cold)\s+(?:lead\s+gen|outreach|campaign)\b/i,
 ];
 
 const WORD_COUNT_STRONG_SIGNAL = 30;

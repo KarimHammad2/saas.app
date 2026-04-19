@@ -107,6 +107,17 @@ describe("classifyInboundIntent", () => {
       expect(result.reason).toContain("strong-override");
     });
 
+    it("regression: outbound campaign should still create a new project intent", () => {
+      const body = [
+        "Hi Frank",
+        "",
+        "We want to launch a new outbound campaign for our agency to get new leads",
+      ].join("\n");
+      const result = classifyInboundIntent("new", body);
+      expect(result.isNewProjectIntent).toBe(true);
+      expect(result.confidence).toBeGreaterThanOrEqual(0.6);
+    });
+
     it("short clear intent: I'm building a platform for freelancers", () => {
       const result = classifyInboundIntent("no subject", "I'm building a platform for freelancers");
       expect(result.isNewProjectIntent).toBe(true);

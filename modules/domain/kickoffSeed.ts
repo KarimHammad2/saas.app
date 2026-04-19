@@ -6,7 +6,29 @@ export interface KickoffSeedMatch {
 const KICKOFF_SECTION_BOUNDARY =
   /(?:\n\s*\n|(?:^|\n)\s*(?:Goals|Tasks|Completed|Decisions|Risks|Notes|Project Name|Current Status)\s*:)/i;
 
+const GREETING_LINE = /^\s*(?:hi|hey|hello)\s+[a-z][a-z\s.'-]{0,40}[,!:]?\s*$/i;
+
+const GENERIC_DECLARATIONS: RegExp[] = [
+  /^\s*this\s+is\s+a?\s*marketing\s+project\s*$/i,
+  /^\s*this\s+is\s+our?\s+marketing\s+project\s*$/i,
+  /^\s*marketing\s+project\s*$/i,
+];
+
 const KICKOFF_SEED_PATTERNS: Array<{ sourcePhrase: string; pattern: RegExp }> = [
+  {
+    sourcePhrase: "project_goal",
+    pattern: /(?:^|\n)\s*project\s+goal\s*:\s*([^\n]+)/i,
+  },
+  {
+    sourcePhrase: "launch_campaign",
+    pattern:
+      /\b(?:i|we)\s+(?:want|need|plan|would\s+like|(?:['\u2019]?d)\s+like)\s+to\s+(?:launch|run|start)\s+([\s\S]+)/i,
+  },
+  {
+    sourcePhrase: "campaign_statement",
+    pattern:
+      /\b(?:launch|run|start)\s+(?:a|an|the|our|new)?\s*(?:outbound|marketing|lead[-\s]?generation|lead\s+gen)?\s*campaign\b[\s:,-]*([\s\S]+)/i,
+  },
   {
     sourcePhrase: "working_on",
     pattern:
@@ -53,6 +75,36 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function stripGreetingLines(value: string): string {
+  const lines = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd());
+  const trimmed: string[] = [];
+  let skippedGreeting = false;
+
+  for (const line of lines) {
+    const l = line.trim();
+    if (!skippedGreeting && (l === "" || GREETING_LINE.test(l))) {
+      if (GREETING_LINE.test(l)) {
+        skippedGreeting = true;
+      }
+      continue;
+    }
+    trimmed.push(line);
+  }
+
+  return trimmed.join("\n").trim();
+}
+
+function removeGenericDeclarations(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !GENERIC_DECLARATIONS.some((pattern) => pattern.test(line)))
+    .join(" ");
+}
+
 function trimAtSectionBoundary(value: string): string {
   const normalized = value.replace(/\r\n/g, "\n");
   const match = normalized.match(KICKOFF_SECTION_BOUNDARY);
@@ -66,6 +118,7 @@ function cleanSeed(raw: string): string | null {
   const withoutSections = trimAtSectionBoundary(raw);
   const normalized = normalizeWhitespace(
     withoutSections
+      .replace(/^[a-z][a-z\s.'-]{0,40},\s*/i, "")
       .replace(/^\s*[:\-–—]+\s*/, "")
       .replace(/^\s*[-*+]\s+/, "")
       .replace(/^\s*\d+[.)]\s+/, ""),
@@ -80,6 +133,16 @@ function cleanSeed(raw: string): string | null {
     .replace(/[.!,;:\s]+$/g, "")
     .trim();
 
+  const generic = candidate.toLowerCase();
+  if (
+    generic === "a project" ||
+    generic === "the project" ||
+    generic === "project" ||
+    generic === "new project"
+  ) {
+    return null;
+  }
+
   return candidate || null;
 }
 
@@ -88,9 +151,11 @@ export function extractKickoffSeed(text: string): KickoffSeedMatch {
   if (!normalized) {
     return { seed: null, sourcePhrase: null };
   }
+  const deGreeted = stripGreetingLines(normalized);
+  const focusedText = removeGenericDeclarations(deGreeted || normalized) || deGreeted || normalized;
 
   for (const { sourcePhrase, pattern } of KICKOFF_SEED_PATTERNS) {
-    const match = normalized.match(pattern);
+    const match = focusedText.match(pattern);
     const seed = cleanSeed(match?.[1] ?? "");
     if (seed) {
       return { seed, sourcePhrase };
