@@ -6,7 +6,7 @@ import { normalizeMessageId } from "@/modules/email/messageId";
 import { sendEmail } from "@/modules/email/sendEmail";
 import { getRuntimeConfig } from "@/modules/config/runtimeConfig";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
-import { formatProjectEmail } from "@/modules/output/formatProjectEmail";
+import { formatProjectEmail, formatProjectEmailForRpm } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailKind, ProjectEmailPayload } from "@/modules/output/types";
 
 function formatProjectCodeBracket(projectCode: string): string {
@@ -85,29 +85,45 @@ export function validateProjectDocumentForAttachment(document: string): void {
   }
 }
 
-export async function sendProjectEmail(recipients: string[], payload: ProjectEmailPayload): Promise<{ outboundMessageId: string }> {
-  const to = Array.from(new Set(recipients.map((entry) => entry.trim().toLowerCase()).filter(Boolean)));
-  if (to.length === 0) {
+function partitionRecipientsForRpmCopy(
+  recipients: string[],
+  activeRpmEmail: string | null | undefined,
+): { standard: string[]; rpmOnly: string[] } {
+  const rpm = activeRpmEmail?.trim().toLowerCase() ?? "";
+  if (!rpm) {
+    return { standard: recipients, rpmOnly: [] };
+  }
+  const standard: string[] = [];
+  const rpmOnly: string[] = [];
+  for (const raw of recipients) {
+    const n = raw.trim().toLowerCase();
+    if (!n) {
+      continue;
+    }
+    if (n === rpm) {
+      rpmOnly.push(raw.trim().toLowerCase());
+    } else {
+      standard.push(raw.trim().toLowerCase());
+    }
+  }
+  return { standard, rpmOnly };
+}
+
+export async function sendProjectEmail(
+  recipients: string[],
+  payload: ProjectEmailPayload,
+): Promise<{ outboundMessageId: string; outboundMessageIds: string[] }> {
+  const deduped = Array.from(new Set(recipients.map((entry) => entry.trim().toLowerCase()).filter(Boolean)));
+  if (deduped.length === 0) {
     throw new Error("At least one recipient is required.");
   }
+
+  const { standard, rpmOnly } = partitionRecipientsForRpmCopy(deduped, payload.context.activeRpmEmail);
 
   const runtime = await getRuntimeConfig();
   const document = generateProjectDocument(payload);
   validateProjectDocumentForAttachment(document);
-  const { subject: baseSubject, body: emailBody } = formatProjectEmail(payload);
   const kind = resolveEmailKind(payload);
-  const finalSubject = buildEmailSubject(payload, baseSubject);
-
-  const rawMessageId = `<${randomUUID()}@saas2.app>`;
-  const outboundMessageId = normalizeMessageId(rawMessageId);
-  const introHtml = bodyToHtmlParagraphs(emailBody);
-  const footerHtml =
-    '<p class="email-footer">Attachment: <strong>project-document.md</strong> (LLM operating context).</p>';
-  const innerHtml = [introHtml, footerHtml].join("\n");
-  const html = wrapEmailDocument(innerHtml);
-
-  const text = [emailBody, "", "Attachment: project-document.md"].join("\n");
-
   const messageType =
     kind === "reminder"
       ? "project-reminder"
@@ -119,26 +135,55 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
   const bcc = buildBccList(runtime.adminBccAddress, runtime.adminBccEnabled);
   const allowMasterUserInBcc = Boolean(bcc && bcc === getMasterUserEmail());
 
-  await sendEmail({
-    to: to.join(","),
-    bcc,
-    allowMasterUserInBcc,
-    allowMasterUserAsDirectRecipient: true,
-    subject: finalSubject,
-    text,
-    html,
-    headers: {
-      "Message-ID": rawMessageId,
-      "X-SaaS2-System": "true",
-      "X-SaaS2-Message-Type": messageType,
-    },
-    attachments: [
-      {
-        filename: "project-document.md",
-        content: document,
-      },
-    ],
-  });
+  const outboundMessageIds: string[] = [];
+  let includeAdminBcc = true;
 
-  return { outboundMessageId };
+  const sendOne = async (to: string[], emailBody: string): Promise<void> => {
+    const { subject: baseSubject } = formatProjectEmail(payload);
+    const finalSubject = buildEmailSubject(payload, baseSubject);
+    const rawMessageId = `<${randomUUID()}@saas2.app>`;
+    const outboundMessageId = normalizeMessageId(rawMessageId);
+    outboundMessageIds.push(outboundMessageId);
+    const introHtml = bodyToHtmlParagraphs(emailBody);
+    const footerHtml =
+      '<p class="email-footer">Attachment: <strong>project-document.md</strong> (LLM operating context).</p>';
+    const innerHtml = [introHtml, footerHtml].join("\n");
+    const html = wrapEmailDocument(innerHtml);
+    const text = [emailBody, "", "Attachment: project-document.md"].join("\n");
+
+    const useBcc = includeAdminBcc ? bcc : undefined;
+    const useAllowMasterInBcc = includeAdminBcc && allowMasterUserInBcc;
+    includeAdminBcc = false;
+
+    await sendEmail({
+      to: to.join(","),
+      bcc: useBcc,
+      allowMasterUserInBcc: useAllowMasterInBcc,
+      allowMasterUserAsDirectRecipient: true,
+      subject: finalSubject,
+      text,
+      html,
+      headers: {
+        "Message-ID": rawMessageId,
+        "X-SaaS2-System": "true",
+        "X-SaaS2-Message-Type": messageType,
+      },
+      attachments: [
+        {
+          filename: "project-document.md",
+          content: document,
+        },
+      ],
+    });
+  };
+
+  if (standard.length > 0) {
+    await sendOne(standard, formatProjectEmail(payload).body);
+  }
+  if (rpmOnly.length > 0) {
+    await sendOne(rpmOnly, formatProjectEmailForRpm(payload).body);
+  }
+
+  const outboundMessageId = outboundMessageIds[0] ?? "";
+  return { outboundMessageId, outboundMessageIds };
 }

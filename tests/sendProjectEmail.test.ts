@@ -276,6 +276,23 @@ describe("sendProjectEmail", () => {
     );
   });
 
+  it("sends RPM-specific body only to the assigned RPM address", async () => {
+    const { sendProjectEmail } = await import("@/modules/output/sendProjectEmail");
+    const payload = buildPayload(false);
+    payload.context.activeRpmEmail = "rpm@example.com";
+    await sendProjectEmail(["owner@example.com", "rpm@example.com"], payload);
+
+    expect(mockedSendEmail).toHaveBeenCalledTimes(2);
+    const byTo = mockedSendEmail.mock.calls.map((c) => ({ to: String(c[0]?.to ?? ""), text: c[0]?.text ?? "" }));
+    const ownerSend = byTo.find((x) => x.to.includes("owner"));
+    const rpmSend = byTo.find((x) => x.to === "rpm@example.com");
+    expect(ownerSend?.text).toContain("Upload it into your LLM and continue working on your project.");
+    expect(ownerSend?.text).not.toContain("assigned RPM");
+    expect(rpmSend?.text).toContain("assigned RPM");
+    expect(rpmSend?.text).toContain("Correction:");
+    expect(rpmSend?.text).toContain("Attachment: project-document.md");
+  });
+
   it("validates required document headings before attachment send", async () => {
     const { validateProjectDocumentForAttachment } = await import("@/modules/output/sendProjectEmail");
     expect(() => validateProjectDocumentForAttachment("# PROJECT FILE\n\nbroken")).toThrow(

@@ -80,8 +80,10 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           messageId: outboundMessageId,
         });
       } else {
-        const { outboundMessageId } = await sendProjectEmail(result.recipients, result.payload);
-        await repo.storeOutboundThreadMapping(outboundMessageId, result.context.projectId);
+        const { outboundMessageIds } = await sendProjectEmail(result.recipients, result.payload);
+        for (const messageId of outboundMessageIds) {
+          await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
+        }
         await repo.recordOutboundEmailEvent({
           projectId: result.context.projectId,
           userId: result.context.userId,
@@ -90,7 +92,7 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           provider: event.provider,
           status: "sent",
           recipientCount: result.recipients.length,
-          messageId: outboundMessageId,
+          messageId: outboundMessageIds[0],
         });
       }
     } catch (error) {

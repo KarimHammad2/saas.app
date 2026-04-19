@@ -55,7 +55,7 @@ const mockedSendRpmStructuredProjectClarificationEmail = vi.mocked(sendRpmStruct
 describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mockedSendProjectEmail.mockResolvedValue({ outboundMessageId: "outbound-test-msg-id" });
+    mockedSendProjectEmail.mockResolvedValue({ outboundMessageId: "outbound-test-msg-id", outboundMessageIds: ["outbound-test-msg-id"] });
     mockedSendRpmProfileProposalEmail.mockResolvedValue({ outboundMessageId: "rpm-proposal-msg-id" });
   });
 

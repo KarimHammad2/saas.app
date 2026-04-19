@@ -45,7 +45,7 @@ describe("GET /api/cron/reminders", () => {
     vi.stubEnv("CRON_SECRET", "secret-test");
     listProjectsForReminder.mockResolvedValue([]);
     reserveReminderSlot.mockResolvedValue("2026-03-27T00:00:00.000Z");
-    sendProjectEmail.mockResolvedValue({ outboundMessageId: "reminder-out-id" });
+    sendProjectEmail.mockResolvedValue({ outboundMessageId: "reminder-out-id", outboundMessageIds: ["reminder-out-id"] });
     getUserProfile.mockResolvedValue(emptyUserProfileContext());
   });
 

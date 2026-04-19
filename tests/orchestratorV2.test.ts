@@ -58,7 +58,7 @@ describe("handleIncomingEmail", () => {
         duplicate: false,
       },
     });
-    sendProjectEmail.mockResolvedValue({ outboundMessageId: "out-id" });
+    sendProjectEmail.mockResolvedValue({ outboundMessageId: "out-id", outboundMessageIds: ["out-id"] });
   });
 
   it("normalizes legacy payload and executes canonical loop", async () => {
