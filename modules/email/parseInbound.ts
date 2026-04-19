@@ -4,6 +4,7 @@ import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { filterIgnoredNoteLines, isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { extractDisplayNameFromSenderRaw, tryNormalizeEmailAddress } from "@/modules/email/emailAddress";
 import { normalizeMessageId } from "@/modules/email/messageId";
+import { stripEmailSignature } from "@/modules/email/stripEmailSignature";
 import { stripQuotedReply } from "@/modules/email/stripQuotedReply";
 import { createHash } from "node:crypto";
 
@@ -37,6 +38,7 @@ const SPECIAL_SECTION_LABELS = [
   "Team Emails",
   "Additional Emails",
   "Agency Emails",
+  "Assign RPM",
 ] as const;
 
 const SECTION_LABELS = [...MEMORY_SECTION_LABELS, ...SPECIAL_SECTION_LABELS] as const;
@@ -162,6 +164,11 @@ function normalizeWhitespace(content: string): string {
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** Quoted-thread removal, signature stripping, then HTML entity + whitespace normalization — single pipeline for inbound bodies. */
+export function prepareInboundPlainText(raw: string): string {
+  return normalizeWhitespace(stripEmailSignature(stripQuotedReply(raw)));
 }
 
 function extractSummaryFromText(content: string): string | null {
@@ -486,6 +493,34 @@ function firstMeaningfulLine(content: string): string {
   return lines[0] ?? "";
 }
 
+/** First valid email in the Assign RPM: section (lines or angle-bracket form). */
+function parseAssignRpmEmail(sectionText: string): string | null {
+  const trimmed = sectionText.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lines = trimmed.split(/\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const withoutBullet = line.replace(/^\s*[-*+]\s+/, "").replace(/^\s*\d+[.)]\s+/, "").trim();
+    const normalized = tryNormalizeEmailAddress(withoutBullet);
+    if (normalized) {
+      return normalized;
+    }
+    const angleMatch = withoutBullet.match(/<([^>]+@[^>]+)>/);
+    if (angleMatch?.[1]) {
+      const fromAngle = tryNormalizeEmailAddress(angleMatch[1]);
+      if (fromAngle) {
+        return fromAngle;
+      }
+    }
+  }
+  const loose = trimmed.match(/\b[^\s@]+@[^\s@]+\.[^\s@]+\b/);
+  if (loose?.[0]) {
+    return tryNormalizeEmailAddress(loose[0]);
+  }
+  return null;
+}
+
 function parseProjectNameUpdate(content: string, normalizedContent: string): string | null {
   const fromSection = extractSection(normalizedContent, "Project Name");
   const sectionCandidate = normalizeProjectNameCandidate(firstMeaningfulLine(fromSection));
@@ -685,6 +720,8 @@ export function parseNormalizedContent(content: string) {
   const correctionBody =
     extractSection(normalizedContent, "RPM Correction") || extractSection(normalizedContent, "Correction");
   const correctionContent = correctionBody.trim();
+  const assignRpmSection = extractSection(normalizedContent, "Assign RPM");
+  const assignRpmEmail = parseAssignRpmEmail(assignRpmSection);
   const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
   const approvals = parseApprovals(content);
   const additionalEmails = parseAdditionalEmails(normalizedContent);
@@ -701,6 +738,7 @@ export function parseNormalizedContent(content: string) {
     Boolean(userProfileContext) ||
     Boolean(rpmSuggestionContent) ||
     Boolean(correctionContent) ||
+    Boolean(assignRpmEmail) ||
     Boolean(transactionEvent) ||
     approvals.length > 0;
 
@@ -743,6 +781,7 @@ export function parseNormalizedContent(content: string) {
     additionalEmails,
     projectName,
     correction: correctionContent || null,
+    assignRpmEmail: assignRpmEmail ?? null,
   };
 }
 
@@ -855,7 +894,7 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
     throw new InboundParseError("Inbound payload is missing email body content.");
   }
 
-  const cleanedBody = normalizeWhitespace(stripQuotedReply(rawBody));
+  const cleanedBody = prepareInboundPlainText(rawBody);
   const to = normalizeRecipientList(source.to);
   const cc = normalizeRecipientList(source.cc);
   const timestamp = extractEventTimestamp(root, source);

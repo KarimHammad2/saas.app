@@ -6,12 +6,13 @@ import {
 import { log } from "@/lib/log";
 import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
 import { collectParticipantEmailsFromEvent } from "@/modules/email/participantEmails";
-import { parseProjectCodeFromSubject } from "@/modules/email/parseInbound";
+import { parseNormalizedContent, parseProjectCodeFromSubject, prepareInboundPlainText } from "@/modules/email/parseInbound";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { filterParticipantEmailsByEntitlements, resolvePlanEntitlements } from "@/modules/domain/entitlements";
 import { buildProjectEmailRecipientList } from "@/modules/domain/projectEmailRecipients";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { getKickoffFollowUpQuestions } from "@/modules/domain/kickoff";
+import { normalizeListItemKey } from "@/modules/domain/mergeUniqueStrings";
 import { stableVariantIndex, type PlaybookVariant } from "@/modules/domain/playbookVariant";
 import { combineRuleBasedOverview } from "@/modules/domain/overviewRegeneration";
 import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
@@ -24,6 +25,7 @@ import { generateRPMSuggestions, getSystemRpmSenderEmail } from "@/modules/domai
 import {
   canApplyInboundUserProfileEdit,
   canApproveTransaction,
+  canAssignProjectRpmViaInbound,
   canProposeUserProfile,
   resolveActorRole,
 } from "@/modules/domain/rbac";
@@ -32,7 +34,12 @@ import { canSenderUpdateProject } from "@/modules/domain/projectAccess";
 import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedToKnownTasks } from "@/modules/domain/completionDetection";
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
 import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
-import { MemoryRepository, mergeUniqueStringsPreserveOrder, type ProjectRecord } from "@/modules/memory/repository";
+import {
+  MemoryRepository,
+  mergeUniqueStringsPreserveOrder,
+  type CcMembershipConfirmationRecord,
+  type ProjectRecord,
+} from "@/modules/memory/repository";
 import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
 import type { ProjectEmailPayload } from "@/modules/output/types";
@@ -50,6 +57,26 @@ export interface InboundProcessingResult {
     projectId: string;
     eventId: string;
     duplicate: boolean;
+  };
+}
+
+/**
+ * When kickoff was deferred for CC confirmation, the inbound "yes/no" message must not drive
+ * project name, kickoff, or parsed sections — use stored original subject/body from the pending row.
+ */
+function buildContentEventFromPendingKickoff(
+  inbound: NormalizedEmailEvent,
+  pending: CcMembershipConfirmationRecord,
+): NormalizedEmailEvent {
+  const rawSource = pending.source_raw_body?.trim() ? pending.source_raw_body : inbound.rawBody;
+  const rawBody = prepareInboundPlainText(rawSource);
+  const subject = pending.source_subject?.trim() ? pending.source_subject : inbound.subject;
+  const parsed = parseNormalizedContent(rawBody);
+  return {
+    ...inbound,
+    subject,
+    rawBody,
+    parsed,
   };
 }
 
@@ -74,6 +101,21 @@ function deriveProjectName(event: NormalizedEmailEvent): string {
   }
 
   return "New Project";
+}
+
+/**
+ * Task-intent parsing splits the body into sentences; UNKNOWN fragments can repeat text
+ * already stored as a single full-body note. Skip those so one inbound message stays one note.
+ */
+function filterUnknownNotesSubsumedByPriorNotes(unknownFragments: string[], priorNotes: string[]): string[] {
+  const normalizedPrior = priorNotes.map((n) => normalizeListItemKey(n)).filter(Boolean);
+  return unknownFragments.filter((fragment) => {
+    const nf = normalizeListItemKey(fragment);
+    if (!nf) {
+      return false;
+    }
+    return !normalizedPrior.some((np) => np.includes(nf));
+  });
 }
 
 async function resolveInboundProject(
@@ -226,6 +268,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
+  const contentEvent =
+    resolvedFromPendingKickoff && pendingCcConfirmation
+      ? buildContentEventFromPendingKickoff(event, pendingCcConfirmation)
+      : event;
+
   let project: ProjectRecord;
   if (pendingCcConfirmation?.project_id) {
     const existing = await repo.findProjectById(pendingCcConfirmation.project_id);
@@ -237,7 +284,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
     project = existing;
   } else if (resolvedFromPendingKickoff) {
-    const created = await repo.createProjectForUser(user.id, deriveProjectName(event), {
+    const created = await repo.createProjectForUser(user.id, deriveProjectName(contentEvent), {
       createdByEmail: event.from,
       createdByUserId: user.id,
     });
@@ -299,7 +346,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     });
   }
 
-  const requestedProjectName = normalizeProjectNameCandidate(event.parsed.projectName || "");
+  const requestedProjectName = normalizeProjectNameCandidate(contentEvent.parsed.projectName || "");
   const currentProjectName = normalizeProjectNameCandidate(project.name || "");
   if (
     requestedProjectName &&
@@ -354,7 +401,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await repo.mergeProjectParticipants(project.id, approvedCcCandidates);
   }
 
-  await repo.storeRawProjectUpdate(project.id, event.rawBody, event as unknown as Record<string, unknown>);
+  await repo.storeRawProjectUpdate(project.id, contentEvent.rawBody, contentEvent as unknown as Record<string, unknown>);
 
   if (userCreated && event.fromDisplayName) {
     await repo.updateUserDisplayNameIfEmpty(user.id, event.fromDisplayName);
@@ -364,39 +411,59 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const shouldRunKickoff = !project.kickoff_completed_at;
   if (shouldRunKickoff) {
-    await runKickoffFlow(repo, event, user.id, project.id, accessState.tier);
+    await runKickoffFlow(repo, contentEvent, user.id, project.id, accessState.tier);
+  }
+
+  const assignRpmEmail = contentEvent.parsed.assignRpmEmail?.trim() || null;
+  if (assignRpmEmail) {
+    const stateAfterKickoff = await repo.getProjectState(project.id);
+    const entitlementsAfterKickoff = resolvePlanEntitlements(stateAfterKickoff.tier);
+    const ownerEmailForAssign = stateAfterKickoff.ownerEmail ?? user.email;
+    const roleForAssign = resolveActorRole({
+      senderEmail: event.from,
+      primaryUserEmail: ownerEmailForAssign,
+      activeRpmEmail: await repo.getActiveRpm(project.id),
+    });
+    if (
+      entitlementsAfterKickoff.package === "agency" &&
+      canAssignProjectRpmViaInbound(roleForAssign, event.from, ownerEmailForAssign)
+    ) {
+      await repo.assignRpm(project.id, assignRpmEmail, event.from);
+      await repo.appendRecentUpdate(project.id, `RPM assigned: ${assignRpmEmail}`);
+    }
   }
 
   const ownerEmailForRole = accessState.ownerEmail ?? user.email;
+  const activeRpmForRole = await repo.getActiveRpm(project.id);
   const role = resolveActorRole({
     senderEmail: event.from,
     primaryUserEmail: ownerEmailForRole,
-    activeRpmEmail,
+    activeRpmEmail: activeRpmForRole,
   });
 
-  if (event.parsed.summary && getAllowOverviewOverride()) {
-    await repo.updateSummaryDisplay(project.id, event.parsed.summary);
+  if (contentEvent.parsed.summary && getAllowOverviewOverride()) {
+    await repo.updateSummaryDisplay(project.id, contentEvent.parsed.summary);
   }
-  if (event.parsed.projectStatus) {
-    await repo.updateProjectStatus(project.id, event.parsed.projectStatus);
-    const projectStatusLabel = `${event.parsed.projectStatus[0]?.toUpperCase() ?? ""}${event.parsed.projectStatus.slice(1)}`;
+  if (contentEvent.parsed.projectStatus) {
+    await repo.updateProjectStatus(project.id, contentEvent.parsed.projectStatus);
+    const projectStatusLabel = `${contentEvent.parsed.projectStatus[0]?.toUpperCase() ?? ""}${contentEvent.parsed.projectStatus.slice(1)}`;
     await repo.appendRecentUpdate(project.id, `Project status updated: ${projectStatusLabel}`);
   }
-  if (event.parsed.currentStatus) {
-    await repo.updateCurrentStatus(project.id, event.parsed.currentStatus);
-    await repo.appendRecentUpdate(project.id, `Status updated: ${event.parsed.currentStatus}`);
+  if (contentEvent.parsed.currentStatus) {
+    await repo.updateCurrentStatus(project.id, contentEvent.parsed.currentStatus);
+    await repo.appendRecentUpdate(project.id, `Status updated: ${contentEvent.parsed.currentStatus}`);
   }
-  await repo.updateGoals(project.id, event.parsed.goals);
-  if (event.parsed.goals.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Goals updated: ${event.parsed.goals.join("; ")}`);
+  await repo.updateGoals(project.id, contentEvent.parsed.goals);
+  if (contentEvent.parsed.goals.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
   }
-  await repo.appendActionItems(project.id, event.parsed.actionItems);
-  if (event.parsed.actionItems.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Task(s) added: ${event.parsed.actionItems.join("; ")}`);
+  await repo.appendActionItems(project.id, contentEvent.parsed.actionItems);
+  if (contentEvent.parsed.actionItems.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Task(s) added: ${contentEvent.parsed.actionItems.join("; ")}`);
   }
   const stateAfterTasks = await repo.getProjectState(project.id);
-  const detectedCompleted = detectCompletedTasks(event.rawBody, stateAfterTasks.actionItems);
-  const fromSection = filterCompletedToKnownTasks(event.parsed.completedTasks, stateAfterTasks.actionItems);
+  const detectedCompleted = detectCompletedTasks(contentEvent.rawBody, stateAfterTasks.actionItems);
+  const fromSection = filterCompletedToKnownTasks(contentEvent.parsed.completedTasks, stateAfterTasks.actionItems);
   const allCompleted = mergeUniqueStringsPreserveOrder(fromSection, detectedCompleted);
   await repo.markTasksCompleted(project.id, allCompleted);
 
@@ -405,13 +472,15 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const stateAfterCompletion = await repo.getProjectState(project.id);
-  const unmatchedCompletionNotes = extractUnmatchedCompletionNotes(event.rawBody, allCompleted);
+  const unmatchedCompletionNotes = extractUnmatchedCompletionNotes(contentEvent.rawBody, allCompleted);
   const taskIntentEvents = applyTaskIntents(
-    event.rawBody,
+    contentEvent.rawBody,
     stateAfterCompletion.actionItems,
     stateAfterCompletion.completedTasks,
   );
-  const fallbackScopeTransition = detectProjectScopeChange(event.rawBody) ? extractScopeTransition(event.rawBody) : null;
+  const fallbackScopeTransition = detectProjectScopeChange(contentEvent.rawBody)
+    ? extractScopeTransition(contentEvent.rawBody)
+    : null;
   const scopeEvent = taskIntentEvents.find((ev) => ev.intent === "SCOPE_CHANGE");
   const scopeTransition = {
     fromScope: scopeEvent?.fromScope || fallbackScopeTransition?.fromScope,
@@ -430,13 +499,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  const scopeChanged = Boolean(scopeEvent) || detectProjectScopeChange(event.rawBody);
+  const scopeChanged = Boolean(scopeEvent) || detectProjectScopeChange(contentEvent.rawBody);
   if (scopeChanged) {
     const fromBrief = scopeTransition.fromScope || compactOverviewForDocument(priorSnapshot.summary).slice(0, 120) || "(previous)";
     const toBrief =
       scopeTransition.toScope ||
-      event.parsed.summary?.trim() ||
-      compactOverviewForDocument(event.rawBody).slice(0, 200) ||
+      contentEvent.parsed.summary?.trim() ||
+      compactOverviewForDocument(contentEvent.rawBody).slice(0, 200) ||
       "(new scope)";
     await repo.updateSummaryDisplay(project.id, toBrief);
     await repo.updateNotes(project.id, [`Scope changed from ${fromBrief} to ${toBrief}`], event.timestamp);
@@ -459,56 +528,61 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  await repo.updateDecisions(project.id, event.parsed.decisions);
-  if (event.parsed.decisions.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Decision(s) added: ${event.parsed.decisions.join("; ")}`);
+  await repo.updateDecisions(project.id, contentEvent.parsed.decisions);
+  if (contentEvent.parsed.decisions.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Decision(s) added: ${contentEvent.parsed.decisions.join("; ")}`);
   }
-  await repo.updateRisks(project.id, event.parsed.risks);
-  if (event.parsed.risks.length > 0) {
-    await repo.appendRecentUpdate(project.id, `Risk(s) added: ${event.parsed.risks.join("; ")}`);
+  await repo.updateRisks(project.id, contentEvent.parsed.risks);
+  if (contentEvent.parsed.risks.length > 0) {
+    await repo.appendRecentUpdate(project.id, `Risk(s) added: ${contentEvent.parsed.risks.join("; ")}`);
   }
-  await repo.updateRecommendations(project.id, event.parsed.recommendations);
+  await repo.updateRecommendations(project.id, contentEvent.parsed.recommendations);
   const rpmCorrectionNotes =
-    role === "rpm" && event.parsed.correction?.trim()
-      ? [`RPM correction: ${event.parsed.correction.trim()}`]
+    role === "rpm" && contentEvent.parsed.correction?.trim()
+      ? [`RPM correction: ${contentEvent.parsed.correction.trim()}`]
       : [];
-  const mergedNotes = [...event.parsed.notes, ...rpmCorrectionNotes, ...unmatchedCompletionNotes, ...unknownNotesFromTaskIntents];
+  const priorNoteSources = [...contentEvent.parsed.notes, ...rpmCorrectionNotes, ...unmatchedCompletionNotes];
+  const filteredUnknownFromTaskIntents = filterUnknownNotesSubsumedByPriorNotes(
+    unknownNotesFromTaskIntents,
+    priorNoteSources,
+  );
+  const mergedNotes = [...contentEvent.parsed.notes, ...rpmCorrectionNotes, ...unmatchedCompletionNotes, ...filteredUnknownFromTaskIntents];
   await repo.updateNotes(project.id, mergedNotes, event.timestamp);
   const meaningfulMergedNotes = mergedNotes.map((n) => n.trim()).filter((n) => n.length > 0 && !isIgnoredNoteInput(n));
   if (meaningfulMergedNotes.length > 0) {
     await repo.appendRecentUpdate(project.id, `Notes updated (${meaningfulMergedNotes.length} item${meaningfulMergedNotes.length > 1 ? "s" : ""}).`);
   }
-  if (role === "rpm" && event.parsed.correction?.trim()) {
+  if (role === "rpm" && contentEvent.parsed.correction?.trim()) {
     await repo.appendRecentUpdate(
       project.id,
-      `RPM correction recorded: ${event.parsed.correction.trim().slice(0, 240)}${event.parsed.correction.trim().length > 240 ? "…" : ""}`,
+      `RPM correction recorded: ${contentEvent.parsed.correction.trim().slice(0, 240)}${contentEvent.parsed.correction.trim().length > 240 ? "…" : ""}`,
     );
   }
   const inferredMemory = inferMemorySignals({
-    summary: event.parsed.summary ?? event.rawBody,
-    rawBody: event.rawBody,
-    goals: event.parsed.goals,
-    notes: event.parsed.notes,
+    summary: contentEvent.parsed.summary ?? contentEvent.rawBody,
+    rawBody: contentEvent.rawBody,
+    goals: contentEvent.parsed.goals,
+    notes: contentEvent.parsed.notes,
   });
   await repo.mergeStructuredUserProfileContext(ownerUserId, inferredMemory.sowSignals);
   if (Object.keys(inferredMemory.constraints).length > 0) {
     await repo.patchUserProfileContextJson(ownerUserId, { constraints: inferredMemory.constraints });
   }
 
-  if (event.parsed.userProfileContext && canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
-    await repo.storeUserProfileContext(ownerUserId, event.parsed.userProfileContext);
+  if (contentEvent.parsed.userProfileContext && canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
+    await repo.storeUserProfileContext(ownerUserId, contentEvent.parsed.userProfileContext);
   }
 
-  if (event.parsed.rpmSuggestion && canProposeUserProfile(role)) {
+  if (contentEvent.parsed.rpmSuggestion && canProposeUserProfile(role)) {
     inboundStoredRpmSuggestion = await repo.storeRPMSuggestion(
       ownerUserId,
       project.id,
       event.from,
-      event.parsed.rpmSuggestion.content,
+      contentEvent.parsed.rpmSuggestion.content,
     );
   }
 
-  for (const approval of event.parsed.approvals) {
+  for (const approval of contentEvent.parsed.approvals) {
     if (canApplyInboundUserProfileEdit(role, event.from, ownerEmailForRole)) {
       if (approval.decision === "approve") {
         await repo.approveSuggestion(ownerUserId, approval.suggestionId, event.from);
@@ -519,11 +593,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const priorAccountTier = accessState.tier;
-  const accountEmailsToAdd = mergeUniqueStringsPreserveOrder(event.parsed.additionalEmails, approvedCcCandidates);
+  const accountEmailsToAdd = mergeUniqueStringsPreserveOrder(contentEvent.parsed.additionalEmails, approvedCcCandidates);
   const emailCount = await repo.addAdditionalEmails(ownerUserId, accountEmailsToAdd);
   const nextTier = getNextTier({
     currentTier: priorAccountTier,
-    hasTransactionEvent: !!event.parsed.transactionEvent,
+    hasTransactionEvent: !!contentEvent.parsed.transactionEvent,
     totalAccountEmails: emailCount,
   });
 
@@ -542,8 +616,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const effectiveTier: Tier = nextTier;
 
-  if (event.parsed.transactionEvent) {
-    const normalizedFinancials = applyTierFinancials(event.parsed.transactionEvent, effectiveTier);
+  if (contentEvent.parsed.transactionEvent) {
+    const normalizedFinancials = applyTierFinancials(contentEvent.parsed.transactionEvent, effectiveTier);
     if (!canApproveTransaction(role)) {
       const pending = await repo.storeProtectedTransactionSuggestion(ownerUserId, project.id, event.from, normalizedFinancials);
       await repo.appendRecentUpdate(
@@ -590,7 +664,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const proposalEligible =
     !shouldRunKickoff &&
-    isUserProfileSuggestionOnlyInbound(event, role) &&
+    isUserProfileSuggestionOnlyInbound(contentEvent, role) &&
     inboundStoredRpmSuggestion !== null;
   const outboundMode = proposalEligible ? "rpm_profile_proposal" : "full";
 

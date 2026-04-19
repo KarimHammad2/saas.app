@@ -1,4 +1,4 @@
-import type { UserProfileContext } from "@/modules/contracts/types";
+import type { ProjectContext, UserProfileContext } from "@/modules/contracts/types";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import { dedupePreserveOrder } from "@/modules/output/presentationHelpers";
@@ -50,8 +50,6 @@ When the user changes what they are building or their main focus (for example fr
  - Words like **instead**, **rather than**, **switching to**, **pivot** / **pivoting**, **changing direction**
  - Sentences like **We are no longer …** followed by what they want **now** or **instead** (for example: *We are no longer building X, now we want Y* or *Instead we want …*)
 
-Put that pivot language in the **opening lines** of the message they will email to Frank (before or after structured blocks). A vague update without pivot cues may update goals or notes but **not** refresh the stored project overview or project name the same way.
-
 **Optional structured blocks** (parsed from labeled sections — use these exact headings):
 
  - \`Project Name:\` then a bullet line with the exact title when they want a specific project name. If they skip this, the system may still derive a short name from the new scope sentence.
@@ -83,6 +81,21 @@ function formatTasksCompleted(completedTasks: string[]): string {
 
 function normalizeSuggestionLine(content: string): string {
   return content.replace(/\s+/g, " ").trim();
+}
+
+function formatAgencyRpmMetadataLines(context: ProjectContext): string[] {
+  if (context.planPackage !== "agency" || !context.featureFlags?.oversight) {
+    return [];
+  }
+  const rpm = context.activeRpmEmail?.trim();
+  if (rpm) {
+    return ["Assigned RPM:", `- ${rpm}`, ""];
+  }
+  return [
+    "Assign RPM:",
+    "(Put the email of the RPM you want assigned to this project. Reply using the same block format: `Assign RPM:` on one line, then the address on the next line.)",
+    "",
+  ];
 }
 
 function formatProjectStatusLabel(status: string | undefined): string {
@@ -215,6 +228,8 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const pendingSuggestionsBlock = formatPendingSuggestions(payload);
   const userProfileBlock = formatUserProfileContextSection(userProfile);
 
+  const agencyRpmLines = formatAgencyRpmMetadataLines(context);
+
   return [
     "# PROJECT FILE",
     "",
@@ -223,6 +238,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "Project Name:",
     `- ${projectName}`,
     "",
+    ...agencyRpmLines,
     "---",
     "",
     "## User Profile Context",

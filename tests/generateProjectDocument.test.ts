@@ -139,4 +139,27 @@ describe("generateProjectDocument", () => {
     const content = generateProjectDocument(payload);
     expect(content.match(/\- \[s1\] User prefers concise answers/g)?.length ?? 0).toBe(1);
   });
+
+  it("shows Assign RPM prompt for agency with oversight when no RPM", () => {
+    const payload = buildPayload();
+    payload.context.tier = "agency";
+    payload.context.planPackage = "agency";
+    payload.context.featureFlags = { collaborators: true, oversight: true };
+    const content = generateProjectDocument(payload);
+    expect(content).toContain("Assign RPM:");
+    expect(content).toContain("Put the email of the RPM");
+    expect(content).not.toContain("Assigned RPM:");
+  });
+
+  it("shows Assigned RPM for agency with oversight when RPM is set", () => {
+    const payload = buildPayload();
+    payload.context.tier = "agency";
+    payload.context.planPackage = "agency";
+    payload.context.featureFlags = { collaborators: true, oversight: true };
+    payload.context.activeRpmEmail = "rpm@agency.com";
+    const content = generateProjectDocument(payload);
+    expect(content).toContain("Assigned RPM:");
+    expect(content).toContain("- rpm@agency.com");
+    expect(content).not.toMatch(/^Assign RPM:/m);
+  });
 });

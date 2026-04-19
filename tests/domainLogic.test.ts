@@ -4,6 +4,7 @@ import { getNextTier } from "@/modules/domain/pricing";
 import {
   canApplyInboundUserProfileEdit,
   canApproveTransaction,
+  canAssignProjectRpmViaInbound,
   canModifyUserProfile,
   resolveActorRole,
 } from "@/modules/domain/rbac";
@@ -68,5 +69,12 @@ describe("domain logic", () => {
       true,
     );
     expect(canApplyInboundUserProfileEdit("rpm", "rpm@example.com", "owner@example.com")).toBe(false);
+  });
+
+  it("matches UserProfile gate for Assign RPM inbound", () => {
+    expect(canAssignProjectRpmViaInbound("user", "owner@example.com", "owner@example.com")).toBe(true);
+    expect(canAssignProjectRpmViaInbound("user", "collab@example.com", "owner@example.com")).toBe(false);
+    expect(canAssignProjectRpmViaInbound("master", "any@example.com", "owner@example.com")).toBe(true);
+    expect(canAssignProjectRpmViaInbound("rpm", "rpm@example.com", "owner@example.com")).toBe(false);
   });
 });

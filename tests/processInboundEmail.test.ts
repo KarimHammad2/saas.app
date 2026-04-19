@@ -1,7 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 import { emptyUserProfileContext } from "@/modules/contracts/types";
+import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
+import { generateShortProjectName } from "@/modules/domain/projectName";
+import { parseNormalizedContent } from "@/modules/email/parseInbound";
 import { CcMembershipConfirmationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
+
+/** Mirrors `deriveProjectName` in processInboundEmail for assertions on deferred CC kickoff resolution. */
+function expectedDerivedProjectName(rawBody: string, subject: string): string {
+  const parsed = parseNormalizedContent(rawBody);
+  const fromBody = (parsed.summary || rawBody).trim();
+  const bodyKickoffSeed = extractKickoffSeed(fromBody).seed;
+  if (bodyKickoffSeed) {
+    return generateShortProjectName(bodyKickoffSeed, "New Project");
+  }
+  if (fromBody) {
+    return generateShortProjectName(fromBody, "New Project");
+  }
+
+  const withoutToken = subject.replace(/\[PJT-[A-F0-9]{6,10}\]/gi, "").trim();
+  const cleanedSubject = withoutToken.replace(/^re:\s*/i, "").trim();
+  const subjectKickoffSeed = extractKickoffSeed(cleanedSubject).seed;
+  if (subjectKickoffSeed) {
+    return generateShortProjectName(subjectKickoffSeed, "New Project");
+  }
+  if (cleanedSubject) {
+    return generateShortProjectName(cleanedSubject, "New Project");
+  }
+
+  return "New Project";
+}
 
 const emptyUserProfile = emptyUserProfileContext();
 
@@ -297,6 +325,51 @@ describe("processInboundEmail", () => {
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
     expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalled();
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
+  });
+
+  it("stores unstructured multi-line body as a single note without duplicating lines from task-intent UNKNOWN", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    const rawBody = "Hi Frank\nI want to build a mobile app to measure the calories";
+    const parsed = parseNormalizedContent(rawBody);
+    expect(parsed.notes).toEqual([rawBody]);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_one_note_multiline",
+      provider: "resend",
+      providerEventId: "m_one_note_multiline",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: thread",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody,
+      parsed: {
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+      },
+    };
+
+    await processInboundEmail(event);
+    expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [rawBody], event.timestamp);
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Notes updated (1 item).");
   });
 
   it("persists canonical project lifecycle status updates", async () => {
@@ -2265,6 +2338,83 @@ describe("processInboundEmail", () => {
     expect(repoState.mergeProjectParticipants).toHaveBeenCalledWith("p1", ["john@agency.com"]);
   });
 
+  it("creates deferred kickoff project from stored source email, not from yes reply", async () => {
+    const sourceSubject = "Kickoff: Mobile inventory";
+    const sourceRawBody =
+      "I want to build a mobile app for inventory tracking for retail stores.";
+    const expectedName = expectedDerivedProjectName(sourceRawBody, sourceSubject);
+    const wrongNameFromConfirmation = expectedDerivedProjectName(
+      "Yes, add them please",
+      "Re: Confirm collaborators",
+    );
+    expect(wrongNameFromConfirmation).not.toBe(expectedName);
+
+    repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue({
+      id: "cc_pending_kickoff_yes",
+      owner_user_id: "u1",
+      project_id: null,
+      owner_email: "user@example.com",
+      candidate_emails: ["john@agency.com"],
+      status: "pending",
+      source_inbound_event_id: "evt_kickoff",
+      source_subject: sourceSubject,
+      source_raw_body: sourceRawBody,
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.addAdditionalEmails.mockResolvedValue(2);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_cc_kickoff_yes",
+      provider: "resend",
+      providerEventId: "m_cc_kickoff_yes",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Confirm collaborators",
+      inReplyTo: "<thread-existing@saas2.app>",
+      references: [],
+      rawBody: "Yes, add them please",
+      parsed: {
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", expectedName, {
+      createdByEmail: "user@example.com",
+      createdByUserId: "u1",
+    });
+    expect(repoState.storeRawProjectUpdate).toHaveBeenCalledWith(
+      "p1",
+      sourceRawBody,
+      expect.anything(),
+    );
+    expect(repoState.resolveCcMembershipConfirmation).toHaveBeenCalledWith({
+      confirmationId: "cc_pending_kickoff_yes",
+      status: "approved",
+      resolvedByEmail: "user@example.com",
+    });
+  });
+
   it("rejects pending kickoff confirmation on no reply and keeps tier unchanged", async () => {
     repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue({
       id: "cc_pending_no",
@@ -2894,5 +3044,165 @@ describe("processInboundEmail", () => {
     };
     await processInboundEmail(event);
     expect(repoState.assignRpm).toHaveBeenCalledWith("p1", "agency-rpm@example.com", "system@saas2.app");
+  });
+
+  it("assigns RPM from Assign RPM block when agency owner sends inbound", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: "user@example.com",
+      summary: "s",
+      initialSummary: "s",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "agency",
+      planPackage: "agency",
+      featureFlags: { collaborators: true, oversight: true },
+      transactionHistory: [],
+    });
+    const body = "Assign RPM:\nnewrpm@agency.com\n";
+    const parsed = parseNormalizedContent(body);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_assign_rpm_block",
+      provider: "resend",
+      providerEventId: "m_assign_rpm_block",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody: body,
+      parsed: {
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    await processInboundEmail(event);
+    expect(repoState.assignRpm).toHaveBeenCalledWith("p1", "newrpm@agency.com", "user@example.com");
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "RPM assigned: newrpm@agency.com");
+  });
+
+  it("does not assign RPM from Assign RPM block when sender is not owner or master", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: "user@example.com",
+      summary: "s",
+      initialSummary: "s",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: ["collab@example.com"],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "agency",
+      planPackage: "agency",
+      featureFlags: { collaborators: true, oversight: true },
+      transactionHistory: [],
+    });
+    const body = "Assign RPM:\nnewrpm@agency.com\n";
+    const parsed = parseNormalizedContent(body);
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_assign_rpm_collab",
+      provider: "resend",
+      providerEventId: "m_assign_rpm_collab",
+      timestamp: new Date().toISOString(),
+      from: "collab@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update",
+      inReplyTo: "<thread@saas2.app>",
+      references: [],
+      rawBody: body,
+      parsed: {
+        summary: parsed.summary,
+        currentStatus: parsed.currentStatus,
+        goals: parsed.goals,
+        actionItems: parsed.actionItems,
+        completedTasks: parsed.completedTasks,
+        decisions: parsed.decisions,
+        risks: parsed.risks,
+        recommendations: parsed.recommendations,
+        notes: parsed.notes,
+        userProfileContext: parsed.userProfileContext,
+        rpmSuggestion: parsed.rpmSuggestion,
+        transactionEvent: parsed.transactionEvent,
+        approvals: parsed.approvals,
+        additionalEmails: parsed.additionalEmails,
+        projectName: parsed.projectName,
+        correction: parsed.correction,
+        assignRpmEmail: parsed.assignRpmEmail,
+      },
+    };
+    repoState.assignRpm.mockClear();
+    await processInboundEmail(event);
+    expect(repoState.assignRpm).not.toHaveBeenCalled();
   });
 });

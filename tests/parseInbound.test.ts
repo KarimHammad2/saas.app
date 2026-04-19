@@ -103,6 +103,31 @@ Reject suggestion def-456
     expect(rpmPrefixed.parsed.correction).toContain("March 15");
   });
 
+  it("extracts Assign RPM email and normalizes case", () => {
+    const parsed = parseInbound(
+      {
+        from: "owner@agency.com",
+        subject: "Re: Project",
+        text: "Assign RPM:\nrpm-lead@agency.com\n",
+      },
+      "resend",
+    );
+    expect(parsed.parsed.assignRpmEmail).toBe("rpm-lead@agency.com");
+  });
+
+  it("treats Assign RPM only message as structured with empty notes", () => {
+    const parsed = parseInbound(
+      {
+        from: "owner@agency.com",
+        subject: "Re: Project",
+        text: "Assign RPM:\nother@agency.com\n",
+      },
+      "resend",
+    );
+    expect(parsed.parsed.assignRpmEmail).toBe("other@agency.com");
+    expect(parsed.parsed.notes).toEqual([]);
+  });
+
   it("parses markdown-style section headers and dedupes list entries", () => {
     const payload = {
       from: "User <user@example.com>",
@@ -348,7 +373,10 @@ Decisions:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.parsed.summary).toBe("Potential SaaS platform for restaurants.");
+    expect(parsed.rawBody).toBe(
+      "Hey so yeah basically I'm thinking maybe something like a SaaS for restaurants idk...",
+    );
+    expect(parsed.parsed.summary).toBe("thing like a SaaS for restaurants.");
   });
 
   it("parses canonical Project Status section while keeping Summary strict", () => {

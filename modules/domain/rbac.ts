@@ -49,6 +49,15 @@ export function canApplyInboundUserProfileEdit(
   return senderEmail.trim().toLowerCase() === owner;
 }
 
+/** Assign RPM: block — only account owner or master (same gate as UserProfile edits). */
+export function canAssignProjectRpmViaInbound(
+  role: ActorRole,
+  senderEmail: string,
+  ownerEmail: string | null | undefined,
+): boolean {
+  return canApplyInboundUserProfileEdit(role, senderEmail, ownerEmail);
+}
+
 export function canProposeUserProfile(role: ActorRole): boolean {
   return role === "user" || role === "rpm" || role === "master";
 }

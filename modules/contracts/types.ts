@@ -184,5 +184,7 @@ export interface NormalizedEmailEvent {
     projectName?: string | null;
     /** Free-text body under Correction: or RPM Correction: (applied when sender is the assigned RPM). */
     correction?: string | null;
+    /** First valid email under Assign RPM: (agency RPM selection via email). */
+    assignRpmEmail?: string | null;
   };
 }
