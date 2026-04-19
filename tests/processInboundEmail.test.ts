@@ -3402,15 +3402,15 @@ Prefer concise updates.
     expect(repoState.updateGoals).not.toHaveBeenCalled();
   });
 
-  it("uses merge updateGoals for owner when Goals section is present", async () => {
+  it("calls replaceGoals for owner when Goals section is present", async () => {
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
     const rawBody = "Goals:\n- Owner goal\n";
     const parsed = parseNormalizedContent(rawBody);
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
-      eventId: "e_owner_goals_merge",
+      eventId: "e_owner_goals_replace",
       provider: "resend",
-      providerEventId: "m_owner_goals_merge",
+      providerEventId: "m_owner_goals_replace",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
       fromDisplayName: null,
@@ -3444,8 +3444,8 @@ Prefer concise updates.
     repoState.replaceGoals.mockClear();
     repoState.updateGoals.mockClear();
     await processInboundEmail(event);
-    expect(repoState.updateGoals).toHaveBeenCalledWith("p1", ["Owner goal"]);
-    expect(repoState.replaceGoals).not.toHaveBeenCalled();
+    expect(repoState.replaceGoals).toHaveBeenCalledWith("p1", ["Owner goal"]);
+    expect(repoState.updateGoals).not.toHaveBeenCalled();
   });
 
   it("calls replaceActionItems for RPM when Tasks section is present on existing project", async () => {
@@ -3540,15 +3540,15 @@ Prefer concise updates.
     expect(repoState.appendActionItems).not.toHaveBeenCalled();
   });
 
-  it("uses appendActionItems for owner when Tasks section is present", async () => {
+  it("calls replaceActionItems for owner when Tasks section is present", async () => {
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue({ ...defaultMockProject });
     const rawBody = "Tasks:\n- Owner task\n";
     const parsed = parseNormalizedContent(rawBody);
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
-      eventId: "e_owner_tasks_append",
+      eventId: "e_owner_tasks_replace",
       provider: "resend",
-      providerEventId: "m_owner_tasks_append",
+      providerEventId: "m_owner_tasks_replace",
       timestamp: new Date().toISOString(),
       from: "user@example.com",
       fromDisplayName: null,
@@ -3582,7 +3582,7 @@ Prefer concise updates.
     repoState.replaceActionItems.mockClear();
     repoState.appendActionItems.mockClear();
     await processInboundEmail(event);
-    expect(repoState.appendActionItems).toHaveBeenCalledWith("p1", ["Owner task"]);
-    expect(repoState.replaceActionItems).not.toHaveBeenCalled();
+    expect(repoState.replaceActionItems).toHaveBeenCalledWith("p1", ["Owner task"]);
+    expect(repoState.appendActionItems).not.toHaveBeenCalled();
   });
 });

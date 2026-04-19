@@ -504,14 +504,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     await repo.updateCurrentStatus(project.id, contentEvent.parsed.currentStatus);
     await repo.appendRecentUpdate(project.id, `Status updated: ${contentEvent.parsed.currentStatus}`);
   }
-  if (rpmStructuredMode) {
-    if (contentEvent.parsed.projectSectionPresence.goals) {
-      await repo.replaceGoals(project.id, contentEvent.parsed.goals);
-      if (contentEvent.parsed.goals.length > 0) {
-        await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
-      }
+  /** Labeled `Goals:` means a full snapshot for that section (replace), for any sender. */
+  if (contentEvent.parsed.projectSectionPresence.goals) {
+    await repo.replaceGoals(project.id, contentEvent.parsed.goals);
+    if (contentEvent.parsed.goals.length > 0) {
+      await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
     }
-  } else {
+  } else if (!rpmStructuredMode) {
     await repo.updateGoals(project.id, contentEvent.parsed.goals);
     if (contentEvent.parsed.goals.length > 0) {
       await repo.appendRecentUpdate(project.id, `Goals updated: ${contentEvent.parsed.goals.join("; ")}`);
@@ -519,12 +518,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
   const hasTasksOrActionItemsHeading =
     contentEvent.parsed.projectSectionPresence.tasks || contentEvent.parsed.projectSectionPresence.actionItems;
-  if (rpmStructuredMode && hasTasksOrActionItemsHeading) {
+  /** Labeled `Tasks:` / `Action Items:` means a full snapshot (replace), for any sender. */
+  if (hasTasksOrActionItemsHeading) {
     await repo.replaceActionItems(project.id, contentEvent.parsed.actionItems);
     if (contentEvent.parsed.actionItems.length > 0) {
       await repo.appendRecentUpdate(project.id, `Tasks updated: ${contentEvent.parsed.actionItems.join("; ")}`);
     }
-  } else if (!rpmStructuredMode || hasTasksOrActionItemsHeading) {
+  } else if (!rpmStructuredMode) {
     await repo.appendActionItems(project.id, contentEvent.parsed.actionItems);
     if (contentEvent.parsed.actionItems.length > 0) {
       await repo.appendRecentUpdate(project.id, `Task(s) added: ${contentEvent.parsed.actionItems.join("; ")}`);
