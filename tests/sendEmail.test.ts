@@ -98,6 +98,39 @@ describe("sendEmail", () => {
     );
   });
 
+  it("suppresses the master user from to when they are listed alongside others", async () => {
+    providerSendEmail.mockResolvedValue(undefined);
+
+    await sendEmail({
+      to: "user@example.com,daniel@saassquared.com",
+      subject: "Test",
+      text: "Hello",
+    });
+
+    expect(providerSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["user@example.com"],
+      }),
+    );
+  });
+
+  it("keeps the master user in to when allowMasterUserAsDirectRecipient is set", async () => {
+    providerSendEmail.mockResolvedValue(undefined);
+
+    await sendEmail({
+      to: "user@example.com,daniel@saassquared.com",
+      allowMasterUserAsDirectRecipient: true,
+      subject: "Test",
+      text: "Hello",
+    });
+
+    expect(providerSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["user@example.com", "daniel@saassquared.com"],
+      }),
+    );
+  });
+
   it("allows the master user in bcc when explicitly requested", async () => {
     providerSendEmail.mockResolvedValue(undefined);
 

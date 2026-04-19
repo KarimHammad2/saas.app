@@ -7,6 +7,11 @@ interface SendEmailInput {
   cc?: string;
   bcc?: string;
   allowMasterUserInBcc?: boolean;
+  /**
+   * When false (default), MASTER_USER_EMAIL is removed from To/Cc to avoid duplicate operational mail.
+   * Set true for flows that intentionally include the master (e.g. project mail where they are the assigned RPM).
+   */
+  allowMasterUserAsDirectRecipient?: boolean;
   subject: string;
   text?: string;
   html?: string;
@@ -18,7 +23,8 @@ interface SendEmailInput {
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<void> {
-  const { to, cc, bcc, allowMasterUserInBcc, subject, text, html, headers, attachments } = input;
+  const { to, cc, bcc, allowMasterUserInBcc, allowMasterUserAsDirectRecipient, subject, text, html, headers, attachments } =
+    input;
 
   if (!to.trim()) {
     throw new Error("Recipient email is required.");
@@ -32,7 +38,15 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
   const fallbackProvider = getFallbackEmailProvider(primaryProvider.name);
   const pausedMasterEmail = getMasterUserEmail();
   const normalize = (value: string): string => value.trim().toLowerCase();
-  const shouldDeliverTo = (email: string): boolean => normalize(email) !== pausedMasterEmail;
+  const shouldDeliverTo = (email: string): boolean => {
+    if (!email.trim()) {
+      return false;
+    }
+    if (allowMasterUserAsDirectRecipient) {
+      return true;
+    }
+    return normalize(email) !== pausedMasterEmail;
+  };
   const recipients = to
     .split(",")
     .map((item) => item.trim())

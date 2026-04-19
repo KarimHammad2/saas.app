@@ -123,6 +123,7 @@ export async function sendProjectEmail(recipients: string[], payload: ProjectEma
     to: to.join(","),
     bcc,
     allowMasterUserInBcc,
+    allowMasterUserAsDirectRecipient: true,
     subject: finalSubject,
     text,
     html,
