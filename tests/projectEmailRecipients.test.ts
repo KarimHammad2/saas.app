@@ -52,4 +52,26 @@ describe("buildProjectEmailRecipientList", () => {
     );
     expect(list).toEqual(["owner@example.com"]);
   });
+
+  it("normalizes and keeps owner first even with mixed casing and spaces", () => {
+    const list = buildProjectEmailRecipientList(
+      baseState({
+        ownerEmail: " Owner@Example.com ",
+        participants: ["member@example.com", "owner@example.com"],
+        featureFlags: { collaborators: true, oversight: false },
+      }),
+    );
+    expect(list).toEqual(["owner@example.com", "member@example.com"]);
+  });
+
+  it("still returns participants when owner email is missing", () => {
+    const list = buildProjectEmailRecipientList(
+      baseState({
+        ownerEmail: undefined,
+        participants: ["member@example.com"],
+        featureFlags: { collaborators: true, oversight: false },
+      }),
+    );
+    expect(list).toEqual(["member@example.com"]);
+  });
 });

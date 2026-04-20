@@ -2,12 +2,23 @@ import type { ProjectContext } from "@/modules/contracts/types";
 
 /** Primary recipients for project update emails: owner, participants, and RPM when human oversight applies. */
 export function buildProjectEmailRecipientList(projectState: ProjectContext): string[] {
-  const raw = [projectState.ownerEmail, ...(projectState.participants ?? [])].filter(
-    (entry): entry is string => typeof entry === "string" && entry.includes("@"),
-  );
-  const rpm = projectState.activeRpmEmail?.trim();
-  if (projectState.featureFlags?.oversight && rpm && rpm.includes("@")) {
-    raw.push(rpm.toLowerCase());
+  const normalizeEmail = (value: string | null | undefined): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized.includes("@") ? normalized : null;
+  };
+
+  const owner = normalizeEmail(projectState.ownerEmail);
+  const participants = (projectState.participants ?? [])
+    .map((entry) => normalizeEmail(entry))
+    .filter((entry): entry is string => entry !== null);
+  const raw = owner ? [owner, ...participants] : participants;
+
+  const rpm = normalizeEmail(projectState.activeRpmEmail);
+  if (projectState.featureFlags?.oversight && rpm) {
+    raw.push(rpm);
   }
-  return Array.from(new Set(raw.map((e) => e.trim().toLowerCase())));
+  return Array.from(new Set(raw));
 }

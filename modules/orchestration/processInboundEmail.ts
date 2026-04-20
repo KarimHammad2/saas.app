@@ -262,6 +262,18 @@ function defaultNextSteps(): string[] {
   ];
 }
 
+function ensureOwnerRecipient(recipients: string[], ownerEmail: string | null | undefined): string[] {
+  const normalizedOwner = ownerEmail?.trim().toLowerCase() ?? "";
+  if (!normalizedOwner || !normalizedOwner.includes("@")) {
+    return recipients;
+  }
+  const normalized = recipients.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  if (normalized.includes(normalizedOwner)) {
+    return Array.from(new Set(normalized));
+  }
+  return [normalizedOwner, ...normalized];
+}
+
 export async function processInboundEmail(event: NormalizedEmailEvent): Promise<InboundProcessingResult> {
   const repo = new MemoryRepository();
   const inserted = await repo.registerInboundEvent(event.provider, event.providerEventId, event as unknown as Record<string, unknown>);
@@ -335,8 +347,9 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const projectState = await repo.getProjectState(project.id);
     const pendingSuggestions = await repo.getPendingSuggestions(ownerUserId, project.id);
     const userProfile = await repo.getUserProfile(ownerUserId);
+    const ownerRecipient = projectState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
     return {
-      recipients: buildProjectEmailRecipientList(projectState),
+      recipients: ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient),
       payload: {
         context: projectState,
         userProfile,
@@ -360,11 +373,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   await repo.ensureUserProfileRow(user.id);
 
   const accessState = await repo.getProjectState(project.id);
+  const ownerEmailResolved = accessState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
   const activeRpmEmail = await repo.getActiveRpm(project.id);
   if (
     !canSenderUpdateProject({
       senderEmail: event.from,
-      ownerEmail: accessState.ownerEmail,
+      ownerEmail: ownerEmailResolved,
       participantEmails: accessState.participants,
       activeRpmEmail,
     })
@@ -375,7 +389,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     });
   }
 
-  const ownerEmailForRole = accessState.ownerEmail ?? user.email;
+  const ownerEmailForRole = ownerEmailResolved ?? user.email;
   const role = resolveActorRole({
     senderEmail: event.from,
     primaryUserEmail: ownerEmailForRole,
@@ -426,14 +440,14 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const pending = await repo.createOrReusePendingCcMembershipConfirmation({
       ownerUserId,
       projectId: project.id,
-      ownerEmail: accessState.ownerEmail ?? user.email,
+      ownerEmail: ownerEmailForRole,
       candidateEmails: newCcCandidates,
       sourceInboundEventId: event.eventId,
       sourceSubject: event.subject,
       sourceRawBody: event.rawBody,
     });
     throw new CcMembershipConfirmationRequiredError("CC membership confirmation required before adding collaborators.", {
-      ownerEmail: accessState.ownerEmail ?? user.email,
+      ownerEmail: ownerEmailForRole,
       senderSubject: event.subject,
       candidateEmails: newCcCandidates,
       confirmationId: pending.id,
@@ -469,7 +483,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   if (assignRpmEmail) {
     const stateAfterKickoff = await repo.getProjectState(project.id);
     const entitlementsAfterKickoff = resolvePlanEntitlements(stateAfterKickoff.tier);
-    const ownerEmailForAssign = stateAfterKickoff.ownerEmail ?? user.email;
+    const ownerEmailForAssign = stateAfterKickoff.ownerEmail ?? (await repo.getUserEmailById(ownerUserId)) ?? user.email;
     const roleForAssign = resolveActorRole({
       senderEmail: event.from,
       primaryUserEmail: ownerEmailForAssign,
@@ -766,7 +780,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const projectState = await repo.getProjectState(project.id);
   const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(ownerUserId, project.id);
-  const recipients = buildProjectEmailRecipientList(projectState);
+  const ownerRecipient = projectState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
+  const recipients = ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient);
 
   const isWelcome = shouldRunKickoff;
   const playbookVariant = stableVariantIndex(project.id) as PlaybookVariant;
