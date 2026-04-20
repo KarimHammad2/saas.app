@@ -222,6 +222,7 @@ describe("sendProjectEmail", () => {
         paymentLinkUrl: "https://pay.saassquared.com/b/mock",
         paymentLinkTierAmount: 500,
         paidAt: null,
+        paymentStatus: "pending_payment",
       },
     ];
 

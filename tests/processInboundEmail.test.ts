@@ -1785,6 +1785,7 @@ describe("processInboundEmail", () => {
       paymentLinkUrl: "https://pay.example/b",
       paymentLinkTierAmount: 500,
       paidAt: new Date().toISOString(),
+      paymentStatus: "paid" as const,
     };
     repoState.markLatestPendingHourPurchasePaid.mockResolvedValue(paidRecord);
 

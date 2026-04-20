@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveUsdPaymentLinkForTotal, USD_PAYMENT_LINK_CATALOG } from "@/modules/domain/paymentLinkCatalog";
+import {
+  CAD_PAYMENT_LINK_CATALOG,
+  resolveCadPaymentLinkForTotal,
+  resolvePaymentLinkForTotal,
+  resolveUsdPaymentLinkForTotal,
+  USD_PAYMENT_LINK_CATALOG,
+} from "@/modules/domain/paymentLinkCatalog";
 
 describe("resolveUsdPaymentLinkForTotal", () => {
   it("uses exact tier when total matches a catalog amount", () => {
@@ -35,5 +41,31 @@ describe("resolveUsdPaymentLinkForTotal", () => {
   it("floors at boundary just above a tier", () => {
     expect(resolveUsdPaymentLinkForTotal(1001).tierAmount).toBe(1000);
     expect(resolveUsdPaymentLinkForTotal(1000).tierAmount).toBe(1000);
+  });
+});
+
+describe("resolveCadPaymentLinkForTotal", () => {
+  it("uses CAD catalog and returns currency cad", () => {
+    const r = resolveCadPaymentLinkForTotal(1000);
+    expect(r.currency).toBe("cad");
+    expect(r.tierAmount).toBe(1000);
+    expect(r.url).toContain("9B6bJ2aggcYs6fU0oOgEg0U");
+  });
+
+  it("floors like USD for between-tier totals", () => {
+    expect(resolveCadPaymentLinkForTotal(1234).tierAmount).toBe(1000);
+  });
+
+  it("resolvePaymentLinkForTotal dispatches by currency", () => {
+    expect(resolvePaymentLinkForTotal(500, "usd").currency).toBe("usd");
+    expect(resolvePaymentLinkForTotal(500, "cad").currency).toBe("cad");
+    expect(resolvePaymentLinkForTotal(500, "cad").url).not.toBe(resolvePaymentLinkForTotal(500, "usd").url);
+  });
+
+  it("uses max CAD tier when total exceeds catalog", () => {
+    const r = resolveCadPaymentLinkForTotal(999_999);
+    const max = CAD_PAYMENT_LINK_CATALOG[CAD_PAYMENT_LINK_CATALOG.length - 1];
+    expect(r.tierAmount).toBe(max.amount);
+    expect(r.url).toBe(max.url);
   });
 });

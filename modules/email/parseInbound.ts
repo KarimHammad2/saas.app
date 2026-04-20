@@ -1,4 +1,10 @@
-import type { NormalizedEmailEvent, ProjectSectionPresence, ProjectStatus, TransactionEvent } from "@/modules/contracts/types";
+import type {
+  NormalizedEmailEvent,
+  ProjectSectionPresence,
+  ProjectStatus,
+  TransactionEvent,
+  TransactionRateCurrency,
+} from "@/modules/contracts/types";
 import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
 import { mergeUniqueStringsPreserveOrder } from "@/modules/domain/mergeUniqueStrings";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
@@ -466,6 +472,28 @@ function stripMarkdownBold(text: string): string {
   return text.replace(/\*\*/g, "");
 }
 
+/** Parses the Hourly Rate / Rate line for a numeric value and CAD vs USD from tokens (CAD, CA$, C$). */
+function parseRateLineInTransaction(plain: string): { rate: number; rateCurrency: TransactionRateCurrency } | null {
+  const labels = ["Hourly Rate", "Rate"];
+  const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const m = plain.match(new RegExp(`(?:^|\\n)\\s*(?:${escaped})\\s*:\\s*([^\\n]+)`, "i"));
+  if (!m?.[1]) {
+    return null;
+  }
+  const line = m[1].trim();
+  const num = line.match(/([\d.]+)/);
+  const rate = Number(num?.[1] ?? 0);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return null;
+  }
+  const cad =
+    /\bCAD\b/i.test(line) ||
+    /CA\$/i.test(line) ||
+    /\bC\$\s*[\d.]/.test(line) ||
+    /[\d.][\d.]*\s*CAD\b/i.test(line);
+  return { rate, rateCurrency: cad ? "cad" : "usd" };
+}
+
 function parseTransactionBlock(content: string): TransactionEvent | null {
   if (!content.trim()) {
     return null;
@@ -481,11 +509,14 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
   };
 
   const hours = valueByLabel(["Hours Purchased", "Hours"]);
-  const rate = valueByLabel(["Hourly Rate", "Rate"]);
+  const rateParsed = parseRateLineInTransaction(plain);
+  const rate = rateParsed?.rate ?? valueByLabel(["Hourly Rate", "Rate"]);
+  const rateCurrency: TransactionRateCurrency | undefined = rateParsed?.rateCurrency;
 
   const event: TransactionEvent = {
     hoursPurchased: hours,
     hourlyRate: rate,
+    ...(rateCurrency && rateCurrency !== "usd" ? { rateCurrency } : {}),
     allocatedHours: 0,
     bufferHours: 0,
     saas2Fee: 0,

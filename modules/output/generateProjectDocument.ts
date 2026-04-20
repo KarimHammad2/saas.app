@@ -1,4 +1,5 @@
-import type { ProjectContext, UserProfileContext } from "@/modules/contracts/types";
+import type { ProjectContext, TransactionRecord, UserProfileContext } from "@/modules/contracts/types";
+import { formatMoneyAmountForEmail } from "@/modules/output/checkoutCurrencyDisplay";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import { dedupePreserveOrder } from "@/modules/output/presentationHelpers";
@@ -251,6 +252,97 @@ function formatUserProfileContextSection(profile: UserProfileContext): string {
   return lines.join("\n");
 }
 
+function roundDisplayNumber(n: number): string {
+  const x = Math.round(n * 100) / 100;
+  if (Number.isInteger(x)) {
+    return String(x);
+  }
+  return String(x);
+}
+
+/** "1 hour" vs "1.5 hours" for remainder-style amounts. */
+function formatHourWordLabel(n: number): string {
+  const r = roundDisplayNumber(n);
+  const abs = Math.abs(Number(r));
+  const word = abs === 1 ? "hour" : "hours";
+  return `${r} ${word}`;
+}
+
+function paymentStatusSuffix(tx: TransactionRecord): string {
+  if (tx.paymentStatus === "paid") {
+    return " (Paid)";
+  }
+  if (tx.paymentStatus === "pending_payment") {
+    return " (Pending payment)";
+  }
+  return " (Cancelled)";
+}
+
+function remainderDeltaNoun(absVal: number): "hour" | "hours" {
+  if (absVal === 1 || (absVal > 0 && absVal < 1)) {
+    return "hour";
+  }
+  return "hours";
+}
+
+function formatRemainderContributionArrow(projectRemainder: number): string {
+  if (projectRemainder === 0) {
+    return "→ Remainder +0 hours";
+  }
+  const absVal = Math.abs(projectRemainder);
+  const amount = roundDisplayNumber(absVal);
+  const noun = remainderDeltaNoun(absVal);
+  if (projectRemainder > 0) {
+    return `→ Remainder +${amount} ${noun}`;
+  }
+  return `→ Remainder ${roundDisplayNumber(projectRemainder)} ${noun}`;
+}
+
+function formatHourPurchaseHistoryLine(tx: TransactionRecord): string {
+  const hoursPart = formatHourWordLabel(tx.hoursPurchased);
+  const rateWithUnit = `${formatMoneyAmountForEmail(tx.hourlyRate, tx.paymentCurrency)}/hour`;
+  const arrow = formatRemainderContributionArrow(tx.projectRemainder);
+  return `- ${hoursPart} at ${rateWithUnit} ${arrow}${paymentStatusSuffix(tx)}`;
+}
+
+function formatOtherTransactionHistoryLine(tx: TransactionRecord): string {
+  if (tx.type === "allocation") {
+    return `- Allocation recorded${paymentStatusSuffix(tx)}`;
+  }
+  return `- Remainder adjustment (${roundDisplayNumber(tx.projectRemainder)} h)${paymentStatusSuffix(tx)}`;
+}
+
+function formatTransactionHistoryMarkdown(transactions: TransactionRecord[]): string {
+  if (transactions.length === 0) {
+    return "- (No purchases in history yet.)";
+  }
+  const sorted = [...transactions].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+  const lines = sorted.map((tx) =>
+    tx.type === "hourPurchase" ? formatHourPurchaseHistoryLine(tx) : formatOtherTransactionHistoryLine(tx),
+  );
+  return lines.join("\n");
+}
+
+/** Included in the LLM project file when there is remainder or any stored transactions. */
+function formatFinancialSummarySection(context: ProjectContext): string | null {
+  if (context.transactionHistory.length === 0 && context.remainderBalance === 0) {
+    return null;
+  }
+  const body = [
+    "## Financial Summary",
+    "",
+    `Remainder Balance: ${formatHourWordLabel(context.remainderBalance)}`,
+    "",
+    "### Transaction History",
+    "",
+    formatTransactionHistoryMarkdown(context.transactionHistory),
+    "",
+  ].join("\n");
+  return body;
+}
+
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context, userProfile } = payload;
   const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
@@ -273,6 +365,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const userProfileBlock = formatUserProfileContextSection(userProfile);
 
   const agencyRpmLines = formatAgencyRpmMetadataLines(context);
+  const financialSummarySection = formatFinancialSummarySection(context);
 
   return [
     "# PROJECT FILE",
@@ -301,8 +394,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     overview,
     "",
-    "---",
-    "",
+    ...(financialSummarySection ? [financialSummarySection, "---", ""] : ["---", ""]),
     "## Goals",
     "",
     goalsBlock,

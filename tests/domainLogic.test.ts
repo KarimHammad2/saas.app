@@ -47,6 +47,22 @@ describe("domain logic", () => {
     expect(event.projectRemainder).toBe(1);
   });
 
+  it("preserves rateCurrency through applyTierFinancials", () => {
+    const event = applyTierFinancials(
+      {
+        hoursPurchased: 10,
+        hourlyRate: 100,
+        rateCurrency: "cad",
+        allocatedHours: 0,
+        bufferHours: 0,
+        saas2Fee: 0,
+        projectRemainder: 0,
+      },
+      "solopreneur",
+    );
+    expect(event.rateCurrency).toBe("cad");
+  });
+
   it("applies freemium hour split using solo rates", () => {
     const event = applyTierFinancials(
       {

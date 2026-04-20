@@ -6,6 +6,7 @@ import { normalizeMessageId } from "@/modules/email/messageId";
 import { sendEmail } from "@/modules/email/sendEmail";
 import { getRuntimeConfig } from "@/modules/config/runtimeConfig";
 import type { ProjectContext, TransactionPaymentMeta, TransactionRecord } from "@/modules/contracts/types";
+import { formatHourlyRateForEmail, formatMoneyAmountForEmail } from "@/modules/output/checkoutCurrencyDisplay";
 import { partitionRecipientsForRpmCopy } from "@/modules/output/sendProjectEmail";
 
 function formatProjectCodeBracket(projectCode: string): string {
@@ -39,8 +40,9 @@ function buildBccList(adminBcc?: string | null, adminBccEnabled?: boolean): stri
 }
 
 export function formatPaymentInstructionsBody(payment: TransactionPaymentMeta): string {
+  const totalLabel = formatMoneyAmountForEmail(payment.paymentTotal, payment.paymentCurrency);
   return [
-    `Your purchase total is $${payment.paymentTotal} (hours × rate).`,
+    `Your purchase total is ${totalLabel} (hours × rate).`,
     "",
     `Pay here: ${payment.paymentLinkUrl}`,
     "",
@@ -57,7 +59,7 @@ export function formatPaymentConfirmedPlainText(context: ProjectContext, paid: T
     "",
     "Financial Summary:",
     `- Hours Purchased: ${paid.hoursPurchased}`,
-    `- Rate: $${paid.hourlyRate}`,
+    `- Rate: ${formatHourlyRateForEmail(paid.hourlyRate, paid.paymentCurrency)}`,
     `- Allocated: ${paid.allocatedHours}`,
     `- Buffer: ${paid.bufferHours}`,
     "",

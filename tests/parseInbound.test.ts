@@ -551,6 +551,34 @@ Project Remainder: 1`,
     expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(50);
   });
 
+  it("detects CAD on Hourly Rate line for checkout currency", () => {
+    const body = `Transaction:
+Hours Purchased: 10
+Hourly Rate: CAD 100
+`;
+    const p = parseNormalizedContent(body);
+    expect(p.transactionEvent?.hourlyRate).toBe(100);
+    expect(p.transactionEvent?.rateCurrency).toBe("cad");
+  });
+
+  it("detects CAD with CA$ on rate line", () => {
+    const p = parseNormalizedContent(`Transaction:
+Hours: 5
+Hourly Rate: CA$75
+`);
+    expect(p.transactionEvent?.hourlyRate).toBe(75);
+    expect(p.transactionEvent?.rateCurrency).toBe("cad");
+  });
+
+  it("defaults to USD when rate line has $ without CAD", () => {
+    const p = parseNormalizedContent(`Transaction:
+Hours: 10
+Rate: $50
+`);
+    expect(p.transactionEvent?.hourlyRate).toBe(50);
+    expect(p.transactionEvent?.rateCurrency).toBeUndefined();
+  });
+
   it("parses simple transaction hours/rate and approval command id", () => {
     const payload = {
       from: "User <user@example.com>",

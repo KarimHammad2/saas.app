@@ -1,8 +1,7 @@
 /**
- * Fixed Stripe Billing checkout URLs for SaaS² platform tiers (USD).
- * CAD tiers live in {@link CAD_PAYMENT_LINK_CATALOG} for a future currency switch.
+ * Fixed Stripe Billing checkout URLs for SaaS² platform tiers (USD and CAD).
  *
- * Selection rule (USD): **floor** — largest catalog amount ≤ purchase total
+ * Selection rule: **floor** — largest catalog amount ≤ purchase total
  * (`hoursPurchased * hourlyRate`). If total is below every tier (e.g. &lt; $50),
  * use the **smallest** tier so a link is always present.
  */
@@ -52,7 +51,7 @@ export const USD_PAYMENT_LINK_CATALOG: PaymentTierLink[] = [
   { amount: 30000, url: `${PAY_BASE}3cI8wQ2NOgaEfQu4F4gEg01` },
 ];
 
-/** CAD tiers for future `PAYMENT_LINK_CURRENCY=cad` (ascending by amount). */
+/** CAD tiers (ascending by amount); used when the Transaction rate line indicates CAD. */
 export const CAD_PAYMENT_LINK_CATALOG: PaymentTierLink[] = [
   { amount: 50, url: `${PAY_BASE}7sY14ofAA0bG0VA7RggEg13` },
   { amount: 100, url: `${PAY_BASE}3cI8wQcoogaE1ZEfjIgEg12` },
@@ -93,7 +92,7 @@ export const CAD_PAYMENT_LINK_CATALOG: PaymentTierLink[] = [
 export interface ResolvedPaymentLink {
   url: string;
   tierAmount: number;
-  currency: "usd";
+  currency: "usd" | "cad";
 }
 
 function clampNonNegative(n: number): number {
@@ -103,11 +102,14 @@ function clampNonNegative(n: number): number {
 /**
  * Floor tier: max catalog amount ≤ total. If none (total below minimum tier), use smallest tier.
  */
-export function resolveUsdPaymentLinkForTotal(total: number): ResolvedPaymentLink {
+function resolvePaymentLinkFromCatalog(
+  catalog: PaymentTierLink[],
+  total: number,
+  currency: ResolvedPaymentLink["currency"],
+): ResolvedPaymentLink {
   const t = clampNonNegative(total);
-  const catalog = USD_PAYMENT_LINK_CATALOG;
   if (catalog.length === 0) {
-    throw new Error("USD payment link catalog is empty.");
+    throw new Error(`${currency.toUpperCase()} payment link catalog is empty.`);
   }
   let best: PaymentTierLink | null = null;
   for (const tier of catalog) {
@@ -116,5 +118,22 @@ export function resolveUsdPaymentLinkForTotal(total: number): ResolvedPaymentLin
     }
   }
   const chosen = best ?? catalog[0];
-  return { url: chosen.url, tierAmount: chosen.amount, currency: "usd" };
+  return { url: chosen.url, tierAmount: chosen.amount, currency };
+}
+
+export function resolveUsdPaymentLinkForTotal(total: number): ResolvedPaymentLink {
+  return resolvePaymentLinkFromCatalog(USD_PAYMENT_LINK_CATALOG, total, "usd");
+}
+
+export function resolveCadPaymentLinkForTotal(total: number): ResolvedPaymentLink {
+  return resolvePaymentLinkFromCatalog(CAD_PAYMENT_LINK_CATALOG, total, "cad");
+}
+
+export function resolvePaymentLinkForTotal(
+  total: number,
+  currency: "usd" | "cad",
+): ResolvedPaymentLink {
+  return currency === "cad"
+    ? resolveCadPaymentLinkForTotal(total)
+    : resolveUsdPaymentLinkForTotal(total);
 }

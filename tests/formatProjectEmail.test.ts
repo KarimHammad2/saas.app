@@ -55,7 +55,7 @@ describe("formatProjectEmail", () => {
     const { body } = formatProjectEmail(payload);
     expect(body).toContain("Transaction recorded");
     expect(body).toContain("Hours Purchased: 20");
-    expect(body).toContain("Rate: $50");
+    expect(body).toContain("Rate: $50/hour");
     expect(body).toContain("Allocated: 18");
     expect(body).toContain("Buffer: 2");
     expect(body).toContain("Remainder Balance: 1");
@@ -87,5 +87,27 @@ describe("formatProjectEmail", () => {
     expect(body).toContain("Remainder Balance: 3");
     expect(body).toContain("assigned RPM copy");
     expect(body).not.toContain("Pay now:");
+  });
+
+  it("uses CA$ in the rate line when payment currency is CAD", () => {
+    const payload = basePayload();
+    payload.recordedTransaction = {
+      event: {
+        hoursPurchased: 10,
+        hourlyRate: 100,
+        allocatedHours: 9,
+        bufferHours: 1,
+        saas2Fee: 0.5,
+        projectRemainder: 0.5,
+        rateCurrency: "cad",
+      },
+      remainderBalance: 2,
+      paymentTotal: 1000,
+      paymentCurrency: "cad",
+      paymentLinkUrl: "https://pay.example/cad",
+      paymentLinkTierAmount: 1000,
+    };
+    const { body } = formatProjectEmail(payload);
+    expect(body).toContain("Rate: CA$100/hour");
   });
 });

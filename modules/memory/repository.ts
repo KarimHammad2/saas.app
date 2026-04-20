@@ -30,7 +30,7 @@ import { parseStoredProjectDomain } from "@/modules/domain/projectDomain";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import { planAgencyRpmReplacement } from "@/modules/domain/agencyTierRpm";
 import { applyTierFinancials } from "@/modules/domain/financial";
-import { resolveUsdPaymentLinkForTotal } from "@/modules/domain/paymentLinkCatalog";
+import { resolvePaymentLinkForTotal } from "@/modules/domain/paymentLinkCatalog";
 
 function formatNoteDatePrefix(iso?: string): string {
   const d = iso ? new Date(iso) : new Date();
@@ -252,7 +252,8 @@ function normalizeSuggestionContentKey(content: string): string {
 
 function computeTransactionPaymentMeta(event: TransactionEvent): TransactionPaymentMeta {
   const paymentTotal = Number((event.hoursPurchased * event.hourlyRate).toFixed(2));
-  const resolved = resolveUsdPaymentLinkForTotal(paymentTotal);
+  const currency = event.rateCurrency === "cad" ? "cad" : "usd";
+  const resolved = resolvePaymentLinkForTotal(paymentTotal, currency);
   return {
     paymentTotal,
     paymentCurrency: resolved.currency,
@@ -325,7 +326,15 @@ type TransactionSelectRow = {
   payment_link_url: string | null;
   payment_link_tier_amount: number | null;
   paid_at: string | null;
+  status: string | null;
 };
+
+function normalizeTransactionPaymentStatus(raw: string | null | undefined): TransactionRecord["paymentStatus"] {
+  if (raw === "paid" || raw === "cancelled" || raw === "pending_payment") {
+    return raw;
+  }
+  return "pending_payment";
+}
 
 function mapTransactionRowToRecord(row: TransactionSelectRow): TransactionRecord {
   return {
@@ -346,6 +355,7 @@ function mapTransactionRowToRecord(row: TransactionSelectRow): TransactionRecord
         ? null
         : Number(row.payment_link_tier_amount),
     paidAt: typeof row.paid_at === "string" ? row.paid_at : null,
+    paymentStatus: normalizeTransactionPaymentStatus(row.status),
   };
 }
 
@@ -2179,7 +2189,7 @@ export class MemoryRepository {
       .eq("id", latest.id)
       .eq("status", "pending_payment")
       .select(
-        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at",
+        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at, status",
       )
       .maybeSingle<TransactionSelectRow>();
 
@@ -2286,7 +2296,7 @@ export class MemoryRepository {
     const { data: transactions, error: txError } = await this.supabase
       .from("transactions")
       .select(
-        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at",
+        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at, status",
       )
       .eq("project_id", projectId)
       .order("created_at", { ascending: false });

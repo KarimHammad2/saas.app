@@ -55,6 +55,7 @@ export function applyTierFinancials(input: TransactionEvent, tier: Tier): Transa
   const hoursPurchased = clampNonNegative(input.hoursPurchased);
   const split = computeHourPurchaseSplit(hoursPurchased, tier);
   return normalizeTransactionEvent({
+    ...input,
     hoursPurchased,
     hourlyRate,
     ...split,

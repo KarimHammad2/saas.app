@@ -20,9 +20,14 @@ export interface RPMSuggestion {
   source: RPMSuggestionSource;
 }
 
+/** Currency for the rate line in a Transaction block; drives checkout link catalog (USD vs CAD). */
+export type TransactionRateCurrency = "usd" | "cad";
+
 export interface TransactionEvent {
   hoursPurchased: number;
   hourlyRate: number;
+  /** When omitted, treated as USD (backward compatible). Set from the rate line (e.g. CAD, CA$, C$). */
+  rateCurrency?: TransactionRateCurrency;
   allocatedHours: number;
   bufferHours: number;
   saas2Fee: number;
@@ -132,6 +137,9 @@ export interface ProjectContext {
   transactionHistory: TransactionRecord[];
 }
 
+/** Payment lifecycle on `transactions.status` (hour purchases and similar). */
+export type TransactionPaymentStatus = "pending_payment" | "paid" | "cancelled";
+
 export interface TransactionRecord {
   id: string;
   type: "hourPurchase" | "allocation" | "remainderAdjustment";
@@ -147,6 +155,7 @@ export interface TransactionRecord {
   paymentLinkUrl: string | null;
   paymentLinkTierAmount: number | null;
   paidAt: string | null;
+  paymentStatus: TransactionPaymentStatus;
 }
 
 /** Labeled project-memory headings detected in inbound body (for deterministic RPM apply rules). */

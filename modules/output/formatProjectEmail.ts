@@ -1,4 +1,5 @@
 import type { ProjectEmailPayload } from "@/modules/output/types";
+import { formatHourlyRateForEmail } from "@/modules/output/checkoutCurrencyDisplay";
 
 export interface FormattedProjectEmail {
   subject: string;
@@ -44,12 +45,13 @@ function formatRecordedTransactionBlock(payload: ProjectEmailPayload): string {
     return "";
   }
   const e = r.event;
+  const rateLabel = formatHourlyRateForEmail(e.hourlyRate, r.paymentCurrency);
   const lines = [
     "Transaction recorded",
     "",
     "Financial Summary:",
     `- Hours Purchased: ${e.hoursPurchased}`,
-    `- Rate: $${e.hourlyRate}`,
+    `- Rate: ${rateLabel}`,
     `- Allocated: ${e.allocatedHours}`,
     `- Buffer: ${e.bufferHours}`,
     "",

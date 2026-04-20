@@ -164,4 +164,80 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("- rpm@agency.com");
     expect(content).not.toMatch(/^Assign RPM:/m);
   });
+
+  it("includes Financial Summary and transaction history in project markdown", () => {
+    const payload = buildPayload();
+    payload.context.remainderBalance = 1.5;
+    payload.context.transactionHistory = [
+      {
+        id: "t1",
+        type: "hourPurchase",
+        hoursPurchased: 20,
+        hourlyRate: 50,
+        allocatedHours: 18,
+        bufferHours: 2,
+        saas2Fee: 1,
+        projectRemainder: 1,
+        createdAt: "2026-04-01T12:00:00.000Z",
+        paymentTotal: 1000,
+        paymentCurrency: "usd",
+        paymentLinkUrl: null,
+        paymentLinkTierAmount: null,
+        paidAt: "2026-04-02T12:00:00.000Z",
+        paymentStatus: "paid",
+      },
+      {
+        id: "t2",
+        type: "hourPurchase",
+        hoursPurchased: 10,
+        hourlyRate: 100,
+        allocatedHours: 9,
+        bufferHours: 1,
+        saas2Fee: 0.5,
+        projectRemainder: 0.5,
+        createdAt: "2026-04-10T12:00:00.000Z",
+        paymentTotal: 1000,
+        paymentCurrency: "usd",
+        paymentLinkUrl: null,
+        paymentLinkTierAmount: null,
+        paidAt: "2026-04-11T12:00:00.000Z",
+        paymentStatus: "paid",
+      },
+    ];
+    const content = generateProjectDocument(payload);
+    expect(content.indexOf("## Project Overview")).toBeLessThan(content.indexOf("## Financial Summary"));
+    expect(content.indexOf("## Financial Summary")).toBeLessThan(content.indexOf("## Goals"));
+    expect(content).toContain("## Financial Summary");
+    expect(content).toContain("Remainder Balance: 1.5 hours");
+    expect(content).toContain("### Transaction History");
+    expect(content).toContain("- 20 hours at $50/hour → Remainder +1 hour (Paid)");
+    expect(content).toContain("- 10 hours at $100/hour → Remainder +0.5 hour (Paid)");
+  });
+
+  it("marks pending hour purchases in transaction history", () => {
+    const payload = buildPayload();
+    payload.context.remainderBalance = 0.5;
+    payload.context.transactionHistory = [
+      {
+        id: "t-pending",
+        type: "hourPurchase",
+        hoursPurchased: 10,
+        hourlyRate: 100,
+        allocatedHours: 9,
+        bufferHours: 1,
+        saas2Fee: 0.5,
+        projectRemainder: 0.5,
+        createdAt: "2026-04-10T12:00:00.000Z",
+        paymentTotal: 1000,
+        paymentCurrency: "usd",
+        paymentLinkUrl: "https://pay.example/x",
+        paymentLinkTierAmount: 1000,
+        paidAt: null,
+        paymentStatus: "pending_payment",
+      },
+    ];
+    const content = generateProjectDocument(payload);
+    expect(content).toContain("→ Remainder +0.5 hour (Pending payment)");
+    expect(content).not.toContain("(Paid)");
+  });
 });

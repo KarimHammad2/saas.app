@@ -60,6 +60,7 @@ describe("payment outbound copy", () => {
       paymentLinkUrl: null,
       paymentLinkTierAmount: null,
       paidAt: new Date().toISOString(),
+      paymentStatus: "paid",
     };
     const text = formatPaymentConfirmedPlainText(baseContext(), paid);
     expect(text).toContain("Payment confirmed.");
