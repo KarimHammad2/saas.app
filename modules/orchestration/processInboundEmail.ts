@@ -274,6 +274,18 @@ function ensureOwnerRecipient(recipients: string[], ownerEmail: string | null | 
   return [normalizedOwner, ...normalized];
 }
 
+function ensureSenderRecipient(recipients: string[], senderEmail: string): string[] {
+  const normalizedSender = senderEmail.trim().toLowerCase();
+  if (!normalizedSender || !normalizedSender.includes("@")) {
+    return recipients;
+  }
+  const normalized = recipients.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  if (normalized.includes(normalizedSender)) {
+    return Array.from(new Set(normalized));
+  }
+  return [normalizedSender, ...normalized];
+}
+
 export async function processInboundEmail(event: NormalizedEmailEvent): Promise<InboundProcessingResult> {
   const repo = new MemoryRepository();
   const inserted = await repo.registerInboundEvent(event.provider, event.providerEventId, event as unknown as Record<string, unknown>);
@@ -349,7 +361,10 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const userProfile = await repo.getUserProfile(ownerUserId);
     const ownerRecipient = projectState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
     return {
-      recipients: ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient),
+      recipients: ensureSenderRecipient(
+        ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient),
+        event.from,
+      ),
       payload: {
         context: projectState,
         userProfile,
@@ -785,7 +800,10 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const projectState = await repo.getProjectState(project.id);
   const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(ownerUserId, project.id);
   const ownerRecipient = projectState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
-  const recipients = ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient);
+  const recipients = ensureSenderRecipient(
+    ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient),
+    event.from,
+  );
 
   const isWelcome = shouldRunKickoff;
   const playbookVariant = stableVariantIndex(project.id) as PlaybookVariant;

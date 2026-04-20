@@ -706,7 +706,7 @@ describe("processInboundEmail", () => {
       risks: [],
       recommendations: [],
       notes: [],
-      participants: [],
+      participants: ["member@example.com"],
       recentUpdatesLog: [],
       remainderBalance: 0,
       reminderBalance: 3,
@@ -867,7 +867,7 @@ describe("processInboundEmail", () => {
       risks: [],
       recommendations: [],
       notes: [],
-      participants: [],
+      participants: ["member@example.com"],
       recentUpdatesLog: [],
       remainderBalance: 0,
       reminderBalance: 3,
@@ -3981,5 +3981,79 @@ Prefer concise updates.
     await processInboundEmail(event);
     expect(repoState.replaceActionItems).toHaveBeenCalledWith("p1", ["Owner task"]);
     expect(repoState.appendActionItems).not.toHaveBeenCalled();
+  });
+
+  it("always includes sender in recipients when owner email is unavailable", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "member@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.getUserEmailById.mockResolvedValue(null);
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: null,
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: ["member@example.com"],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
+      featureFlags: { collaborators: false, oversight: false },
+      transactionHistory: [],
+    });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_sender_fallback_recipient",
+      provider: "resend",
+      providerEventId: "m_sender_fallback_recipient",
+      timestamp: new Date().toISOString(),
+      from: "member@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New project",
+      inReplyTo: null,
+      references: [],
+      rawBody: "I want to start a new project",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.recipients).toContain("member@example.com");
   });
 });
