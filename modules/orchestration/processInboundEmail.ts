@@ -702,7 +702,10 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const priorAccountTier = accessState.tier;
-  const accountEmailsToAdd = mergeUniqueStringsPreserveOrder(contentEvent.parsed.additionalEmails, approvedCcCandidates);
+  // Explicit "Team Emails/Additional Emails" are account aliases.
+  // CC-approved emails are treated as members and should not be claimed as aliases,
+  // because many of them already belong to other user accounts.
+  const accountEmailsToAdd = contentEvent.parsed.additionalEmails;
   let emailCount: number;
   try {
     emailCount = await repo.addAdditionalEmails(ownerUserId, accountEmailsToAdd);
@@ -716,10 +719,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     throw error;
   }
   await repo.addProjectMembersByEmails(project.id, ownerUserId, approvedCcCandidates);
+  const tierEmailCount = emailCount + approvedCcCandidates.length;
   const nextTier = getNextTier({
     currentTier: priorAccountTier,
     hasTransactionEvent: !!contentEvent.parsed.transactionEvent,
-    totalAccountEmails: emailCount,
+    totalAccountEmails: tierEmailCount,
   });
 
   if (nextTier !== priorAccountTier) {

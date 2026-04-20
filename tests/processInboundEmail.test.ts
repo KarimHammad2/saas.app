@@ -2497,13 +2497,13 @@ describe("processInboundEmail", () => {
       status: "approved",
       resolvedByEmail: "user@example.com",
     });
-    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", ["john@agency.com"]);
+    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", []);
     expect(repoState.addProjectMembersByEmails).toHaveBeenCalledWith("p1", "u1", ["john@agency.com"]);
     expect(repoState.setUserTier).toHaveBeenCalledWith("u1", "agency");
     expect(repoState.mergeProjectParticipants).toHaveBeenCalledWith("p1", ["john@agency.com"]);
   });
 
-  it("blocks approval when CC email belongs to another account and leaves confirmation pending", async () => {
+  it("approves pending CC and adds project member without claiming CC as account alias", async () => {
     repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue({
       id: "cc_pending_conflict",
       owner_user_id: "u1",
@@ -2518,8 +2518,7 @@ describe("processInboundEmail", () => {
       resolved_at: null,
       created_at: new Date().toISOString(),
     });
-    const { AdditionalEmailConflictError } = await import("@/modules/memory/repository");
-    repoState.addAdditionalEmails.mockRejectedValue(new AdditionalEmailConflictError("taken@example.com"));
+    repoState.addAdditionalEmails.mockResolvedValue(1);
 
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
@@ -2554,10 +2553,55 @@ describe("processInboundEmail", () => {
       },
     };
 
+    await processInboundEmail(event);
+    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", []);
+    expect(repoState.addProjectMembersByEmails).toHaveBeenCalledWith("p1", "u1", ["taken@example.com"]);
+    expect(repoState.resolveCcMembershipConfirmation).toHaveBeenCalledWith({
+      confirmationId: "cc_pending_conflict",
+      status: "approved",
+      resolvedByEmail: "user@example.com",
+    });
+  });
+
+  it("still blocks explicit Additional Emails alias conflicts", async () => {
+    repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(defaultMockProject);
+    const { AdditionalEmailConflictError } = await import("@/modules/memory/repository");
+    repoState.addAdditionalEmails.mockRejectedValue(new AdditionalEmailConflictError("taken@example.com"));
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_additional_email_conflict",
+      provider: "resend",
+      providerEventId: "m_additional_email_conflict",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: update [PJT-A1B2C3D4]",
+      inReplyTo: "<thread-existing@saas2.app>",
+      references: [],
+      rawBody: "Additional Emails:\ntaken@example.com",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: ["taken@example.com"],
+      },
+    };
+
     await expect(processInboundEmail(event)).rejects.toBeInstanceOf(NonRetryableInboundError);
-    expect(repoState.resolveCcMembershipConfirmation).not.toHaveBeenCalledWith(
-      expect.objectContaining({ confirmationId: "cc_pending_conflict", status: "approved" }),
-    );
   });
 
   it("creates deferred kickoff project from stored source email, not from yes reply", async () => {
@@ -2834,7 +2878,7 @@ describe("processInboundEmail", () => {
 
     await processInboundEmail(event);
 
-    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", ["john@agency.com"]);
+    expect(repoState.addAdditionalEmails).toHaveBeenCalledWith("u1", []);
     expect(repoState.setUserTier).toHaveBeenCalledWith("u1", "agency");
     expect(repoState.resolveCcMembershipConfirmation).toHaveBeenCalledWith({
       confirmationId: "cc_pending_retry",
