@@ -143,9 +143,10 @@ export async function sendCcMembershipConfirmationEmail(input: {
   const text = [
     `I noticed you included ${input.candidateEmails.join(", ")} (cc email).`,
     "",
-    "Would you like to add them to your account?",
+    "If you reply Yes, we'll upgrade your account to the Agency plan and add the CC email(s) as member(s).",
+    "If you reply No, your plan and members will stay the same.",
     "Reply:",
-    '- "Yes, add them"',
+    '- "Yes"',
     '- "No"',
     "",
     "Detected CC emails:",
@@ -156,10 +157,11 @@ export async function sendCcMembershipConfirmationEmail(input: {
 
   const html = `
 <p>I noticed you included ${input.candidateEmails.map((email) => `<strong>${email}</strong>`).join(", ")} (cc email).</p>
-<p>Would you like to add them to your account?</p>
+<p>If you reply <strong>Yes</strong>, we&apos;ll upgrade your account to the <strong>Agency plan</strong> and add the CC email(s) as member(s).</p>
+<p>If you reply <strong>No</strong>, your plan and members will stay the same.</p>
 <p>Reply:</p>
 <ul>
-  <li>&quot;Yes, add them&quot;</li>
+  <li>&quot;Yes&quot;</li>
   <li>&quot;No&quot;</li>
 </ul>
 <p>Detected CC emails:</p>
