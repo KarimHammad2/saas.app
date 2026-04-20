@@ -1,6 +1,6 @@
 import type { ProjectContext } from "@/modules/contracts/types";
 
-/** Primary recipients for project update emails: owner, participants, and RPM when human oversight applies. */
+/** Primary recipients for project update emails: owner, participants, and assigned RPM (when present). */
 export function buildProjectEmailRecipientList(projectState: ProjectContext): string[] {
   const normalizeEmail = (value: string | null | undefined): string | null => {
     if (typeof value !== "string") {
@@ -17,7 +17,7 @@ export function buildProjectEmailRecipientList(projectState: ProjectContext): st
   const raw = owner ? [owner, ...participants] : participants;
 
   const rpm = normalizeEmail(projectState.activeRpmEmail);
-  if (projectState.featureFlags?.oversight && rpm) {
+  if (rpm) {
     raw.push(rpm);
   }
   return Array.from(new Set(raw));

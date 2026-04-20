@@ -29,7 +29,7 @@ function baseState(overrides: Partial<ProjectContext>): ProjectContext {
 }
 
 describe("buildProjectEmailRecipientList", () => {
-  it("dedupes owner, participants, and RPM when oversight is enabled", () => {
+  it("dedupes owner, participants, and RPM when RPM is assigned", () => {
     const list = buildProjectEmailRecipientList(
       baseState({
         ownerEmail: "owner@example.com",
@@ -41,7 +41,7 @@ describe("buildProjectEmailRecipientList", () => {
     expect(list.sort()).toEqual(["collab@example.com", "owner@example.com", "rpm@example.com"].sort());
   });
 
-  it("does not add RPM when human oversight is disabled (e.g. freemium)", () => {
+  it("includes RPM even when human oversight flag is off (e.g. freemium) so they get transaction and payment mail", () => {
     const list = buildProjectEmailRecipientList(
       baseState({
         ownerEmail: "owner@example.com",
@@ -50,7 +50,7 @@ describe("buildProjectEmailRecipientList", () => {
         featureFlags: { collaborators: false, oversight: false },
       }),
     );
-    expect(list).toEqual(["owner@example.com"]);
+    expect(list.sort()).toEqual(["owner@example.com", "rpm@example.com"].sort());
   });
 
   it("normalizes and keeps owner first even with mixed casing and spaces", () => {
