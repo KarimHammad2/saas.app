@@ -11,15 +11,25 @@ function resolveBaseSubject(payload: ProjectEmailPayload): string {
 }
 
 const RPM_UPDATE_GUIDE = `
-Here is your updated project file as the assigned RPM.
+Here is your updated project file (assigned RPM copy).
 
-Upload the attachment into your LLM if you use it for review.
+If you use an LLM to review progress, attach this project file.
 
-To update this project by email, reply in this thread (or keep the project code in the subject) and use plain-text blocks the system recognizes:
+To send updates by email:
+1) Reply in this thread.
+2) Keep the project code in the subject line.
+3) Use plain-text blocks with one of these headers:
 
-• Correction: or RPM Correction: — correct facts, deadlines, or priorities (applied as RPM input).
-• Goals:, Tasks:, Completed:, Risks:, Decisions:, Notes: — structured project updates, same as the primary contact.
-• UserProfile Suggestion: — propose profile changes for the account owner (the owner approves or rejects those in project mail).
+- Correction: or RPM Correction:
+  Correct facts, deadlines, or priorities.
+  These updates are applied as RPM input.
+
+- Goals:, Tasks:, Completed:, Risks:, Decisions:, Notes:
+  Send structured project updates (same format as the primary contact).
+
+- UserProfile Suggestion:
+  Propose profile changes for the account owner.
+  The owner approves or rejects these in project email.
 `.trim();
 
 /**
