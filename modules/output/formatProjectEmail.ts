@@ -32,24 +32,50 @@ To send updates by email:
   The owner approves or rejects these in project email.
 `.trim();
 
+const DEFAULT_OWNER_BODY = `
+Here is your updated project file.
+
+Upload it into your LLM and continue working on your project.
+`.trim();
+
+function formatRecordedTransactionBlock(payload: ProjectEmailPayload): string {
+  const r = payload.recordedTransaction;
+  if (!r) {
+    return "";
+  }
+  const e = r.event;
+  const lines = [
+    "Transaction recorded",
+    "",
+    "Financial Summary:",
+    `- Hours Purchased: ${e.hoursPurchased}`,
+    `- Rate: $${e.hourlyRate}`,
+    `- Allocated: ${e.allocatedHours}`,
+    `- Buffer: ${e.bufferHours}`,
+    "",
+    `Remainder Balance: ${r.remainderBalance}`,
+  ];
+  return lines.join("\n");
+}
+
 /**
  * Minimal human-facing email: full project state lives in the markdown attachment only.
  */
 export function formatProjectEmail(payload: ProjectEmailPayload): FormattedProjectEmail {
+  const txBlock = formatRecordedTransactionBlock(payload);
+  const body = txBlock ? `${txBlock}\n\n${DEFAULT_OWNER_BODY}` : DEFAULT_OWNER_BODY;
   return {
     subject: resolveBaseSubject(payload),
-    body: `
-Here is your updated project file.
-
-Upload it into your LLM and continue working on your project.
-  `.trim(),
+    body,
   };
 }
 
 /** Same subject as {@link formatProjectEmail}; body explains how the RPM can reply with structured updates. */
 export function formatProjectEmailForRpm(payload: ProjectEmailPayload): FormattedProjectEmail {
+  const txBlock = formatRecordedTransactionBlock(payload);
+  const body = txBlock ? `${txBlock}\n\n${RPM_UPDATE_GUIDE}` : RPM_UPDATE_GUIDE;
   return {
     subject: resolveBaseSubject(payload),
-    body: RPM_UPDATE_GUIDE,
+    body,
   };
 }

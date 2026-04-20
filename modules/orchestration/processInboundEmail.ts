@@ -4,7 +4,14 @@ import {
   getOverviewRegenerationMode,
 } from "@/lib/env";
 import { log } from "@/lib/log";
-import type { NormalizedEmailEvent, RPMSuggestion, Tier } from "@/modules/contracts/types";
+import type {
+  NormalizedEmailEvent,
+  RPMSuggestion,
+  Tier,
+  TransactionEvent,
+  TransactionPaymentMeta,
+  TransactionRecord,
+} from "@/modules/contracts/types";
 import { collectParticipantEmailsFromEvent } from "@/modules/email/participantEmails";
 import {
   hasAnyProjectMemoryPresence,
@@ -50,6 +57,7 @@ import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, NonR
 import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
+import { formatPaymentConfirmedPlainText } from "@/modules/output/paymentOutbound";
 
 export interface InboundProcessingResult {
   recipients: string[];
@@ -63,6 +71,20 @@ export interface InboundProcessingResult {
     projectId: string;
     eventId: string;
     duplicate: boolean;
+  };
+  /** Second email after a pending hour purchase: link + reply "Paid" instruction. */
+  paymentInstructions?: {
+    recipients: string[];
+    projectCode: string;
+    projectName: string;
+    payment: TransactionPaymentMeta;
+    activeRpmEmail: string | null;
+  };
+  /** After inbound "Paid": plain confirmation + optional follow-up full project file. */
+  paymentConfirmed?: {
+    recipients: string[];
+    plainTextBody: string;
+    followUpProjectPayload: ProjectEmailPayload;
   };
 }
 
@@ -233,6 +255,9 @@ function shouldRequireRpmStructuredProjectClarification(
   if (isIgnoredNoteInput(rawBody)) {
     return false;
   }
+  if (parsed.paymentReceivedAck) {
+    return false;
+  }
   if (hasAnyProjectMemoryPresence(parsed.projectSectionPresence)) {
     return false;
   }
@@ -296,6 +321,9 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   let pendingCcDecision: "approve" | "reject" | null = null;
   let rejectedPendingCc = false;
   let resolvedFromPendingKickoff = false;
+  let recordedTransactionEvent: TransactionEvent | null = null;
+  let recordedTransactionPayment: TransactionPaymentMeta | null = null;
+  let paymentConfirmedRecord: TransactionRecord | null = null;
 
   if (pendingCcConfirmation) {
     const decision = parseCcMembershipDecision(event.rawBody);
@@ -714,7 +742,11 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       suggestionId = next.id;
     }
     if (approval.decision === "approve") {
-      await repo.approveSuggestion(ownerUserId, suggestionId, event.from);
+      const approvedTx = await repo.approveSuggestion(ownerUserId, suggestionId, event.from);
+      if (approvedTx) {
+        recordedTransactionEvent = approvedTx.event;
+        recordedTransactionPayment = approvedTx.payment;
+      }
     } else {
       await repo.rejectSuggestion(ownerUserId, suggestionId, event.from);
     }
@@ -750,12 +782,6 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     if (nextTier === "agency" && priorAccountTier !== "agency") {
       await repo.applyAgencyTierRpmTransition(ownerUserId);
     }
-    if (nextTier === "solopreneur") {
-      const rpmAfterTransition = await repo.getActiveRpm(project.id);
-      if (!rpmAfterTransition) {
-        await repo.assignRpm(project.id, getMasterUserEmail(), event.from);
-      }
-    }
   }
 
   if (pendingCcConfirmation && pendingCcDecision) {
@@ -766,10 +792,32 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     });
   }
 
-  const effectiveTier: Tier = nextTier;
+  const financialTier: Tier = nextTier === "agency" || priorAccountTier === "agency" ? "agency" : "solopreneur";
+
+  if (
+    contentEvent.parsed.paymentReceivedAck === true &&
+    !contentEvent.parsed.transactionEvent &&
+    canApproveTransaction(role)
+  ) {
+    const paidRow = await repo.markLatestPendingHourPurchasePaid(project.id, event.from);
+    if (paidRow) {
+      paymentConfirmedRecord = paidRow;
+      if (priorAccountTier === "freemium") {
+        await repo.setUserTier(ownerUserId, "solopreneur");
+      }
+      const tierAfterPayment = priorAccountTier === "freemium" ? "solopreneur" : priorAccountTier;
+      if (tierAfterPayment === "solopreneur") {
+        const rpmAfterPayment = await repo.getActiveRpm(project.id);
+        if (!rpmAfterPayment) {
+          await repo.assignRpm(project.id, getMasterUserEmail(), event.from);
+        }
+      }
+      await repo.appendRecentUpdate(project.id, "Payment confirmed for latest hour purchase.");
+    }
+  }
 
   if (contentEvent.parsed.transactionEvent) {
-    const normalizedFinancials = applyTierFinancials(contentEvent.parsed.transactionEvent, effectiveTier);
+    const normalizedFinancials = applyTierFinancials(contentEvent.parsed.transactionEvent, financialTier);
     if (!canApproveTransaction(role)) {
       const pending = await repo.storeProtectedTransactionSuggestion(ownerUserId, project.id, event.from, normalizedFinancials);
       await repo.appendRecentUpdate(
@@ -777,7 +825,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
         `Protected transaction proposed [${pending.id}] by ${event.from}. Awaiting explicit approval.`,
       );
     } else {
-      await repo.storeTransactionEvent(project.id, event.from, normalizedFinancials);
+      recordedTransactionPayment = await repo.storeTransactionEvent(project.id, event.from, normalizedFinancials);
+      recordedTransactionEvent = normalizedFinancials;
     }
   }
 
@@ -824,16 +873,55 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     inboundStoredRpmSuggestion !== null;
   const outboundMode = proposalEligible ? "rpm_profile_proposal" : "full";
 
+  const payload: ProjectEmailPayload = {
+    context: projectState,
+    userProfile: userProfileForRpm,
+    pendingSuggestions,
+    nextSteps,
+    isWelcome,
+    emailKind: isWelcome ? "kickoff" : "update",
+    ...(recordedTransactionEvent && recordedTransactionPayment
+      ? {
+          recordedTransaction: {
+            event: recordedTransactionEvent,
+            remainderBalance: projectState.remainderBalance,
+            ...recordedTransactionPayment,
+          },
+        }
+      : {}),
+  };
+
+  const projectCodeTrimmed = projectState.projectCode?.trim();
+  const paymentInstructions =
+    recordedTransactionEvent && recordedTransactionPayment && projectCodeTrimmed
+      ? {
+          recipients,
+          projectCode: projectCodeTrimmed,
+          projectName: (projectState.projectName ?? "Untitled Project").trim() || "Untitled Project",
+          payment: recordedTransactionPayment,
+          activeRpmEmail: projectState.activeRpmEmail ?? null,
+        }
+      : undefined;
+
+  const paymentConfirmed =
+    paymentConfirmedRecord && projectCodeTrimmed
+      ? {
+          recipients,
+          plainTextBody: formatPaymentConfirmedPlainText(projectState, paymentConfirmedRecord),
+          followUpProjectPayload: {
+            context: projectState,
+            userProfile: userProfileForRpm,
+            pendingSuggestions,
+            nextSteps: defaultNextSteps(),
+            isWelcome: false,
+            emailKind: "update" as const,
+          },
+        }
+      : undefined;
+
   return {
     recipients,
-    payload: {
-      context: projectState,
-      userProfile: userProfileForRpm,
-      pendingSuggestions,
-      nextSteps,
-      isWelcome,
-      emailKind: isWelcome ? "kickoff" : "update",
-    },
+    payload,
     outboundMode,
     rpmProfileProposal: proposalEligible ? inboundStoredRpmSuggestion : null,
     context: {
@@ -842,5 +930,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       eventId: event.eventId,
       duplicate: false,
     },
+    ...(paymentInstructions ? { paymentInstructions } : {}),
+    ...(paymentConfirmed ? { paymentConfirmed } : {}),
   };
 }

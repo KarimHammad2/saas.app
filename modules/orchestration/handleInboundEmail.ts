@@ -9,6 +9,10 @@ import {
   sendPdfResubmissionEmail,
   sendRpmStructuredProjectClarificationEmail,
 } from "@/modules/orchestration/sendClarificationEmail";
+import {
+  sendPaymentConfirmedEmail,
+  sendPaymentInstructionsEmail,
+} from "@/modules/output/paymentOutbound";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
 
@@ -93,6 +97,60 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           status: "sent",
           recipientCount: result.recipients.length,
           messageId: outboundMessageIds[0],
+        });
+      }
+
+      if (result.paymentInstructions) {
+        const pi = result.paymentInstructions;
+        const instructionIds = await sendPaymentInstructionsEmail(pi);
+        for (const messageId of instructionIds) {
+          await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
+          await repo.recordOutboundEmailEvent({
+            projectId: result.context.projectId,
+            userId: result.context.userId,
+            inboundEventId: result.context.eventId,
+            kind: "payment-instructions",
+            provider: event.provider,
+            status: "sent",
+            recipientCount: pi.recipients.length,
+            messageId,
+          });
+        }
+      }
+
+      if (result.paymentConfirmed) {
+        const pc = result.paymentConfirmed;
+        const confirmedIds = await sendPaymentConfirmedEmail({
+          recipients: pc.recipients,
+          activeRpmEmail: pc.followUpProjectPayload.context.activeRpmEmail ?? null,
+          plainTextBody: pc.plainTextBody,
+        });
+        for (const messageId of confirmedIds) {
+          await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
+          await repo.recordOutboundEmailEvent({
+            projectId: result.context.projectId,
+            userId: result.context.userId,
+            inboundEventId: result.context.eventId,
+            kind: "payment-confirmed",
+            provider: event.provider,
+            status: "sent",
+            recipientCount: pc.recipients.length,
+            messageId,
+          });
+        }
+        const { outboundMessageIds: followUpIds } = await sendProjectEmail(pc.recipients, pc.followUpProjectPayload);
+        for (const messageId of followUpIds) {
+          await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
+        }
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: "payment-confirmed-followup",
+          provider: event.provider,
+          status: "sent",
+          recipientCount: pc.recipients.length,
+          messageId: followUpIds[0],
         });
       }
     } catch (error) {

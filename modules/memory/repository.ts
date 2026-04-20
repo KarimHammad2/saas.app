@@ -9,6 +9,7 @@ import type {
   RPMSuggestionSource,
   Tier,
   TransactionEvent,
+  TransactionPaymentMeta,
   TransactionRecord,
   UserProfileContext,
   UserProfileStructuredContext,
@@ -28,6 +29,8 @@ import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
 import { parseStoredProjectDomain } from "@/modules/domain/projectDomain";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import { planAgencyRpmReplacement } from "@/modules/domain/agencyTierRpm";
+import { applyTierFinancials } from "@/modules/domain/financial";
+import { resolveUsdPaymentLinkForTotal } from "@/modules/domain/paymentLinkCatalog";
 
 function formatNoteDatePrefix(iso?: string): string {
   const d = iso ? new Date(iso) : new Date();
@@ -247,16 +250,23 @@ function normalizeSuggestionContentKey(content: string): string {
   return content.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+function computeTransactionPaymentMeta(event: TransactionEvent): TransactionPaymentMeta {
+  const paymentTotal = Number((event.hoursPurchased * event.hourlyRate).toFixed(2));
+  const resolved = resolveUsdPaymentLinkForTotal(paymentTotal);
+  return {
+    paymentTotal,
+    paymentCurrency: resolved.currency,
+    paymentLinkUrl: resolved.url,
+    paymentLinkTierAmount: resolved.tierAmount,
+  };
+}
+
 function buildProtectedTransactionSuggestionContent(proposerEmail: string, event: TransactionEvent): string {
   return [
     "[PROTECTED_UPDATE:TRANSACTION]",
     `Proposed by: ${normalizeEmail(proposerEmail)}`,
     `Hours Purchased: ${event.hoursPurchased}`,
     `Hourly Rate: ${event.hourlyRate}`,
-    `Allocated to Freelancer: ${event.allocatedHours}`,
-    `Buffer: ${event.bufferHours}`,
-    `SaaS2 Fee: ${event.saas2Fee}`,
-    `Project Remainder: ${event.projectRemainder}`,
     "Reply with approve or reject to confirm this transaction (or approve suggestion <id> if you prefer).",
   ].join(" | ");
 }
@@ -280,22 +290,10 @@ function parseProtectedTransactionSuggestion(
 
   const proposerMatch = content.match(/Proposed by:\s*([^|]+)/i);
   const proposerEmail = proposerMatch?.[1]?.trim().toLowerCase();
-  const hoursPurchased = getNumber("Hours Purchased");
-  const hourlyRate = getNumber("Hourly Rate");
-  const allocatedHours = getNumber("Allocated to Freelancer");
-  const bufferHours = getNumber("Buffer");
-  const saas2Fee = getNumber("SaaS2 Fee");
-  const projectRemainder = getNumber("Project Remainder");
+  const hoursPurchased = getNumber("Hours Purchased") ?? getNumber("Hours");
+  const hourlyRate = getNumber("Hourly Rate") ?? getNumber("Rate");
 
-  if (
-    !proposerEmail ||
-    hoursPurchased === null ||
-    hourlyRate === null ||
-    allocatedHours === null ||
-    bufferHours === null ||
-    saas2Fee === null ||
-    projectRemainder === null
-  ) {
+  if (!proposerEmail || hoursPurchased === null || hourlyRate === null) {
     return null;
   }
 
@@ -304,11 +302,50 @@ function parseProtectedTransactionSuggestion(
     event: {
       hoursPurchased,
       hourlyRate,
-      allocatedHours,
-      bufferHours,
-      saas2Fee,
-      projectRemainder,
+      allocatedHours: 0,
+      bufferHours: 0,
+      saas2Fee: 0,
+      projectRemainder: 0,
     },
+  };
+}
+
+type TransactionSelectRow = {
+  id: string;
+  type: string;
+  hours_purchased: number | null;
+  hourly_rate: number | null;
+  allocated_hours: number | null;
+  buffer_hours: number | null;
+  saas2_fee: number | null;
+  project_remainder: number | null;
+  created_at: string;
+  payment_total: number | null;
+  payment_currency: string | null;
+  payment_link_url: string | null;
+  payment_link_tier_amount: number | null;
+  paid_at: string | null;
+};
+
+function mapTransactionRowToRecord(row: TransactionSelectRow): TransactionRecord {
+  return {
+    id: row.id,
+    type: row.type as TransactionRecord["type"],
+    hoursPurchased: Number(row.hours_purchased ?? 0),
+    hourlyRate: Number(row.hourly_rate ?? 0),
+    allocatedHours: Number(row.allocated_hours ?? 0),
+    bufferHours: Number(row.buffer_hours ?? 0),
+    saas2Fee: Number(row.saas2_fee ?? 0),
+    projectRemainder: Number(row.project_remainder ?? 0),
+    createdAt: row.created_at,
+    paymentTotal: Number(row.payment_total ?? 0),
+    paymentCurrency: typeof row.payment_currency === "string" ? row.payment_currency : "usd",
+    paymentLinkUrl: typeof row.payment_link_url === "string" ? row.payment_link_url : null,
+    paymentLinkTierAmount:
+      row.payment_link_tier_amount === null || row.payment_link_tier_amount === undefined
+        ? null
+        : Number(row.payment_link_tier_amount),
+    paidAt: typeof row.paid_at === "string" ? row.paid_at : null,
   };
 }
 
@@ -1786,7 +1823,11 @@ export class MemoryRepository {
     );
   }
 
-  async approveSuggestion(userId: string, suggestionId: string, approverEmail: string): Promise<void> {
+  async approveSuggestion(
+    userId: string,
+    suggestionId: string,
+    approverEmail: string,
+  ): Promise<{ event: TransactionEvent; payment: TransactionPaymentMeta } | null> {
     const { data: suggestion, error: fetchError } = await this.supabase
       .from("rpm_suggestions")
       .select("id, project_id, content, user_id, status, source")
@@ -1805,11 +1846,11 @@ export class MemoryRepository {
       throw new Error(`Failed to find suggestion to approve: ${fetchError.message}`);
     }
     if (!suggestion) {
-      return;
+      return null;
     }
 
     if (suggestion.status !== "pending") {
-      return;
+      return null;
     }
 
     const { error: updateError } = await this.supabase
@@ -1831,17 +1872,25 @@ export class MemoryRepository {
 
     const protectedTransaction = parseProtectedTransactionSuggestion(suggestion.content);
     if (protectedTransaction && suggestion.project_id) {
-      await this.storeTransactionEvent(suggestion.project_id, protectedTransaction.proposerEmail, protectedTransaction.event);
+      const { data: userRow } = await this.supabase
+        .from("users")
+        .select("tier")
+        .eq("id", userId)
+        .maybeSingle<{ tier: Tier }>();
+      const tier = userRow?.tier ?? "freemium";
+      const normalized = applyTierFinancials(protectedTransaction.event, tier);
+      const payment = await this.storeTransactionEvent(suggestion.project_id, protectedTransaction.proposerEmail, normalized);
       await this.appendRecentUpdate(
         suggestion.project_id,
         `Protected transaction approved [${suggestion.id}] by ${normalizeEmail(approverEmail)} (proposed by ${protectedTransaction.proposerEmail})`,
       );
-      return;
+      return { event: normalized, payment };
     }
 
     if (suggestion.source === "inbound") {
       await this.applyApprovedInboundRpmSuggestion(userId, suggestion.content);
     }
+    return null;
   }
 
   async rejectSuggestion(userId: string, suggestionId: string, approverEmail: string): Promise<void> {
@@ -2062,7 +2111,18 @@ export class MemoryRepository {
     }
   }
 
-  async storeTransactionEvent(projectId: string, fromEmail: string, event: TransactionEvent): Promise<void> {
+  /**
+   * Records a new financial event as an **append-only** row in `public.transactions`.
+   * Prior transaction rows are never updated, merged, or overwritten by this call.
+   * The `store_transaction_event_atomic` RPC then adds `event.projectRemainder` to the
+   * project's `remainder_balance` (running total), so each new purchase stacks on the last balance.
+   */
+  async storeTransactionEvent(
+    projectId: string,
+    fromEmail: string,
+    event: TransactionEvent,
+  ): Promise<TransactionPaymentMeta> {
+    const payment = computeTransactionPaymentMeta(event);
     const { error } = await this.supabase.rpc("store_transaction_event_atomic", {
       p_project_id: projectId,
       p_created_by_email: normalizeEmail(fromEmail),
@@ -2073,11 +2133,64 @@ export class MemoryRepository {
       p_buffer_hours: event.bufferHours,
       p_saas2_fee: event.saas2Fee,
       p_project_remainder: event.projectRemainder,
+      p_status: "pending_payment",
+      p_payment_total: payment.paymentTotal,
+      p_payment_currency: payment.paymentCurrency,
+      p_payment_link_url: payment.paymentLinkUrl,
+      p_payment_link_tier_amount: payment.paymentLinkTierAmount,
     });
 
     if (error) {
       throw new Error(`Failed to store transaction event atomically: ${error.message}`);
     }
+    return payment;
+  }
+
+  /**
+   * Sets **one** pending hour-purchase row to `paid` (latest by `created_at`). Does not alter
+   * `project_remainder` on that row or other rows; project `remainder_balance` was already
+   * updated when the transaction was inserted.
+   */
+  async markLatestPendingHourPurchasePaid(
+    projectId: string,
+    _acknowledgedByEmail: string,
+  ): Promise<TransactionRecord | null> {
+    const { data: latest, error: selErr } = await this.supabase
+      .from("transactions")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("type", "hourPurchase")
+      .eq("status", "pending_payment")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{ id: string }>();
+
+    if (selErr) {
+      throw new Error(`Failed to find pending hour purchase: ${selErr.message}`);
+    }
+    if (!latest?.id) {
+      return null;
+    }
+
+    const paidAtIso = new Date().toISOString();
+    const { data: updated, error: updErr } = await this.supabase
+      .from("transactions")
+      .update({ status: "paid", paid_at: paidAtIso })
+      .eq("id", latest.id)
+      .eq("status", "pending_payment")
+      .select(
+        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at",
+      )
+      .maybeSingle<TransactionSelectRow>();
+
+    if (updErr) {
+      throw new Error(`Failed to mark hour purchase paid: ${updErr.message}`);
+    }
+    if (!updated) {
+      return null;
+    }
+
+    return mapTransactionRowToRecord(updated);
   }
 
   async getUserProfile(userId: string): Promise<UserProfileContext> {
@@ -2169,9 +2282,12 @@ export class MemoryRepository {
       throw new Error(`Failed to load user tier: ${userTierError.message}`);
     }
 
+    // One DB row per recorded transaction (insert-only via RPC); full history for the project, newest first.
     const { data: transactions, error: txError } = await this.supabase
       .from("transactions")
-      .select("id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at")
+      .select(
+        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at",
+      )
       .eq("project_id", projectId)
       .order("created_at", { ascending: false });
 
@@ -2179,17 +2295,9 @@ export class MemoryRepository {
       throw new Error(`Failed to load transactions: ${txError.message}`);
     }
 
-    const transactionHistory: TransactionRecord[] = (transactions ?? []).map((row) => ({
-      id: row.id,
-      type: row.type,
-      hoursPurchased: Number(row.hours_purchased ?? 0),
-      hourlyRate: Number(row.hourly_rate ?? 0),
-      allocatedHours: Number(row.allocated_hours ?? 0),
-      bufferHours: Number(row.buffer_hours ?? 0),
-      saas2Fee: Number(row.saas2_fee ?? 0),
-      projectRemainder: Number(row.project_remainder ?? 0),
-      createdAt: row.created_at,
-    }));
+    const transactionHistory: TransactionRecord[] = (transactions ?? []).map((row) =>
+      mapTransactionRowToRecord(row as TransactionSelectRow),
+    );
 
     const tier = userRow?.tier ?? "freemium";
     const entitlements = resolvePlanEntitlements(tier);

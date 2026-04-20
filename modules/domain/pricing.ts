@@ -11,9 +11,8 @@ export function getNextTier(input: TierTransitionInput): Tier {
     return "agency";
   }
 
-  if (input.currentTier === "freemium" && input.hasTransactionEvent) {
-    return "solopreneur";
-  }
+  // Freemium → solopreneur is deferred until payment is confirmed (inbound "Paid"), not on transaction receipt.
+  void input.hasTransactionEvent;
 
   return input.currentTier;
 }

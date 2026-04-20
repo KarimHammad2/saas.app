@@ -103,6 +103,7 @@ const repoState = {
   applyAgencyTierRpmTransition: vi.fn(),
   getAgencyDefaultRpmEmail: vi.fn(),
   storeTransactionEvent: vi.fn(),
+  markLatestPendingHourPurchasePaid: vi.fn(),
   storeProtectedTransactionSuggestion: vi.fn(),
   snapshotProjectContext: vi.fn(),
   getProjectState: vi.fn(),
@@ -176,6 +177,7 @@ vi.mock("@/modules/memory/repository", async () => {
       applyAgencyTierRpmTransition = repoState.applyAgencyTierRpmTransition;
       getAgencyDefaultRpmEmail = repoState.getAgencyDefaultRpmEmail;
       storeTransactionEvent = repoState.storeTransactionEvent;
+      markLatestPendingHourPurchasePaid = repoState.markLatestPendingHourPurchasePaid;
       storeProtectedTransactionSuggestion = repoState.storeProtectedTransactionSuggestion;
       snapshotProjectContext = repoState.snapshotProjectContext;
       getProjectState = repoState.getProjectState;
@@ -292,6 +294,14 @@ describe("processInboundEmail", () => {
     }));
     repoState.applyAgencyTierRpmTransition.mockResolvedValue(undefined);
     repoState.getAgencyDefaultRpmEmail.mockResolvedValue(null);
+    repoState.storeTransactionEvent.mockResolvedValue({
+      paymentTotal: 500,
+      paymentCurrency: "usd",
+      paymentLinkUrl: "https://pay.saassquared.com/b/mock",
+      paymentLinkTierAmount: 500,
+    });
+    repoState.markLatestPendingHourPurchasePaid.mockResolvedValue(null);
+    repoState.approveSuggestion.mockResolvedValue(null);
   });
 
   it("returns recipients and state payload", async () => {
@@ -1699,6 +1709,125 @@ describe("processInboundEmail", () => {
       }),
     );
     expect(repoState.storeProtectedTransactionSuggestion).not.toHaveBeenCalled();
+  });
+
+  it("includes paymentInstructions when a user transaction is recorded", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
+    const event: NormalizedEmailEvent = {
+      eventId: "e_pi",
+      provider: "resend",
+      providerEventId: "m_pi",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: [PJT-A1B2C3D4] purchase",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Transaction:\nHours Purchased: 5\nHourly Rate: 100",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: {
+          hoursPurchased: 5,
+          hourlyRate: 100,
+          allocatedHours: 4.5,
+          bufferHours: 0.5,
+          saas2Fee: 50,
+          projectRemainder: 0,
+        },
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.paymentInstructions).toEqual(
+      expect.objectContaining({
+        projectCode: "pjt-a1b2c3d4",
+        payment: expect.objectContaining({
+          paymentTotal: 500,
+          paymentLinkUrl: "https://pay.saassquared.com/b/mock",
+        }),
+      }),
+    );
+    expect(repoState.setUserTier).not.toHaveBeenCalled();
+  });
+
+  it("marks latest pending purchase paid and returns paymentConfirmed on Paid from owner", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getActiveRpm.mockResolvedValue(null);
+    const paidRecord = {
+      id: "tx-paid-1",
+      type: "hourPurchase" as const,
+      hoursPurchased: 5,
+      hourlyRate: 100,
+      allocatedHours: 4.5,
+      bufferHours: 0.5,
+      saas2Fee: 50,
+      projectRemainder: 0,
+      createdAt: new Date().toISOString(),
+      paymentTotal: 500,
+      paymentCurrency: "usd",
+      paymentLinkUrl: "https://pay.example/b",
+      paymentLinkTierAmount: 500,
+      paidAt: new Date().toISOString(),
+    };
+    repoState.markLatestPendingHourPurchasePaid.mockResolvedValue(paidRecord);
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_paid_ack",
+      provider: "resend",
+      providerEventId: "m_paid_ack",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: [PJT-A1B2C3D4] payment",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Paid",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        paymentReceivedAck: true,
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(repoState.markLatestPendingHourPurchasePaid).toHaveBeenCalledWith("p1", "user@example.com");
+    expect(repoState.setUserTier).toHaveBeenCalledWith("u1", "solopreneur");
+    expect(repoState.assignRpm).toHaveBeenCalledWith("p1", expect.any(String), "user@example.com");
+    expect(result.paymentConfirmed?.plainTextBody).toContain("Payment confirmed.");
+    expect(result.paymentConfirmed?.followUpProjectPayload.recordedTransaction).toBeUndefined();
+    expect(result.paymentInstructions).toBeUndefined();
   });
 
   it("marks first inbound as welcome and stores parsed notes", async () => {

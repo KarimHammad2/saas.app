@@ -29,6 +29,14 @@ export interface TransactionEvent {
   projectRemainder: number;
 }
 
+/** Persisted payment line + resolved checkout tier for hour purchases. */
+export interface TransactionPaymentMeta {
+  paymentTotal: number;
+  paymentCurrency: string;
+  paymentLinkUrl: string;
+  paymentLinkTierAmount: number;
+}
+
 /** SOW-aligned structured profile (stored in user_profiles.context jsonb under `sowSignals`). */
 export interface UserProfileStructuredContext {
   role?: string;
@@ -134,6 +142,11 @@ export interface TransactionRecord {
   saas2Fee: number;
   projectRemainder: number;
   createdAt: string;
+  paymentTotal: number;
+  paymentCurrency: string;
+  paymentLinkUrl: string | null;
+  paymentLinkTierAmount: number | null;
+  paidAt: string | null;
 }
 
 /** Labeled project-memory headings detected in inbound body (for deterministic RPM apply rules). */
@@ -214,5 +227,7 @@ export interface NormalizedEmailEvent {
     assignRpmEmail?: string | null;
     /** Which project-memory section headings appeared (including empty sections). */
     projectSectionPresence: ProjectSectionPresence;
+    /** Inbound body is a standalone "Paid" acknowledgement after checkout (no Transaction block in same message). */
+    paymentReceivedAck?: boolean;
   };
 }

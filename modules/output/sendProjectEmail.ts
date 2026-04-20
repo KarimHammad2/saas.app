@@ -85,7 +85,7 @@ export function validateProjectDocumentForAttachment(document: string): void {
   }
 }
 
-function partitionRecipientsForRpmCopy(
+export function partitionRecipientsForRpmCopy(
   recipients: string[],
   activeRpmEmail: string | null | undefined,
 ): { standard: string[]; rpmOnly: string[] } {

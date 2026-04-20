@@ -3,6 +3,10 @@ import { emptyUserProfileContext } from "@/modules/contracts/types";
 import type { InboundProcessingResult } from "@/modules/orchestration/processInboundEmail";
 import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
+import {
+  sendPaymentConfirmedEmail,
+  sendPaymentInstructionsEmail,
+} from "@/modules/output/paymentOutbound";
 import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
 import {
@@ -33,6 +37,11 @@ vi.mock("@/modules/output/sendProjectEmail", () => ({
   sendProjectEmail: vi.fn(),
 }));
 
+vi.mock("@/modules/output/paymentOutbound", () => ({
+  sendPaymentInstructionsEmail: vi.fn(),
+  sendPaymentConfirmedEmail: vi.fn(),
+}));
+
 vi.mock("@/modules/output/sendRpmProfileProposalEmail", () => ({
   sendRpmProfileProposalEmail: vi.fn(),
 }));
@@ -46,6 +55,8 @@ vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
 
 const mockedProcessInboundEmail = vi.mocked(processInboundEmail);
 const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
+const mockedSendPaymentInstructionsEmail = vi.mocked(sendPaymentInstructionsEmail);
+const mockedSendPaymentConfirmedEmail = vi.mocked(sendPaymentConfirmedEmail);
 const mockedSendRpmProfileProposalEmail = vi.mocked(sendRpmProfileProposalEmail);
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
 const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
@@ -56,6 +67,8 @@ describe("handleInboundEmailEvent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockedSendProjectEmail.mockResolvedValue({ outboundMessageId: "outbound-test-msg-id", outboundMessageIds: ["outbound-test-msg-id"] });
+    mockedSendPaymentInstructionsEmail.mockResolvedValue(["payment-instructions-msg-id"]);
+    mockedSendPaymentConfirmedEmail.mockResolvedValue(["payment-confirmed-msg-id"]);
     mockedSendRpmProfileProposalEmail.mockResolvedValue({ outboundMessageId: "rpm-proposal-msg-id" });
   });
 
@@ -114,6 +127,158 @@ describe("handleInboundEmailEvent", () => {
         userId: "u1",
         status: "sent",
       }),
+    );
+  });
+
+  it("sends payment instructions after project email when paymentInstructions is present", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com"],
+      payload: {
+        context: {
+          projectId: "p1",
+          userId: "u1",
+          projectStatus: "active",
+          summary: "s",
+          initialSummary: "s",
+          currentStatus: "",
+          goals: [],
+          actionItems: [],
+          completedTasks: [],
+          decisions: [],
+          risks: [],
+          recommendations: [],
+          notes: [],
+          participants: [],
+          recentUpdatesLog: [],
+          remainderBalance: 0,
+          reminderBalance: 3,
+          usageCount: 0,
+          tier: "freemium",
+          transactionHistory: [],
+        },
+        userProfile: emptyUserProfileContext(),
+        pendingSuggestions: [],
+        nextSteps: [],
+        isWelcome: false,
+        emailKind: "update",
+        recordedTransaction: {
+          event: {
+            hoursPurchased: 1,
+            hourlyRate: 10,
+            allocatedHours: 0.9,
+            bufferHours: 0.1,
+            saas2Fee: 0,
+            projectRemainder: 0,
+          },
+          remainderBalance: 0,
+          paymentTotal: 10,
+          paymentCurrency: "usd",
+          paymentLinkUrl: "https://pay.example/x",
+          paymentLinkTierAmount: 10,
+        },
+      },
+      outboundMode: "full",
+      rpmProfileProposal: null,
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_pi",
+        duplicate: false,
+      },
+      paymentInstructions: {
+        recipients: ["owner@example.com"],
+        projectCode: "pjt-a1b2c3d4",
+        projectName: "Demo",
+        payment: {
+          paymentTotal: 10,
+          paymentCurrency: "usd",
+          paymentLinkUrl: "https://pay.example/x",
+          paymentLinkTierAmount: 10,
+        },
+        activeRpmEmail: null,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(mockedSendProjectEmail).toHaveBeenCalledOnce();
+    expect(mockedSendPaymentInstructionsEmail).toHaveBeenCalledWith(result.paymentInstructions);
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-instructions", status: "sent" }),
+    );
+  });
+
+  it("sends payment confirmed email and follow-up project file when paymentConfirmed is present", async () => {
+    mockedSendProjectEmail
+      .mockResolvedValueOnce({ outboundMessageId: "out-1", outboundMessageIds: ["out-1"] })
+      .mockResolvedValueOnce({ outboundMessageId: "out-follow", outboundMessageIds: ["out-follow"] });
+
+    const basePayload: InboundProcessingResult["payload"] = {
+      context: {
+        projectId: "p1",
+        userId: "u1",
+        projectCode: "pjt-a1b2c3d4",
+        projectStatus: "active",
+        summary: "s",
+        initialSummary: "s",
+        currentStatus: "",
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        participants: [],
+        recentUpdatesLog: [],
+        remainderBalance: 0,
+        reminderBalance: 3,
+        usageCount: 0,
+        tier: "solopreneur",
+        transactionHistory: [],
+      },
+      userProfile: emptyUserProfileContext(),
+      pendingSuggestions: [],
+      nextSteps: [],
+      isWelcome: false,
+      emailKind: "update",
+    };
+
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com"],
+      payload: basePayload,
+      outboundMode: "full",
+      rpmProfileProposal: null,
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_pc",
+        duplicate: false,
+      },
+      paymentConfirmed: {
+        recipients: ["owner@example.com"],
+        plainTextBody: "Payment confirmed.\n\nDone.",
+        followUpProjectPayload: { ...basePayload, emailKind: "update" },
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(mockedSendPaymentConfirmedEmail).toHaveBeenCalledWith({
+      recipients: ["owner@example.com"],
+      activeRpmEmail: null,
+      plainTextBody: "Payment confirmed.\n\nDone.",
+    });
+    expect(mockedSendProjectEmail).toHaveBeenCalledTimes(2);
+    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(1, result.recipients, result.payload);
+    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(2, result.recipients, result.paymentConfirmed!.followUpProjectPayload);
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-confirmed", status: "sent" }),
+    );
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-confirmed-followup", status: "sent" }),
     );
   });
 

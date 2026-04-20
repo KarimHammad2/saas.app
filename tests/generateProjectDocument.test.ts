@@ -59,6 +59,8 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("End important working sessions by giving the user a ready-to-send update for Frank");
     expect(content).toContain("### Project direction changes (pivot / new focus)");
     expect(content).toContain("Phrasing that is reliably detected");
+    expect(content).toContain("### Hiring and Pricing Logic");
+    expect(content).toContain("NEVER simulate payment");
     expect(content).toContain("Project Name:");
     const sectionOrder = [
       "## Project Metadata",

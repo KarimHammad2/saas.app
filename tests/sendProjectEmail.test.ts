@@ -217,6 +217,11 @@ describe("sendProjectEmail", () => {
         saas2Fee: 50,
         projectRemainder: 0,
         createdAt: new Date().toISOString(),
+        paymentTotal: 500,
+        paymentCurrency: "usd",
+        paymentLinkUrl: "https://pay.saassquared.com/b/mock",
+        paymentLinkTierAmount: 500,
+        paidAt: null,
       },
     ];
 

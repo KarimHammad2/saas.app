@@ -44,6 +44,9 @@ export function isUserProfileSuggestionOnlyInbound(event: NormalizedEmailEvent, 
   if (p.transactionEvent) {
     return false;
   }
+  if (p.paymentReceivedAck) {
+    return false;
+  }
   if (p.approvals.length > 0) {
     return false;
   }

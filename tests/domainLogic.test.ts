@@ -10,13 +10,13 @@ import {
 } from "@/modules/domain/rbac";
 
 describe("domain logic", () => {
-  it("transitions freemium to solopreneur on transaction", () => {
+  it("does not promote freemium on transaction alone (upgrade after payment ack)", () => {
     const tier = getNextTier({
       currentTier: "freemium",
       hasTransactionEvent: true,
       totalAccountEmails: 1,
     });
-    expect(tier).toBe("solopreneur");
+    expect(tier).toBe("freemium");
   });
 
   it("transitions to agency when multiple account emails exist", () => {
@@ -28,7 +28,26 @@ describe("domain logic", () => {
     expect(tier).toBe("agency");
   });
 
-  it("normalizes transaction fields deterministically without split assumptions", () => {
+  it("applies solopreneur hour split (same as freemium for non-agency tiers)", () => {
+    const event = applyTierFinancials(
+      {
+        hoursPurchased: 20,
+        hourlyRate: 50,
+        allocatedHours: 999,
+        bufferHours: 999,
+        saas2Fee: 999,
+        projectRemainder: 999,
+      },
+      "solopreneur",
+    );
+
+    expect(event.allocatedHours).toBe(18);
+    expect(event.bufferHours).toBe(2);
+    expect(event.saas2Fee).toBe(1);
+    expect(event.projectRemainder).toBe(1);
+  });
+
+  it("applies freemium hour split using solo rates", () => {
     const event = applyTierFinancials(
       {
         hoursPurchased: 20,
@@ -38,13 +57,29 @@ describe("domain logic", () => {
         saas2Fee: 0,
         projectRemainder: 0,
       },
-      "solopreneur",
+      "freemium",
     );
+    expect(event.allocatedHours).toBe(18);
+    expect(event.saas2Fee).toBe(1);
+    expect(event.projectRemainder).toBe(1);
+  });
 
-    expect(event.bufferHours).toBe(0);
-    expect(event.allocatedHours).toBe(0);
-    expect(event.saas2Fee).toBe(0);
-    expect(event.projectRemainder).toBe(0);
+  it("applies agency hour split", () => {
+    const event = applyTierFinancials(
+      {
+        hoursPurchased: 20,
+        hourlyRate: 50,
+        allocatedHours: 0,
+        bufferHours: 0,
+        saas2Fee: 0,
+        projectRemainder: 0,
+      },
+      "agency",
+    );
+    expect(event.allocatedHours).toBe(18);
+    expect(event.bufferHours).toBe(2);
+    expect(event.saas2Fee).toBe(0.5);
+    expect(event.projectRemainder).toBe(1.5);
   });
 
   it("enforces role checks", () => {

@@ -508,7 +508,7 @@ Tasks:
     expect(parsed.parsed.rpmSuggestion?.timestamp).toBe("2026-03-01T10:00:00.000Z");
   });
 
-  it("parses SaaS fee labels without alternation side effects", () => {
+  it("parses transaction block for hours and rate only (ignores labeled buffer lines in email)", () => {
     const payload = {
       from: "User <user@example.com>",
       text: `Summary:
@@ -525,8 +525,30 @@ Project Remainder: 1`,
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(1);
-    expect(parsed.parsed.transactionEvent?.projectRemainder).toBe(1);
+    expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(10);
+    expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(100);
+    expect(parsed.parsed.transactionEvent?.allocatedHours).toBe(0);
+    expect(parsed.parsed.transactionEvent?.bufferHours).toBe(0);
+    expect(parsed.parsed.transactionEvent?.saas2Fee).toBe(0);
+    expect(parsed.parsed.transactionEvent?.projectRemainder).toBe(0);
+  });
+
+  it("parses transaction block when Gmail-style bold markdown wraps labels", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      text: `**Transaction:**
+
+**Hours Purchased:** 20
+**Hourly Rate:** 50
+**Allocated to Freelancer:** 18
+**Buffer:** 2
+**SaaS2 Fee:** 1
+**Project Remainder:** 1`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(20);
+    expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(50);
   });
 
   it("parses simple transaction hours/rate and approval command id", () => {
@@ -558,6 +580,21 @@ Approve suggestion 123`,
   it("prefers explicit approve/reject suggestion ids over bare words", () => {
     const mixed = parseNormalizedContent("approve suggestion keep-me\napprove");
     expect(mixed.approvals).toEqual([{ suggestionId: "keep-me", decision: "approve" }]);
+  });
+});
+
+describe("payment received ack", () => {
+  it("detects standalone Paid (case-insensitive, optional period)", () => {
+    expect(parseNormalizedContent("Paid").paymentReceivedAck).toBe(true);
+    expect(parseNormalizedContent("paid.").paymentReceivedAck).toBe(true);
+    expect(parseNormalizedContent("  PAID  ").paymentReceivedAck).toBe(true);
+  });
+
+  it("does not set ack when combined with other lines or a Transaction block", () => {
+    expect(parseNormalizedContent("Paid\nGoals: x").paymentReceivedAck).toBe(false);
+    expect(
+      parseNormalizedContent("Transaction:\nHours Purchased: 1\nHourly Rate: 10\nPaid").paymentReceivedAck,
+    ).toBe(false);
   });
 });
 

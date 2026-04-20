@@ -413,7 +413,11 @@ function normalizeSectionHeadings(content: string): string {
     .map((line) => {
       const trimmed = line.trim();
       for (const { label, escaped } of labels) {
-        const headingPattern = new RegExp(`^(?:>\\s*)?(?:#{1,6}\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:?\\s*$`, "i");
+        // Allow `**Goals:**`, `**Transaction:**` (colon inside or outside bold), and trailing `**` after `:`
+        const headingPattern = new RegExp(
+          `^(?:>\\s*)?(?:#{1,6}\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:?\\s*(?:\\*\\*)?$`,
+          "i",
+        );
         if (headingPattern.test(trimmed)) {
           return `${label}:`;
         }
@@ -458,14 +462,21 @@ function dedupeListValues(values: string[]): string[] {
   return output;
 }
 
+function stripMarkdownBold(text: string): string {
+  return text.replace(/\*\*/g, "");
+}
+
 function parseTransactionBlock(content: string): TransactionEvent | null {
   if (!content.trim()) {
     return null;
   }
 
+  // Gmail and other clients often bold labels (`**Hours Purchased:** 20`), which breaks label regexes.
+  const plain = stripMarkdownBold(content);
+
   const valueByLabel = (labels: string[]): number => {
     const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const match = content.match(new RegExp(`(?:^|\\n)(?:${escapedLabels})\\s*:\\s*\\$?\\s*([\\d.]+)`, "i"));
+    const match = plain.match(new RegExp(`(?:^|\\n)\\s*(?:${escapedLabels})\\s*:\\s*\\$?\\s*([\\d.]+)`, "i"));
     return Number(match?.[1] ?? 0);
   };
 
@@ -475,10 +486,10 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
   const event: TransactionEvent = {
     hoursPurchased: hours,
     hourlyRate: rate,
-    allocatedHours: valueByLabel(["Allocated to Freelancer"]),
-    bufferHours: valueByLabel(["Buffer"]),
-    saas2Fee: valueByLabel(["SaaS2 Fee", "SaaS² Fee"]),
-    projectRemainder: valueByLabel(["Project Remainder"]) || 0,
+    allocatedHours: 0,
+    bufferHours: 0,
+    saas2Fee: 0,
+    projectRemainder: 0,
   };
 
   if (event.hoursPurchased <= 0 || event.hourlyRate <= 0) {
@@ -779,6 +790,22 @@ function extractInboundAttachments(root: Record<string, unknown>, source: Record
   return parsedAttachments;
 }
 
+/** True when the body is only a payment confirmation line (reply after checkout). Not set if a Transaction block is present. */
+export function detectPaymentReceivedAck(normalizedContent: string, transactionEvent: TransactionEvent | null): boolean {
+  if (transactionEvent) {
+    return false;
+  }
+  const lines = normalizedContent
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length !== 1) {
+    return false;
+  }
+  return /^paid\.?$/i.test(lines[0]);
+}
+
 export function parseNormalizedContent(content: string) {
   const normalizedContent = normalizeSectionHeadings(content);
   const projectSectionPresence = buildProjectSectionPresence(normalizedContent);
@@ -806,6 +833,7 @@ export function parseNormalizedContent(content: string) {
   const assignRpmSection = extractSection(normalizedContent, "Assign RPM");
   const assignRpmEmail = parseAssignRpmEmail(assignRpmSection);
   const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
+  const paymentReceivedAck = detectPaymentReceivedAck(normalizedContent, transactionEvent);
   const approvals = parseApprovals(content);
   const additionalEmails = parseAdditionalEmails(normalizedContent);
   const projectName = parseProjectNameUpdate(content, normalizedContent);
@@ -826,7 +854,8 @@ export function parseNormalizedContent(content: string) {
     Boolean(correctionContent) ||
     Boolean(assignRpmEmail) ||
     Boolean(transactionEvent) ||
-    approvals.length > 0;
+    approvals.length > 0 ||
+    paymentReceivedAck;
 
   let summary: string | null = null;
   if (summaryFromSection) {
@@ -871,6 +900,7 @@ export function parseNormalizedContent(content: string) {
     correction: correctionContent || null,
     assignRpmEmail: assignRpmEmail ?? null,
     projectSectionPresence,
+    paymentReceivedAck,
   };
 }
 
