@@ -2,6 +2,11 @@ export type CcMembershipDecision = "approve" | "reject" | "unknown";
 
 const APPROVE_PATTERNS = [
   /\byes\b/i,
+  /\bok(?:ay)?\b/i,
+  /\bgo\s+ahead\b/i,
+  /\bplease\s+do\b/i,
+  /\bsounds?\s+good\b/i,
+  /\bconfirmed?\b/i,
   /\badd\b.*\bthem\b/i,
   /\badd\b.*\bmember/i,
   /\bapprove\b/i,

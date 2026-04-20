@@ -208,6 +208,16 @@ function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
+export class AdditionalEmailConflictError extends Error {
+  readonly email: string;
+
+  constructor(email: string) {
+    super(`Email ${email} is already associated with another account.`);
+    this.name = "AdditionalEmailConflictError";
+    this.email = email;
+  }
+}
+
 function normalizeProjectStatus(value: string | null | undefined): ProjectStatus {
   switch ((value ?? "").trim().toLowerCase()) {
     case "paused":
@@ -535,7 +545,19 @@ export class MemoryRepository {
     );
 
     for (const email of uniqueEmails) {
-      await this.supabase.from("user_emails").upsert(
+      const { data: existing, error: existingError } = await this.supabase
+        .from("user_emails")
+        .select("user_id")
+        .eq("email", email)
+        .maybeSingle<{ user_id: string }>();
+      if (existingError) {
+        throw new Error(`Failed to validate user email ownership: ${existingError.message}`);
+      }
+      if (existing?.user_id && existing.user_id !== userId) {
+        throw new AdditionalEmailConflictError(email);
+      }
+
+      const { error: upsertError } = await this.supabase.from("user_emails").upsert(
         {
           user_id: userId,
           email,
@@ -543,6 +565,9 @@ export class MemoryRepository {
         },
         { onConflict: "user_id,email" },
       );
+      if (upsertError) {
+        throw new Error(`Failed to add account email ${email}: ${upsertError.message}`);
+      }
     }
 
     const { count, error } = await this.supabase
@@ -555,6 +580,53 @@ export class MemoryRepository {
     }
 
     return count ?? 1;
+  }
+
+  async addProjectMembersByEmails(projectId: string, ownerUserId: string, emails: string[]): Promise<string[]> {
+    const normalized = Array.from(
+      new Set(
+        emails
+          .map(normalizeEmail)
+          .filter((email) => isEmail(email)),
+      ),
+    );
+    if (normalized.length === 0) {
+      return [];
+    }
+
+    const { data: rows, error: lookupError } = await this.supabase
+      .from("user_emails")
+      .select("email, user_id")
+      .in("email", normalized);
+    if (lookupError) {
+      throw new Error(`Failed to look up member emails: ${lookupError.message}`);
+    }
+
+    const distinctMemberIds = Array.from(
+      new Set(
+        (rows ?? [])
+          .map((row) => String(row.user_id))
+          .filter((memberId) => Boolean(memberId) && memberId !== ownerUserId),
+      ),
+    );
+    if (distinctMemberIds.length === 0) {
+      return [];
+    }
+
+    for (const memberId of distinctMemberIds) {
+      const { error } = await this.supabase.from("project_members").upsert(
+        {
+          project_id: projectId,
+          user_id: memberId,
+          role: "member",
+        },
+        { onConflict: "project_id,user_id" },
+      );
+      if (error) {
+        throw new Error(`Failed to upsert project member ${memberId}: ${error.message}`);
+      }
+    }
+    return distinctMemberIds;
   }
 
   async setUserTier(userId: string, tier: Tier): Promise<void> {

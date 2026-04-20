@@ -40,6 +40,7 @@ import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedT
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
 import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
 import {
+  AdditionalEmailConflictError,
   MemoryRepository,
   mergeUniqueStringsPreserveOrder,
   type CcMembershipConfirmationRecord,
@@ -268,6 +269,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const { user, created: userCreated } = await repo.getOrCreateUserByEmail(event.from);
   const pendingCcConfirmation = await repo.findLatestPendingCcMembershipConfirmation(user.id);
   let approvedCcCandidates: string[] = [];
+  let pendingCcDecision: "approve" | "reject" | null = null;
   let rejectedPendingCc = false;
   let resolvedFromPendingKickoff = false;
 
@@ -275,18 +277,10 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const decision = parseCcMembershipDecision(event.rawBody);
     if (decision === "approve") {
       approvedCcCandidates = pendingCcConfirmation.candidate_emails;
-      await repo.resolveCcMembershipConfirmation({
-        confirmationId: pendingCcConfirmation.id,
-        status: "approved",
-        resolvedByEmail: event.from,
-      });
+      pendingCcDecision = "approve";
       resolvedFromPendingKickoff = !pendingCcConfirmation.project_id;
     } else if (decision === "reject") {
-      await repo.resolveCcMembershipConfirmation({
-        confirmationId: pendingCcConfirmation.id,
-        status: "rejected",
-        resolvedByEmail: event.from,
-      });
+      pendingCcDecision = "reject";
       rejectedPendingCc = true;
       resolvedFromPendingKickoff = !pendingCcConfirmation.project_id;
     } else {
@@ -336,7 +330,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const ownerUserId = project.user_id;
   let inboundStoredRpmSuggestion: RPMSuggestion | null = null;
 
-  if (!inserted) {
+  if (!inserted && !pendingCcDecision) {
     log.info("duplicate inbound event ignored", { provider: event.provider, providerEventId: event.providerEventId });
     const projectState = await repo.getProjectState(project.id);
     const pendingSuggestions = await repo.getPendingSuggestions(ownerUserId, project.id);
@@ -695,7 +689,19 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const priorAccountTier = accessState.tier;
   const accountEmailsToAdd = mergeUniqueStringsPreserveOrder(contentEvent.parsed.additionalEmails, approvedCcCandidates);
-  const emailCount = await repo.addAdditionalEmails(ownerUserId, accountEmailsToAdd);
+  let emailCount: number;
+  try {
+    emailCount = await repo.addAdditionalEmails(ownerUserId, accountEmailsToAdd);
+  } catch (error) {
+    if (error instanceof AdditionalEmailConflictError) {
+      throw new NonRetryableInboundError("CC email is already associated with another account.", {
+        code: "CC_EMAIL_OWNERSHIP_CONFLICT",
+        status: 409,
+      });
+    }
+    throw error;
+  }
+  await repo.addProjectMembersByEmails(project.id, ownerUserId, approvedCcCandidates);
   const nextTier = getNextTier({
     currentTier: priorAccountTier,
     hasTransactionEvent: !!contentEvent.parsed.transactionEvent,
@@ -713,6 +719,14 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
         await repo.assignRpm(project.id, getMasterUserEmail(), event.from);
       }
     }
+  }
+
+  if (pendingCcConfirmation && pendingCcDecision) {
+    await repo.resolveCcMembershipConfirmation({
+      confirmationId: pendingCcConfirmation.id,
+      status: pendingCcDecision === "approve" ? "approved" : "rejected",
+      resolvedByEmail: event.from,
+    });
   }
 
   const effectiveTier: Tier = nextTier;
