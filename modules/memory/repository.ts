@@ -938,6 +938,23 @@ export class MemoryRepository {
     return e ? normalizeEmail(e) : null;
   }
 
+  async getUserEmailsById(userId: string): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .from("user_emails")
+      .select("email")
+      .eq("user_id", userId);
+    if (error) {
+      throw new Error(`Failed to load user emails: ${error.message}`);
+    }
+    return Array.from(
+      new Set(
+        (data ?? [])
+          .map((row) => normalizeEmail(String(row.email ?? "")))
+          .filter((email) => isEmail(email)),
+      ),
+    );
+  }
+
   async findProjectsOwnedByUser(userId: string): Promise<ProjectRecord[]> {
     const { data, error } = await this.supabase
       .from("projects")

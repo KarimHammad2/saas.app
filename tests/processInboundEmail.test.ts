@@ -59,6 +59,7 @@ const repoState = {
   findProjectsOwnedByUser: vi.fn(),
   mergeProjectParticipants: vi.fn(),
   getUserEmailById: vi.fn(),
+  getUserEmailsById: vi.fn(),
   appendRecentUpdate: vi.fn(),
   createProjectForUser: vi.fn(),
   storeRawProjectUpdate: vi.fn(),
@@ -131,6 +132,7 @@ vi.mock("@/modules/memory/repository", async () => {
       findProjectsOwnedByUser = repoState.findProjectsOwnedByUser;
       mergeProjectParticipants = repoState.mergeProjectParticipants;
       getUserEmailById = repoState.getUserEmailById;
+      getUserEmailsById = repoState.getUserEmailsById;
       appendRecentUpdate = repoState.appendRecentUpdate;
       createProjectForUser = repoState.createProjectForUser;
       storeRawProjectUpdate = repoState.storeRawProjectUpdate;
@@ -211,6 +213,7 @@ describe("processInboundEmail", () => {
     repoState.findProjectsOwnedByUser.mockResolvedValue([]);
     repoState.mergeProjectParticipants.mockResolvedValue(undefined);
     repoState.getUserEmailById.mockResolvedValue("user@example.com");
+    repoState.getUserEmailsById.mockResolvedValue(["user@example.com"]);
     repoState.appendRecentUpdate.mockResolvedValue(undefined);
     repoState.updateProjectName.mockResolvedValue(undefined);
     repoState.createProjectForUser.mockResolvedValue({
@@ -4054,6 +4057,83 @@ Prefer concise updates.
     };
 
     const result = await processInboundEmail(event);
+    expect(result.recipients).toContain("member@example.com");
+  });
+
+  it("allows account alias sender even when owner email is missing on project state", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u1",
+        email: "user@example.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.getUserEmailById.mockResolvedValue(null);
+    repoState.getUserEmailsById.mockResolvedValue(["user@example.com", "member@example.com"]);
+    repoState.getProjectState.mockResolvedValue({
+      projectId: "p1",
+      userId: "u1",
+      projectCode: "pjt-a1b2c3d4",
+      projectStatus: "active",
+      ownerEmail: null,
+      summary: "summary",
+      initialSummary: "summary",
+      currentStatus: "",
+      goals: [],
+      actionItems: [],
+      completedTasks: [],
+      decisions: [],
+      risks: [],
+      recommendations: [],
+      notes: [],
+      participants: [],
+      recentUpdatesLog: [],
+      remainderBalance: 0,
+      reminderBalance: 3,
+      usageCount: 0,
+      tier: "freemium",
+      featureFlags: { collaborators: false, oversight: false },
+      transactionHistory: [],
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_alias_sender_allowed",
+      provider: "resend",
+      providerEventId: "m_alias_sender_allowed",
+      timestamp: new Date().toISOString(),
+      from: "member@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "New project",
+      inReplyTo: null,
+      references: [],
+      rawBody: "I want to start a new project for lead tracking",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.context.projectId).toBe("p1");
     expect(result.recipients).toContain("member@example.com");
   });
 });

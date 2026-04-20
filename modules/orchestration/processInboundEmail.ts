@@ -389,8 +389,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
 
   const accessState = await repo.getProjectState(project.id);
   const ownerEmailResolved = accessState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
+  const ownerAccountEmails = await repo.getUserEmailsById(ownerUserId);
   const activeRpmEmail = await repo.getActiveRpm(project.id);
+  const senderNormalized = event.from.trim().toLowerCase();
+  const senderMatchesOwnerAlias = ownerAccountEmails.some((email) => email.trim().toLowerCase() === senderNormalized);
   if (
+    !senderMatchesOwnerAlias &&
     !canSenderUpdateProject({
       senderEmail: event.from,
       ownerEmail: ownerEmailResolved,
