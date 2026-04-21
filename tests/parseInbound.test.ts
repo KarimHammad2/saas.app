@@ -533,6 +533,38 @@ Project Remainder: 1`,
     expect(parsed.parsed.transactionEvent?.projectRemainder).toBe(0);
   });
 
+  it("aliases Transaction Proposal heading to a Transaction block with bullet-prefixed labels", () => {
+    // Mirrors the Gmail-pasted LLM proposal format: `Transaction Proposal:` header with
+    // dash-bulleted `Hours` and `Hourly Rate` lines and `$` / suffixes on the rate line.
+    const payload = {
+      from: "User <user@example.com>",
+      text: `Transaction Proposal:
+- Hours: 70 (midpoint estimate)
+- Hourly Rate: $60/hr (midpoint)
+- Total: $4,200
+- Allocated to Freelancer: $3,780 (90%)
+- Buffer: $420 (10% — fee + remainder)`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(70);
+    expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(60);
+    expect(parsed.parsed.notes).toEqual([]);
+  });
+
+  it("aliases single-asterisk-bolded *Transaction Proposal:* from Gmail plaintext", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      text: `*Transaction Proposal:*
+- Hours: 20
+- Hourly Rate: $50/hr`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.transactionEvent?.hoursPurchased).toBe(20);
+    expect(parsed.parsed.transactionEvent?.hourlyRate).toBe(50);
+  });
+
   it("parses transaction block when Gmail-style bold markdown wraps labels", () => {
     const payload = {
       from: "User <user@example.com>",

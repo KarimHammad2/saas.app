@@ -58,6 +58,17 @@ const SPECIAL_SECTION_LABELS = [
 
 const SECTION_LABELS = [...MEMORY_SECTION_LABELS, ...SPECIAL_SECTION_LABELS] as const;
 
+/**
+ * Label variants that must be rewritten to a canonical section label during normalization.
+ * The LLM prompt in modules/output/generateProjectDocument.ts instructs Claude to produce
+ * `Transaction Proposal:` for the hire-proposal flow; when users forward that block verbatim
+ * to Frank we treat it as an ordinary `Transaction:` block so the payment-link flow runs.
+ */
+const SECTION_LABEL_ALIASES: ReadonlyArray<{
+  variant: string;
+  canonical: (typeof SECTION_LABELS)[number];
+}> = [{ variant: "Transaction Proposal", canonical: "Transaction" }];
+
 function toObject(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new InboundParseError("Inbound payload must be a JSON object.");
@@ -492,16 +503,22 @@ export function hasAnyProjectMemoryPresence(p: ProjectSectionPresence): boolean 
 }
 
 function normalizeSectionHeadings(content: string): string {
-  const labels = SECTION_LABELS.map((label) => ({
-    label,
-    escaped: label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  }));
+  const labels: ReadonlyArray<{ canonical: string; escaped: string }> = [
+    ...SECTION_LABELS.map((label) => ({
+      canonical: label,
+      escaped: label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    })),
+    ...SECTION_LABEL_ALIASES.map(({ variant, canonical }) => ({
+      canonical,
+      escaped: variant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    })),
+  ];
 
   return content
     .split("\n")
     .map((line) => {
       const trimmed = line.trim();
-      for (const { label, escaped } of labels) {
+      for (const { canonical, escaped } of labels) {
         // Accept 1–2 `*` or `_` emphasis markers around the label and/or colon.
         // Gmail's text/plain export of HTML bold uses single asterisks (e.g. `*Goals:*`),
         // while Markdown sources commonly use `**Goals:**` — both must route to the same section.
@@ -510,7 +527,7 @@ function normalizeSectionHeadings(content: string): string {
           "i",
         );
         if (headingPattern.test(trimmed)) {
-          return `${label}:`;
+          return `${canonical}:`;
         }
       }
       return line;
@@ -561,7 +578,8 @@ function stripMarkdownBold(text: string): string {
 function parseRateLineInTransaction(plain: string): { rate: number; rateCurrency: TransactionRateCurrency } | null {
   const labels = ["Hourly Rate", "Rate"];
   const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const m = plain.match(new RegExp(`(?:^|\\n)\\s*(?:${escaped})\\s*:\\s*([^\\n]+)`, "i"));
+  // Optional bullet prefix covers `- Hourly Rate: $60` as produced by LLM "Transaction Proposal" blocks.
+  const m = plain.match(new RegExp(`(?:^|\\n)\\s*(?:[-*+]\\s+)?(?:${escaped})\\s*:\\s*([^\\n]+)`, "i"));
   if (!m?.[1]) {
     return null;
   }
@@ -589,7 +607,10 @@ function parseTransactionBlock(content: string): TransactionEvent | null {
 
   const valueByLabel = (labels: string[]): number => {
     const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const match = plain.match(new RegExp(`(?:^|\\n)\\s*(?:${escapedLabels})\\s*:\\s*\\$?\\s*([\\d.]+)`, "i"));
+    // Optional bullet prefix covers `- Hours: 70` as produced by LLM "Transaction Proposal" blocks.
+    const match = plain.match(
+      new RegExp(`(?:^|\\n)\\s*(?:[-*+]\\s+)?(?:${escapedLabels})\\s*:\\s*\\$?\\s*([\\d.]+)`, "i"),
+    );
     return Number(match?.[1] ?? 0);
   };
 
