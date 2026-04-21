@@ -67,6 +67,7 @@ export function validateProjectDocumentForAttachment(document: string): void {
     "## Project Metadata",
     "## User Profile Context",
     "## Instructions to LLM",
+    "## Summary",
     "## Project Overview",
     "## Goals",
     "## Tasks",

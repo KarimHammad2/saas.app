@@ -1,5 +1,4 @@
 import {
-  getAllowOverviewOverride,
   getMasterUserEmail,
   getOverviewRegenerationMode,
 } from "@/lib/env";
@@ -545,10 +544,8 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     }
   }
 
-  if (contentEvent.parsed.summary && getAllowOverviewOverride()) {
-    if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.summary) {
-      await repo.updateSummaryDisplay(project.id, contentEvent.parsed.summary);
-    }
+  if (contentEvent.parsed.summary) {
+    await repo.updateSummaryDisplay(project.id, contentEvent.parsed.summary);
   }
   if (contentEvent.parsed.projectStatus) {
     await repo.updateProjectStatus(project.id, contentEvent.parsed.projectStatus);

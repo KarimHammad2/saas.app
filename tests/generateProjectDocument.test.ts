@@ -62,10 +62,13 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("### Hiring and Pricing Logic");
     expect(content).toContain("NEVER simulate payment");
     expect(content).toContain("Project Name:");
+    expect(content).toContain("## Summary");
+    expect(content).toContain("Build a lightweight CRM for agencies.");
     const sectionOrder = [
       "## Project Metadata",
       "## User Profile Context",
       "## Instructions to LLM",
+      "## Summary",
       "## Project Overview",
       "## Goals",
       "## Tasks",
@@ -90,6 +93,7 @@ describe("generateProjectDocument", () => {
   it("renders deterministic empty states for all major sections", () => {
     const payload = buildPayload();
     payload.context.summary = "";
+    payload.context.initialSummary = "";
     payload.context.goals = [];
     payload.context.actionItems = [];
     payload.context.completedTasks = [];
@@ -100,6 +104,8 @@ describe("generateProjectDocument", () => {
     payload.pendingSuggestions = [];
 
     const content = generateProjectDocument(payload);
+    expect(content).toContain("## Summary");
+    expect(content).toContain("(No summary yet.)");
     expect(content).toContain("(No overview yet.)");
     expect(content).toContain("## Goals");
     expect(content).toContain("## Tasks");
@@ -111,6 +117,17 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("## Recent Updates");
     expect(content).toContain("## Pending Suggestions");
     expect(content.match(/\(none\)/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
+  });
+
+  it("falls back to initialSummary when the current summary is empty", () => {
+    const payload = buildPayload();
+    payload.context.summary = "";
+    payload.context.initialSummary = "Kickoff summary for the project.";
+
+    const content = generateProjectDocument(payload);
+    expect(content).toContain("## Summary");
+    expect(content).toContain("Kickoff summary for the project.");
+    expect(content).toContain("## Project Overview");
   });
 
   it("deduplicates pending suggestions deterministically", () => {
@@ -205,6 +222,7 @@ describe("generateProjectDocument", () => {
       },
     ];
     const content = generateProjectDocument(payload);
+    expect(content.indexOf("## Summary")).toBeLessThan(content.indexOf("## Project Overview"));
     expect(content.indexOf("## Project Overview")).toBeLessThan(content.indexOf("## Financial Summary"));
     expect(content.indexOf("## Financial Summary")).toBeLessThan(content.indexOf("## Goals"));
     expect(content).toContain("## Financial Summary");

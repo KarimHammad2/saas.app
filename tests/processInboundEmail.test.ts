@@ -342,7 +342,7 @@ describe("processInboundEmail", () => {
     const result = await processInboundEmail(event);
     expect(result.recipients).toEqual(["user@example.com"]);
     expect(result.context.projectId).toBe("p1");
-    expect(repoState.updateSummaryDisplay).not.toHaveBeenCalled();
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", "hello");
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
     expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalled();
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");

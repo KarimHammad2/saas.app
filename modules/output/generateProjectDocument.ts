@@ -345,7 +345,10 @@ function formatFinancialSummarySection(context: ProjectContext): string | null {
 
 export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const { context, userProfile } = payload;
-  const overview = compactOverviewForDocument(context.summary) || "(No overview yet.)";
+  const summarySource = context.summary || context.initialSummary;
+  const overviewSource = context.summary || "";
+  const summary = compactOverviewForDocument(summarySource) || "(No summary yet.)";
+  const overview = compactOverviewForDocument(overviewSource) || "(No overview yet.)";
   const projectName = (context.projectName || "").trim() || "Untitled Project";
   const projectStatus = formatProjectStatusLabel(context.projectStatus);
 
@@ -389,6 +392,12 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "## Instructions to LLM",
     "",
     LLM_INSTRUCTIONS,
+    "",
+    "## Summary",
+    "",
+    summary,
+    "",
+    "---",
     "",
     "## Project Overview",
     "",
