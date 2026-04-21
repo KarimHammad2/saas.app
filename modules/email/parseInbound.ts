@@ -502,9 +502,11 @@ function normalizeSectionHeadings(content: string): string {
     .map((line) => {
       const trimmed = line.trim();
       for (const { label, escaped } of labels) {
-        // Allow `**Goals:**`, `**Transaction:**` (colon inside or outside bold), and trailing `**` after `:`
+        // Accept 1–2 `*` or `_` emphasis markers around the label and/or colon.
+        // Gmail's text/plain export of HTML bold uses single asterisks (e.g. `*Goals:*`),
+        // while Markdown sources commonly use `**Goals:**` — both must route to the same section.
         const headingPattern = new RegExp(
-          `^(?:>\\s*)?(?:#{1,6}\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:?\\s*(?:\\*\\*)?$`,
+          `^(?:>\\s*)?(?:#{1,6}\\s*)?(?:[*_]{1,2})?${escaped}(?:[*_]{1,2})?\\s*:?\\s*(?:[*_]{1,2})?$`,
           "i",
         );
         if (headingPattern.test(trimmed)) {

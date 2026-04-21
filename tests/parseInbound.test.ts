@@ -674,3 +674,81 @@ FollowUp:
     expect(p.projectSectionPresence.followUps).toBe(true);
   });
 });
+
+describe("parseNormalizedContent Gmail-style single-asterisk headings", () => {
+  // Gmail's text/plain export of HTML bold uses single asterisks (e.g. `*Goals:*`),
+  // which previously slipped past section detection and dumped everything into Notes.
+  it("routes bullets under *Goals:*, *Decisions:*, *Tasks:*, *Risks:* into their sections", () => {
+    const raw = `*Project Name:*
+- AI Management Platform
+
+*Goals:*
+- Build an MVP that generates structured project plans from a plain-text brief.
+- Target small teams of 2-10 people.
+- Ship one core workflow before expanding features.
+
+*Decisions:*
+- MVP scope defined: brief input to AI-generated plan.
+- Out of scope for MVP: integrations, AI agents, reporting, mobile app.
+- Build approach: hire a developer.
+
+*Tasks:*
+- Hire a developer for MVP build.
+- Validate MVP concept with 5 target users.
+- Set first milestone date for working prototype.
+
+*Risks:*
+- Scope creep before MVP is shipped.
+- Developer availability and cost overrun.
+`;
+    const p = parseNormalizedContent(raw);
+
+    expect(p.goals).toEqual([
+      "Build an MVP that generates structured project plans from a plain-text brief.",
+      "Target small teams of 2-10 people.",
+      "Ship one core workflow before expanding features.",
+    ]);
+    expect(p.decisions).toEqual([
+      "MVP scope defined: brief input to AI-generated plan.",
+      "Out of scope for MVP: integrations, AI agents, reporting, mobile app.",
+      "Build approach: hire a developer.",
+    ]);
+    expect(p.actionItems).toEqual([
+      "Hire a developer for MVP build.",
+      "Validate MVP concept with 5 target users.",
+      "Set first milestone date for working prototype.",
+    ]);
+    expect(p.risks).toEqual([
+      "Scope creep before MVP is shipped.",
+      "Developer availability and cost overrun.",
+    ]);
+    expect(p.notes).toEqual([]);
+    expect(p.projectSectionPresence.goals).toBe(true);
+    expect(p.projectSectionPresence.decisions).toBe(true);
+    expect(p.projectSectionPresence.tasks).toBe(true);
+    expect(p.projectSectionPresence.risks).toBe(true);
+    expect(p.projectName).toBe("AI Management Platform");
+  });
+
+  it("accepts asymmetric emphasis like *Goals*: and *Goals:* and _Goals_:", () => {
+    const asteriskOutside = parseNormalizedContent("*Goals*:\n- One\n");
+    expect(asteriskOutside.goals).toEqual(["One"]);
+
+    const asteriskInside = parseNormalizedContent("*Goals:*\n- Two\n");
+    expect(asteriskInside.goals).toEqual(["Two"]);
+
+    const underscore = parseNormalizedContent("_Goals_:\n- Three\n");
+    expect(underscore.goals).toEqual(["Three"]);
+  });
+
+  it("does not treat emphasised non-label lines as section headings", () => {
+    // `*Ship it now:*` is not one of SECTION_LABELS, so it must not be normalised
+    // into a section heading and the content must remain inside the preceding section.
+    const raw = "Goals:\n- Ship v1\n- Validate concept\n*Ship it now:*\n- extra\n";
+    const p = parseNormalizedContent(raw);
+    expect(p.goals).toContain("Ship v1");
+    expect(p.goals).toContain("Validate concept");
+    // The non-label emphasised line should not create a new section; the goals block continues.
+    expect(p.projectSectionPresence.notes).toBe(false);
+  });
+});
