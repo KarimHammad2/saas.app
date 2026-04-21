@@ -2292,6 +2292,7 @@ export class MemoryRepository {
         usage_count: number;
         participant_emails: unknown;
         project_domain: string | null;
+        last_contact_at: string | null;
       }>();
 
     if (projectError || !project) {
