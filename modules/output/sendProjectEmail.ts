@@ -75,6 +75,7 @@ export function validateProjectDocumentForAttachment(document: string): void {
     "### Completed",
     "## Risks",
     "## Decisions",
+    "## Follow Ups",
     "## Notes",
     "## Recent Updates",
     "## Pending Suggestions",

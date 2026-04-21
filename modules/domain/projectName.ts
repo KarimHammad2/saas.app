@@ -1,5 +1,7 @@
 const PROJECT_NAME_MAX_CHARS = 80;
 const PROJECT_NAME_MIN_CHARS = 2;
+const PROJECT_NAME_TARGET_WORDS = 4;
+const PROJECT_NAME_MIN_MEANINGFUL_WORDS = 2;
 
 const FILLER_WORDS = new Set([
   "a",
@@ -47,10 +49,49 @@ const FILLER_WORDS = new Set([
   "project",
   "is",
   "our",
-  "marketing",
   "objective",
   "goal",
   "frank",
+  // Verb particles that follow build/launch/start and add no signal.
+  "out",
+  "up",
+  "over",
+  "through",
+  "around",
+  // Pronouns that do not identify a project.
+  "us",
+  "me",
+  "my",
+  "your",
+  "their",
+  "them",
+  "they",
+  // Weak adjectives / fillers.
+  "new",
+  "small",
+  "big",
+  "large",
+  "nice",
+  "simple",
+  "quick",
+  "basic",
+  "good",
+  "best",
+  "first",
+  "next",
+  "some",
+  "any",
+  "really",
+  "just",
+  "maybe",
+  "help",
+  // Generic placeholder nouns.
+  "thing",
+  "things",
+  "stuff",
+  "lot",
+  "lots",
+  "kind",
 ]);
 
 function toTitleWord(word: string): string {
@@ -113,8 +154,11 @@ export function generateShortProjectName(input: string, fallback = "New Project"
     .filter(Boolean);
 
   const meaningfulWords = rawWords.filter((word) => !FILLER_WORDS.has(word.toLowerCase()));
-  const source = meaningfulWords.length > 0 ? meaningfulWords : rawWords;
-  const selected = source.slice(0, 5).map(toTitleWord);
+  // Relax to raw words only when the filter left fewer than two meaningful words,
+  // otherwise fillers can crowd out the real topic tokens.
+  const source =
+    meaningfulWords.length >= PROJECT_NAME_MIN_MEANINGFUL_WORDS ? meaningfulWords : rawWords;
+  const selected = source.slice(0, PROJECT_NAME_TARGET_WORDS).map(toTitleWord);
   const candidate = normalizeProjectNameCandidate(selected.join(" "));
   if (candidate) {
     return candidate;

@@ -9,11 +9,16 @@ import { CcMembershipConfirmationRequiredError, NonRetryableInboundError } from 
 /** Mirrors `deriveProjectName` in processInboundEmail for assertions on deferred CC kickoff resolution. */
 function expectedDerivedProjectName(rawBody: string, subject: string): string {
   const parsed = parseNormalizedContent(rawBody);
-  const fromBody = (parsed.summary || rawBody).trim();
-  const bodyKickoffSeed = extractKickoffSeed(fromBody).seed;
-  if (bodyKickoffSeed) {
-    return generateShortProjectName(bodyKickoffSeed, "New Project");
+  const trimmedBody = (rawBody ?? "").trim();
+  const parsedSummary = (parsed.summary ?? "").trim();
+
+  const bodyKickoff = trimmedBody
+    ? extractKickoffSeed(trimmedBody)
+    : { seed: null, sourcePhrase: null, sourceParagraph: null };
+  if (bodyKickoff.seed) {
+    return generateShortProjectName(bodyKickoff.seed, "New Project");
   }
+  const fromBody = parsedSummary || bodyKickoff.sourceParagraph || trimmedBody;
   if (fromBody) {
     return generateShortProjectName(fromBody, "New Project");
   }
@@ -30,6 +35,50 @@ function expectedDerivedProjectName(rawBody: string, subject: string): string {
 
   return "New Project";
 }
+
+describe("deriveProjectName (large free-form kickoff bodies)", () => {
+  it("names the project from the pitch paragraph, not the greeting or context paragraph", () => {
+    const rawBody = [
+      "Hi Frank,",
+      "",
+      "Hope you're doing well! It's been a while since we last spoke at the conference in Lisbon.",
+      "I was referred to you by Sarah from Acme Corp, who said you were the person to talk to",
+      "about getting new projects off the ground.",
+      "",
+      "Anyway, I'm building a customer portal for agencies to run multi-client workflows.",
+      "",
+      "Looking forward to hearing from you.",
+      "",
+      "Thanks,",
+      "Alex",
+    ].join("\n");
+
+    const name = expectedDerivedProjectName(rawBody, "Re: quick intro");
+    expect(name).toBe("Customer Portal Agencies Run");
+    expect(name.toLowerCase()).not.toContain("hope");
+    expect(name.toLowerCase()).not.toContain("referred");
+    expect(name.toLowerCase()).not.toContain("frank");
+  });
+
+  it("drops verb particles and weak adjectives when the pitch is buried in a long body", () => {
+    const rawBody = [
+      "Hello Frank,",
+      "",
+      "Quick context: we've been operating a small shop in Austin for five years",
+      "and our scheduling has always been a pain.",
+      "",
+      "We want to build out a new simple marketing campaign for local restaurants and cafes.",
+      "",
+      "Let me know what you think.",
+      "",
+      "Best,",
+      "Dana",
+    ].join("\n");
+
+    const name = expectedDerivedProjectName(rawBody, "New project idea");
+    expect(name).toBe("Marketing Campaign Local Restaurants");
+  });
+});
 
 const emptyUserProfile = emptyUserProfileContext();
 
@@ -73,7 +122,7 @@ function buildProjectState(overrides: Partial<ProjectContext> = {}): ProjectCont
     tier: "freemium",
     featureFlags: { collaborators: false, oversight: false },
     transactionHistory: [],
-    activeRpmEmail: null,
+    activeRpmEmail: undefined,
     ...overrides,
   };
 }
@@ -96,6 +145,7 @@ const repoState = {
   appendRecentUpdate: vi.fn(),
   createProjectForUser: vi.fn(),
   storeRawProjectUpdate: vi.fn(),
+  storeFollowUps: vi.fn(),
   getActiveRpm: vi.fn(),
   storeSummary: vi.fn(),
   updateSummaryDisplay: vi.fn(),
@@ -132,11 +182,13 @@ const repoState = {
   createOrReusePendingCcMembershipConfirmation: vi.fn(),
   findLatestPendingCcMembershipConfirmation: vi.fn(),
   resolveCcMembershipConfirmation: vi.fn(),
+  findLatestPendingApproval: vi.fn(),
   createOrReusePendingAdminAction: vi.fn(),
   findLatestPendingAdminAction: vi.fn(),
   resolvePendingAdminAction: vi.fn(),
   findProjectById: vi.fn(),
   assignRpm: vi.fn(),
+  deactivateActiveRpm: vi.fn(),
   applyAgencyTierRpmTransition: vi.fn(),
   getAgencyDefaultRpmEmail: vi.fn(),
   storeTransactionEvent: vi.fn(),
@@ -145,6 +197,22 @@ const repoState = {
   snapshotProjectContext: vi.fn(),
   getProjectState: vi.fn(),
   getPendingSuggestions: vi.fn(),
+  findProjectsByName: vi.fn(),
+  setProjectArchived: vi.fn(),
+  replaceProjectRisks: vi.fn(),
+  replaceProjectNotes: vi.fn(),
+  replaceProjectSummary: vi.fn(),
+  replaceProjectCurrentStatus: vi.fn(),
+  listProjectUpdates: vi.fn(),
+  listOutboundDocumentEvents: vi.fn(),
+  listSystemSettings: vi.fn(),
+  getSystemSetting: vi.fn(),
+  upsertSystemSetting: vi.fn(),
+  listEmailTemplates: vi.fn(),
+  upsertEmailTemplate: vi.fn(),
+  listInstructions: vi.fn(),
+  upsertInstruction: vi.fn(),
+  recordAdminAuditLog: vi.fn(),
 };
 
 // Intent classification is tested separately in classifyInboundIntent.test.ts.
@@ -176,6 +244,7 @@ vi.mock("@/modules/memory/repository", async () => {
       appendRecentUpdate = repoState.appendRecentUpdate;
       createProjectForUser = repoState.createProjectForUser;
       storeRawProjectUpdate = repoState.storeRawProjectUpdate;
+      storeFollowUps = repoState.storeFollowUps;
       getActiveRpm = repoState.getActiveRpm;
       storeSummary = repoState.storeSummary;
       updateSummaryDisplay = repoState.updateSummaryDisplay;
@@ -212,11 +281,13 @@ vi.mock("@/modules/memory/repository", async () => {
       createOrReusePendingCcMembershipConfirmation = repoState.createOrReusePendingCcMembershipConfirmation;
       findLatestPendingCcMembershipConfirmation = repoState.findLatestPendingCcMembershipConfirmation;
       resolveCcMembershipConfirmation = repoState.resolveCcMembershipConfirmation;
+      findLatestPendingApproval = repoState.findLatestPendingApproval;
       createOrReusePendingAdminAction = repoState.createOrReusePendingAdminAction;
       findLatestPendingAdminAction = repoState.findLatestPendingAdminAction;
       resolvePendingAdminAction = repoState.resolvePendingAdminAction;
       findProjectById = repoState.findProjectById;
       assignRpm = repoState.assignRpm;
+      deactivateActiveRpm = repoState.deactivateActiveRpm;
       applyAgencyTierRpmTransition = repoState.applyAgencyTierRpmTransition;
       getAgencyDefaultRpmEmail = repoState.getAgencyDefaultRpmEmail;
       storeTransactionEvent = repoState.storeTransactionEvent;
@@ -225,6 +296,22 @@ vi.mock("@/modules/memory/repository", async () => {
       snapshotProjectContext = repoState.snapshotProjectContext;
       getProjectState = repoState.getProjectState;
       getPendingSuggestions = repoState.getPendingSuggestions;
+      findProjectsByName = repoState.findProjectsByName;
+      setProjectArchived = repoState.setProjectArchived;
+      replaceProjectRisks = repoState.replaceProjectRisks;
+      replaceProjectNotes = repoState.replaceProjectNotes;
+      replaceProjectSummary = repoState.replaceProjectSummary;
+      replaceProjectCurrentStatus = repoState.replaceProjectCurrentStatus;
+      listProjectUpdates = repoState.listProjectUpdates;
+      listOutboundDocumentEvents = repoState.listOutboundDocumentEvents;
+      listSystemSettings = repoState.listSystemSettings;
+      getSystemSetting = repoState.getSystemSetting;
+      upsertSystemSetting = repoState.upsertSystemSetting;
+      listEmailTemplates = repoState.listEmailTemplates;
+      upsertEmailTemplate = repoState.upsertEmailTemplate;
+      listInstructions = repoState.listInstructions;
+      upsertInstruction = repoState.upsertInstruction;
+      recordAdminAuditLog = repoState.recordAdminAuditLog;
     },
   };
 });
@@ -262,6 +349,7 @@ describe("processInboundEmail", () => {
     repoState.getUserEmailById.mockResolvedValue("user@example.com");
     repoState.getUserEmailsById.mockResolvedValue(["user@example.com"]);
     repoState.appendRecentUpdate.mockResolvedValue(undefined);
+    repoState.storeFollowUps.mockResolvedValue(undefined);
     repoState.updateProjectName.mockResolvedValue(undefined);
     repoState.updateProjectLastContactAt.mockResolvedValue("2026-04-21T12:00:00.000Z");
     repoState.createProjectForUser.mockResolvedValue({
@@ -274,6 +362,7 @@ describe("processInboundEmail", () => {
     repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue(null);
     repoState.resolveCcMembershipConfirmation.mockResolvedValue(undefined);
     repoState.findProjectById.mockResolvedValue(defaultMockProject);
+    repoState.deactivateActiveRpm.mockResolvedValue(undefined);
     repoState.createOrReusePendingCcMembershipConfirmation.mockResolvedValue({
       id: "cc_1",
       owner_user_id: "u1",
@@ -288,6 +377,7 @@ describe("processInboundEmail", () => {
       resolved_at: null,
       created_at: new Date().toISOString(),
     });
+    repoState.findLatestPendingApproval.mockResolvedValue(null);
     repoState.createOrReusePendingAdminAction.mockResolvedValue({
       id: "admin_1",
       sender_user_id: "u1",
@@ -363,6 +453,36 @@ describe("processInboundEmail", () => {
     });
     repoState.markLatestPendingHourPurchasePaid.mockResolvedValue(null);
     repoState.approveSuggestion.mockResolvedValue(null);
+    repoState.findProjectsByName.mockResolvedValue([]);
+    repoState.setProjectArchived.mockResolvedValue(undefined);
+    repoState.replaceProjectRisks.mockResolvedValue(undefined);
+    repoState.replaceProjectNotes.mockResolvedValue(undefined);
+    repoState.replaceProjectSummary.mockResolvedValue(undefined);
+    repoState.replaceProjectCurrentStatus.mockResolvedValue(undefined);
+    repoState.listProjectUpdates.mockResolvedValue([]);
+    repoState.listOutboundDocumentEvents.mockResolvedValue([]);
+    repoState.listSystemSettings.mockResolvedValue([]);
+    repoState.getSystemSetting.mockResolvedValue(null);
+    repoState.upsertSystemSetting.mockImplementation(async (key, valueJson) => ({
+      key,
+      valueJson,
+      previous: null,
+    }));
+    repoState.listEmailTemplates.mockResolvedValue([]);
+    repoState.upsertEmailTemplate.mockImplementation(async (key, patch) => ({
+      key,
+      subject: patch.subject ?? "",
+      textBody: patch.textBody ?? "",
+      htmlBody: patch.htmlBody ?? "",
+      previous: null,
+    }));
+    repoState.listInstructions.mockResolvedValue([]);
+    repoState.upsertInstruction.mockImplementation(async (key, content) => ({
+      key,
+      content,
+      previous: null,
+    }));
+    repoState.recordAdminAuditLog.mockResolvedValue(undefined);
   });
 
   it("returns recipients and state payload", async () => {
@@ -563,6 +683,73 @@ describe("processInboundEmail", () => {
     expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Project status updated: Paused");
   });
 
+  it("stores parsed follow-ups as dedicated project records", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_followups",
+      provider: "resend",
+      providerEventId: "m_followups",
+      timestamp: "2026-04-21T12:00:00.000Z",
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Update",
+      inReplyTo: null,
+      references: [],
+      rawBody: "FollowUp:\n- Action: Follow up with John about API access\n- Target: John\n- When: Tomorrow",
+      parsed: {
+        projectSectionPresence: {
+          ...EMPTY_PROJECT_SECTION_PRESENCE,
+          followUps: true,
+        },
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        followUps: [
+          {
+            action: "Follow up with John about API access",
+            target: "John",
+            whenText: "Tomorrow",
+            dueDate: "2026-04-22",
+            status: "pending",
+          },
+        ],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    await processInboundEmail(event);
+
+    expect(repoState.storeFollowUps).toHaveBeenCalledWith(
+      "p1",
+      [
+        {
+          action: "Follow up with John about API access",
+          target: "John",
+          whenText: "Tomorrow",
+          dueDate: "2026-04-22",
+          status: "pending",
+        },
+      ],
+      "e_followups",
+    );
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith(
+      "p1",
+      "Follow-up(s) added: Follow up with John about API access",
+    );
+  });
+
   it('creates a new project from "I want to build X" style kickoff email', async () => {
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
@@ -598,7 +785,7 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Restaurant Analytics Saas Weekly KPI", {
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Restaurant Analytics Saas Weekly", {
       createdByEmail: "user@example.com",
       createdByUserId: "u1",
     });
@@ -641,7 +828,7 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Salon CRM Booking Reminders Client", {
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Salon CRM Booking Reminders", {
       createdByEmail: "user@example.com",
       createdByUserId: "u1",
     });
@@ -697,7 +884,7 @@ describe("processInboundEmail", () => {
     };
 
     await processInboundEmail(event);
-    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Platform Managing Client Projects Across", {
+    expect(repoState.createProjectForUser).toHaveBeenCalledWith("u1", "Platform Managing Client Projects", {
       createdByEmail: "user@example.com",
       createdByUserId: "u1",
     });
@@ -4494,5 +4681,181 @@ Prefer concise updates.
     });
     expect(result.outboundMode).toBe("admin");
     expect(result.adminReply?.text).toContain("john@example.com is now an Agency user");
+  });
+
+  it("confirms a pending admin RPM assignment for a specific project only", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce({
+      id: "admin_2",
+      sender_user_id: "u-admin",
+      sender_email: "daniel@saassquared.com",
+      action_kind: "assign_rpm",
+      action_payload: {
+        userEmail: "john@example.com",
+        rpmEmail: "rpm@example.com",
+        projectName: "Target Project",
+      },
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Assign john@example.com to rpm@example.com for project Target Project",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.findUserByEmail.mockResolvedValueOnce({
+      id: "u-target",
+      email: "john@example.com",
+      display_name: null,
+      tier: "freemium",
+      created_at: new Date().toISOString(),
+    });
+    repoState.findProjectsOwnedByUser.mockResolvedValueOnce([
+      {
+        ...defaultMockProject,
+        id: "p-target",
+        user_id: "u-target",
+        project_code: "pjt-deadbeef",
+        name: "Target Project",
+      },
+    ]);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-assign",
+      provider: "resend",
+      providerEventId: "m-admin-assign",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Re: Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "CONFIRM",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(repoState.assignRpm).toHaveBeenCalledTimes(1);
+    expect(repoState.assignRpm).toHaveBeenCalledWith("p-target", "rpm@example.com", "daniel@saassquared.com");
+    expect(repoState.resolvePendingAdminAction).toHaveBeenCalledWith({
+      actionId: "admin_2",
+      status: "executed",
+      resolvedByEmail: "daniel@saassquared.com",
+    });
+    expect(result.adminReply?.text).toContain("Project: Target Project");
+  });
+
+  it("confirms a pending admin RPM removal for a specific project only", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce({
+      id: "admin_3",
+      sender_user_id: "u-admin",
+      sender_email: "daniel@saassquared.com",
+      action_kind: "remove_rpm",
+      action_payload: {
+        userEmail: "john@example.com",
+        projectName: "Target Project",
+      },
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Remove the RPM from john@example.com for project Target Project",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.findUserByEmail.mockResolvedValueOnce({
+      id: "u-target",
+      email: "john@example.com",
+      display_name: null,
+      tier: "freemium",
+      created_at: new Date().toISOString(),
+    });
+    repoState.findProjectsOwnedByUser.mockResolvedValueOnce([
+      {
+        ...defaultMockProject,
+        id: "p-target",
+        user_id: "u-target",
+        project_code: "pjt-feedface",
+        name: "Target Project",
+      },
+    ]);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-remove",
+      provider: "resend",
+      providerEventId: "m-admin-remove",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Re: Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "CONFIRM",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(repoState.deactivateActiveRpm).toHaveBeenCalledTimes(1);
+    expect(repoState.deactivateActiveRpm).toHaveBeenCalledWith("p-target");
+    expect(repoState.resolvePendingAdminAction).toHaveBeenCalledWith({
+      actionId: "admin_3",
+      status: "executed",
+      resolvedByEmail: "daniel@saassquared.com",
+    });
+    expect(result.adminReply?.text).toContain("RPM removed from john@example.com");
+    expect(result.adminReply?.text).toContain("Project: Target Project");
   });
 });

@@ -51,15 +51,34 @@ import {
   buildAdminMenuReply,
   buildAdminNoPendingReply,
   buildAdminResultReply,
+  formatAdminDocumentRows,
+  formatAdminInstructionRows,
   formatAdminProjectRows,
+  formatAdminProjectStateSections,
+  formatAdminProjectUpdateRows,
   formatAdminRpmRows,
+  formatAdminSettingRows,
+  formatAdminTemplateRows,
   formatAdminTransactionRows,
   formatAdminUserRows,
   parseAdminRequest,
   type AdminActionPayload,
+  type AdminEditableProjectField,
   type AdminReply,
   type AdminRequest,
 } from "@/modules/orchestration/adminConversation";
+import {
+  adminExecutorInternals,
+  executeAdminAction,
+} from "@/modules/orchestration/adminActionsExecutor";
+import {
+  buildApprovalWaitReply,
+  escalateToRPM,
+  flagForReview,
+  parseApprovalDecision,
+  parseEscalationBlock,
+  requestHumanApproval,
+} from "@/modules/orchestration/escalations";
 import {
   AdditionalEmailConflictError,
   MemoryRepository,
@@ -77,10 +96,20 @@ export interface InboundProcessingResult {
   recipients: string[];
   payload?: ProjectEmailPayload;
   /** When `rpm_profile_proposal`, send lightweight proposal mail to owner instead of full project attachment. */
-  outboundMode: "full" | "rpm_profile_proposal" | "admin";
+  outboundMode: "full" | "rpm_profile_proposal" | "admin" | "escalation";
   /** Set when outboundMode is `rpm_profile_proposal` (inbound-stored suggestion row). */
   rpmProfileProposal: RPMSuggestion | null;
   adminReply?: AdminReply;
+  escalationAction?: {
+    type: "RPM" | "Review" | "Approval";
+    notification?: {
+      recipients: string[];
+      subject: string;
+      text: string;
+      html?: string;
+    };
+    approvalId?: string;
+  };
   context: {
     userId: string;
     projectId: string | null;
@@ -114,7 +143,7 @@ function buildContentEventFromPendingKickoff(
   const rawSource = pending.source_raw_body?.trim() ? pending.source_raw_body : inbound.rawBody;
   const rawBody = prepareInboundPlainText(rawSource);
   const subject = pending.source_subject?.trim() ? pending.source_subject : inbound.subject;
-  const parsed = parseNormalizedContent(rawBody);
+  const parsed = parseNormalizedContent(rawBody, { timestamp: inbound.timestamp });
   return {
     ...inbound,
     subject,
@@ -124,11 +153,19 @@ function buildContentEventFromPendingKickoff(
 }
 
 function deriveProjectName(event: NormalizedEmailEvent): string {
-  const fromBody = (event.parsed.summary || event.rawBody).trim();
-  const bodyKickoffSeed = extractKickoffSeed(fromBody).seed;
-  if (bodyKickoffSeed) {
-    return generateShortProjectName(bodyKickoffSeed, "New Project");
+  // Always run the paragraph-aware seed extractor on the full raw body so that
+  // large free-form kickoffs are scored across every paragraph, not just the
+  // first sentence that parseNormalizedContent fell back to as a summary.
+  const rawBody = (event.rawBody ?? "").trim();
+  const parsedSummary = (event.parsed.summary ?? "").trim();
+
+  const bodyKickoff = rawBody
+    ? extractKickoffSeed(rawBody)
+    : { seed: null, sourcePhrase: null, sourceParagraph: null };
+  if (bodyKickoff.seed) {
+    return generateShortProjectName(bodyKickoff.seed, "New Project");
   }
+  const fromBody = parsedSummary || bodyKickoff.sourceParagraph || rawBody;
   if (fromBody) {
     return generateShortProjectName(fromBody, "New Project");
   }
@@ -162,17 +199,152 @@ function filterUnknownNotesSubsumedByPriorNotes(unknownFragments: string[], prio
 }
 
 function normalizeAdminActionPayload(action: AdminActionPayload): Record<string, unknown> {
-  if (action.kind === "update_tier") {
-    return {
-      userEmail: action.userEmail,
-      tier: action.tier,
-    };
+  switch (action.kind) {
+    case "update_tier":
+      return { userEmail: action.userEmail, tier: action.tier };
+    case "remove_rpm":
+      return { userEmail: action.userEmail, projectName: action.projectName };
+    case "assign_rpm":
+      return {
+        userEmail: action.userEmail,
+        rpmEmail: action.rpmEmail,
+        projectName: action.projectName,
+      };
+    case "edit_project_field":
+      return {
+        projectName: action.projectName,
+        userEmail: action.userEmail,
+        field: action.field,
+        value: action.value,
+      };
+    case "archive_project":
+    case "restore_project":
+      return { projectName: action.projectName, userEmail: action.userEmail };
+    case "upsert_instruction":
+      return { key: action.key, content: action.content };
+    case "upsert_email_template":
+      return { key: action.key, patch: action.patch };
+    case "upsert_system_setting":
+      return { key: action.key, valueJson: action.valueJson };
   }
+}
 
-  return {
-    userEmail: action.userEmail,
-    rpmEmail: action.rpmEmail,
+/**
+ * Reconstructs an `AdminActionPayload` from the raw JSON stored on `admin_email_actions` so we can
+ * route the "CONFIRM" reply through `executeAdminAction`. Returns null when the stored record is
+ * malformed (treated as expired by the caller).
+ */
+function reconstructAdminActionPayload(
+  actionKind: string,
+  payload: Record<string, unknown>,
+): AdminActionPayload | null {
+  const asString = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
+  const asEmail = (value: unknown): string | null => {
+    const s = asString(value);
+    return s ? s.toLowerCase() : null;
   };
+
+  switch (actionKind) {
+    case "update_tier": {
+      const userEmail = asEmail(payload.userEmail);
+      const tierRaw = asString(payload.tier)?.toLowerCase() ?? null;
+      const tier = tierRaw === "freemium" || tierRaw === "solopreneur" || tierRaw === "agency" ? (tierRaw as Tier) : null;
+      if (!userEmail || !tier) {
+        return null;
+      }
+      return { kind: "update_tier", userEmail, tier };
+    }
+    case "assign_rpm": {
+      const userEmail = asEmail(payload.userEmail);
+      const rpmEmail = asEmail(payload.rpmEmail);
+      const projectName = asString(payload.projectName);
+      if (!userEmail || !rpmEmail || !projectName) {
+        return null;
+      }
+      return { kind: "assign_rpm", userEmail, rpmEmail, projectName };
+    }
+    case "remove_rpm": {
+      const userEmail = asEmail(payload.userEmail);
+      const projectName = asString(payload.projectName);
+      if (!userEmail || !projectName) {
+        return null;
+      }
+      return { kind: "remove_rpm", userEmail, projectName };
+    }
+    case "edit_project_field": {
+      const projectName = asString(payload.projectName);
+      const fieldRaw = asString(payload.field) as AdminEditableProjectField | null;
+      const value = asString(payload.value);
+      if (!projectName || !fieldRaw || value === null) {
+        return null;
+      }
+      const validFields: AdminEditableProjectField[] = [
+        "summary",
+        "current_status",
+        "goals",
+        "action_items",
+        "risks",
+        "notes",
+      ];
+      if (!validFields.includes(fieldRaw)) {
+        return null;
+      }
+      return {
+        kind: "edit_project_field",
+        projectName,
+        userEmail: asEmail(payload.userEmail) ?? null,
+        field: fieldRaw,
+        value,
+      };
+    }
+    case "archive_project":
+    case "restore_project": {
+      const projectName = asString(payload.projectName);
+      if (!projectName) {
+        return null;
+      }
+      return {
+        kind: actionKind,
+        projectName,
+        userEmail: asEmail(payload.userEmail) ?? null,
+      };
+    }
+    case "upsert_instruction": {
+      const key = asString(payload.key);
+      const content = asString(payload.content);
+      if (!key || content === null) {
+        return null;
+      }
+      return { kind: "upsert_instruction", key, content };
+    }
+    case "upsert_email_template": {
+      const key = asString(payload.key);
+      const patch = payload.patch;
+      if (!key || !patch || typeof patch !== "object" || Array.isArray(patch)) {
+        return null;
+      }
+      const record = patch as Record<string, unknown>;
+      const out: AdminActionPayload = {
+        kind: "upsert_email_template",
+        key,
+        patch: {
+          subject: typeof record.subject === "string" ? record.subject : undefined,
+          textBody: typeof record.textBody === "string" ? record.textBody : undefined,
+          htmlBody: typeof record.htmlBody === "string" ? record.htmlBody : undefined,
+        },
+      };
+      return out;
+    }
+    case "upsert_system_setting": {
+      const key = asString(payload.key);
+      if (!key) {
+        return null;
+      }
+      return { kind: "upsert_system_setting", key, valueJson: payload.valueJson ?? null };
+    }
+    default:
+      return null;
+  }
 }
 
 function adminNextSteps(): string[] {
@@ -289,7 +461,8 @@ async function handleAdminRequest(
     if (pendingAdminAction.action_kind === "assign_rpm") {
       const targetEmail = typeof actionPayload.userEmail === "string" ? actionPayload.userEmail.trim().toLowerCase() : "";
       const rpmEmail = typeof actionPayload.rpmEmail === "string" ? actionPayload.rpmEmail.trim().toLowerCase() : "";
-      if (!targetEmail || !rpmEmail) {
+      const projectName = typeof actionPayload.projectName === "string" ? actionPayload.projectName.trim() : "";
+      if (!targetEmail || !rpmEmail || !projectName) {
         await repo.resolvePendingAdminAction({
           actionId: pendingAdminAction.id,
           status: "expired",
@@ -332,17 +505,43 @@ async function handleAdminRequest(
         };
       }
 
-      const projects = await repo.findProjectsOwnedByUser(targetUser.id);
-      for (const project of projects) {
-        await repo.assignRpm(project.id, rpmEmail, event.from);
+      const ownedProjects = await repo.findProjectsOwnedByUser(targetUser.id);
+      const normalizedProjectName = normalizeProjectNameCandidate(projectName);
+      const matchingProjects = ownedProjects.filter(
+        (project) => normalizeProjectNameCandidate(project.name) === normalizedProjectName,
+      );
+      const project = matchingProjects.length === 1 ? matchingProjects[0] : null;
+      if (!project) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            `I couldn’t find a unique project named "${projectName}".`,
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
       }
+
+      await repo.assignRpm(project.id, rpmEmail, event.from);
       await repo.resolvePendingAdminAction({
         actionId: pendingAdminAction.id,
         status: "executed",
         resolvedByEmail: event.from,
       });
 
-      const projectCountLabel = projects.length === 1 ? "project" : "projects";
       return {
         recipients: [event.from],
         payload: undefined,
@@ -353,7 +552,7 @@ async function handleAdminRequest(
           "Done ✅",
           [
             `${rpmEmail} is now the RPM for ${targetEmail}.`,
-            `Updated ${projects.length} ${projectCountLabel}.`,
+            `Project: ${project.name}`,
           ],
           ["View users", "View projects"],
         ),
@@ -365,6 +564,193 @@ async function handleAdminRequest(
         },
       };
     }
+
+    if (pendingAdminAction.action_kind === "remove_rpm") {
+      const targetEmail = typeof actionPayload.userEmail === "string" ? actionPayload.userEmail.trim().toLowerCase() : "";
+      const projectName = typeof actionPayload.projectName === "string" ? actionPayload.projectName.trim() : "";
+      if (!targetEmail || !projectName) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, "I couldn’t confirm the stored RPM removal."),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+
+      const targetUser = await repo.findUserByEmail(targetEmail);
+      if (!targetUser) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, `I couldn’t find a user for ${targetEmail}.`),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+
+      const ownedProjects = await repo.findProjectsOwnedByUser(targetUser.id);
+      const normalizedProjectName = normalizeProjectNameCandidate(projectName);
+      const matchingProjects = ownedProjects.filter(
+        (project) => normalizeProjectNameCandidate(project.name) === normalizedProjectName,
+      );
+      const project = matchingProjects.length === 1 ? matchingProjects[0] : null;
+      if (!project) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            `I couldn’t find a unique project named "${projectName}".`,
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+
+      await repo.deactivateActiveRpm(project.id);
+      await repo.resolvePendingAdminAction({
+        actionId: pendingAdminAction.id,
+        status: "executed",
+        resolvedByEmail: event.from,
+      });
+
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminResultReply(
+          event.subject,
+          "Done ✅",
+          [
+            `RPM removed from ${targetEmail}.`,
+            `Project: ${project.name}`,
+          ],
+          ["Assign an RPM", "View projects"],
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    // Generic dispatcher for all other admin action kinds (edit_project_field, archive_project,
+    // restore_project, upsert_instruction, upsert_email_template, upsert_system_setting).
+    const reconstructed = reconstructAdminActionPayload(
+      pendingAdminAction.action_kind,
+      actionPayload,
+    );
+    if (!reconstructed) {
+      await repo.resolvePendingAdminAction({
+        actionId: pendingAdminAction.id,
+        status: "expired",
+        resolvedByEmail: event.from,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "I couldn’t reconstruct the stored admin action. Please send the command again.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    const execution = await executeAdminAction(repo, reconstructed, {
+      actorEmail: event.from,
+      adminActionId: pendingAdminAction.id,
+    });
+
+    if (!execution.ok) {
+      await repo.resolvePendingAdminAction({
+        actionId: pendingAdminAction.id,
+        status: "expired",
+        resolvedByEmail: event.from,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(event.subject, execution.reason),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    await repo.resolvePendingAdminAction({
+      actionId: pendingAdminAction.id,
+      status: "executed",
+      resolvedByEmail: event.from,
+    });
+
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminResultReply(
+        event.subject,
+        execution.heading,
+        execution.lines,
+        execution.nextSteps ?? adminNextSteps(),
+      ),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
   }
 
   if (request.kind === "menu") {
@@ -597,6 +983,25 @@ async function handleAdminRequest(
       };
     }
 
+    if (!request.projectName) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "I need a project name to assign the RPM to a specific project.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
     await repo.createOrReusePendingAdminAction({
       senderUserId: userId,
       senderEmail: event.from,
@@ -605,6 +1010,7 @@ async function handleAdminRequest(
         kind: "assign_rpm",
         userEmail: request.userEmail,
         rpmEmail: request.rpmEmail,
+        projectName: request.projectName,
       }),
       sourceSubject: event.subject,
       sourceRawBody: event.rawBody,
@@ -619,6 +1025,7 @@ async function handleAdminRequest(
         kind: "assign_rpm",
         userEmail: request.userEmail,
         rpmEmail: request.rpmEmail,
+        projectName: request.projectName,
       }),
       context: {
         userId,
@@ -627,6 +1034,336 @@ async function handleAdminRequest(
         duplicate: false,
       },
     };
+  }
+
+  if (request.kind === "remove_rpm") {
+    if (!request.userEmail || !request.projectName) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "I need both the user email and the project name to remove the RPM.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: "remove_rpm",
+      actionPayload: normalizeAdminActionPayload({
+        kind: "remove_rpm",
+        userEmail: request.userEmail,
+        projectName: request.projectName,
+      }),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminActionConfirmation(event.subject, {
+        kind: "remove_rpm",
+        userEmail: request.userEmail,
+        projectName: request.projectName,
+      }),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  // ── Admin visibility (read-only) ─────────────────────────────────────────────
+
+  const adminCtx = () => ({ userId, projectId: null, eventId: event.eventId, duplicate: false });
+  const adminOut = (adminReply: AdminReply): InboundProcessingResult => ({
+    recipients: [event.from],
+    payload: undefined,
+    outboundMode: "admin",
+    rpmProfileProposal: null,
+    adminReply,
+    context: adminCtx(),
+  });
+
+  if (
+    request.kind === "show_updates" ||
+    request.kind === "show_project_state" ||
+    request.kind === "show_documents"
+  ) {
+    if (!request.projectName) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include the project name (e.g. "for project Alpha Launch").',
+        ),
+      );
+    }
+    let ownerUserId: string | null = null;
+    if (request.userEmail) {
+      const ownerUser = await repo.findUserByEmail(request.userEmail);
+      if (!ownerUser) {
+        return adminOut(
+          buildAdminClarificationReply(event.subject, `I couldn’t find a user for ${request.userEmail}.`),
+        );
+      }
+      ownerUserId = ownerUser.id;
+    }
+    const matches = await repo.findProjectsByName({ name: request.projectName, userId: ownerUserId });
+    if (matches.length === 0) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          request.userEmail
+            ? `I couldn’t find a project named "${request.projectName}" owned by ${request.userEmail}.`
+            : `I couldn’t find a project named "${request.projectName}".`,
+        ),
+      );
+    }
+    if (matches.length > 1) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          `There are ${matches.length} projects named "${request.projectName}". Add "for <owner@email>" to disambiguate.`,
+        ),
+      );
+    }
+    const [project] = matches;
+
+    if (request.kind === "show_updates") {
+      const updates = await repo.listProjectUpdates(project.id);
+      return adminOut(
+        buildAdminResultReply(
+          event.subject,
+          `Updates for "${project.name}"`,
+          formatAdminProjectUpdateRows(
+            updates.map((row) => ({
+              createdAt: row.createdAt,
+              preview: row.contentPreview,
+              senderEmail: row.senderEmail,
+            })),
+          ),
+          adminNextSteps(),
+        ),
+      );
+    }
+
+    if (request.kind === "show_documents") {
+      const docs = await repo.listOutboundDocumentEvents(project.id);
+      return adminOut(
+        buildAdminResultReply(
+          event.subject,
+          `Documents sent for "${project.name}"`,
+          formatAdminDocumentRows(docs),
+          adminNextSteps(),
+        ),
+      );
+    }
+
+    const state = await repo.getProjectState(project.id);
+    return adminOut(
+      buildAdminResultReply(
+        event.subject,
+        `Project state for "${project.name}"`,
+        formatAdminProjectStateSections(
+          {
+            summary: state.summary,
+            currentStatus: state.currentStatus,
+            goals: state.goals,
+            actionItems: state.actionItems,
+            risks: state.risks,
+            notes: state.notes,
+          },
+          request.sections,
+        ),
+        adminNextSteps(),
+      ),
+    );
+  }
+
+  if (request.kind === "show_settings") {
+    const rows = await repo.listSystemSettings(request.keyPrefix ?? null);
+    return adminOut(
+      buildAdminResultReply(
+        event.subject,
+        request.keyPrefix ? `System settings (${request.keyPrefix}*)` : "System settings",
+        formatAdminSettingRows(rows),
+        adminNextSteps(),
+      ),
+    );
+  }
+
+  if (request.kind === "show_templates") {
+    const rows = await repo.listEmailTemplates(request.key ?? null);
+    return adminOut(
+      buildAdminResultReply(
+        event.subject,
+        request.key ? `Email template "${request.key}"` : "Email templates",
+        formatAdminTemplateRows(rows, Boolean(request.key)),
+        adminNextSteps(),
+      ),
+    );
+  }
+
+  if (request.kind === "show_instructions") {
+    const rows = await repo.listInstructions(request.key ?? null);
+    return adminOut(
+      buildAdminResultReply(
+        event.subject,
+        request.key ? `Instruction "${request.key}"` : "Instructions",
+        formatAdminInstructionRows(rows, Boolean(request.key)),
+        adminNextSteps(),
+      ),
+    );
+  }
+
+  // ── Admin management (write) — create pending confirmation ────────────────────
+
+  if (request.kind === "edit_project_field") {
+    if (!request.projectName || !request.field || request.value === null) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'I need a project name, a target field (goals/tasks/risks/notes/status/summary), and a value after "to".',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "edit_project_field",
+      projectName: request.projectName,
+      userEmail: request.userEmail,
+      field: request.field,
+      value: request.value,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "archive_project" || request.kind === "restore_project") {
+    if (!request.projectName) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include the project name (e.g. "Archive project Alpha Launch for user@email.com").',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: request.kind,
+      projectName: request.projectName,
+      userEmail: request.userEmail,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "upsert_instruction") {
+    if (!request.key || request.content === null) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'I need an instruction key and a value after "to" (e.g. "Set instruction llm_document_usage to: ...").',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "upsert_instruction",
+      key: request.key,
+      content: request.content,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "upsert_email_template") {
+    if (!request.key || !request.field || request.value === null) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'I need a template key, a field (subject, text, or html), and a value after "to".',
+        ),
+      );
+    }
+    const patch =
+      request.field === "subject"
+        ? { subject: request.value }
+        : request.field === "html"
+          ? { htmlBody: request.value }
+          : { textBody: request.value };
+    const payload: AdminActionPayload = {
+      kind: "upsert_email_template",
+      key: request.key,
+      patch,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "upsert_system_setting") {
+    if (!request.key || request.rawValue === null) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'I need a setting key and a value after "to" (e.g. "Set setting email.admin_bcc.enabled to true").',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "upsert_system_setting",
+      key: request.key,
+      valueJson: adminExecutorInternals.parseSettingValue(request.rawValue),
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
   }
 
   return null;
@@ -797,6 +1534,30 @@ function ensureSenderRecipient(recipients: string[], senderEmail: string): strin
   return [normalizedSender, ...normalized];
 }
 
+function buildEscalationProjectSummary(projectState: {
+  projectName?: string;
+  summary: string;
+  currentStatus: string;
+  goals: string[];
+  actionItems: string[];
+  decisions: string[];
+  risks: string[];
+  recommendations: string[];
+}): string {
+  return [
+    projectState.projectName ? `Project: ${projectState.projectName}` : null,
+    projectState.summary.trim() ? `Summary: ${projectState.summary.trim()}` : null,
+    projectState.currentStatus.trim() ? `Current Status: ${projectState.currentStatus.trim()}` : null,
+    projectState.goals.length > 0 ? `Goals: ${projectState.goals.join("; ")}` : null,
+    projectState.actionItems.length > 0 ? `Tasks: ${projectState.actionItems.join("; ")}` : null,
+    projectState.decisions.length > 0 ? `Decisions: ${projectState.decisions.join("; ")}` : null,
+    projectState.risks.length > 0 ? `Risks: ${projectState.risks.join("; ")}` : null,
+    projectState.recommendations.length > 0 ? `Recommendations: ${projectState.recommendations.join("; ")}` : null,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
 export async function processInboundEmail(event: NormalizedEmailEvent): Promise<InboundProcessingResult> {
   const repo = new MemoryRepository();
   const inserted = await repo.registerInboundEvent(event.provider, event.providerEventId, event as unknown as Record<string, unknown>);
@@ -807,6 +1568,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const senderIsMaster = senderNormalized === masterEmail;
   const adminRequest = senderIsMaster ? parseAdminRequest(event.rawBody) : null;
   const pendingAdminAction = senderIsMaster ? await repo.findLatestPendingAdminAction(user.id) : null;
+  const pendingHumanApproval = await repo.findLatestPendingApproval(senderNormalized);
 
   if (!inserted && senderIsMaster && (adminRequest || pendingAdminAction)) {
     return {
@@ -819,6 +1581,64 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
         projectId: null,
         eventId: event.eventId,
         duplicate: true,
+      },
+    };
+  }
+
+  if (pendingHumanApproval) {
+    const approvalDecision = parseApprovalDecision(event.rawBody);
+    if (approvalDecision) {
+      await repo.resolvePendingApproval({
+        approvalId: pendingHumanApproval.id,
+        status: approvalDecision === "approve" ? "approved" : "rejected",
+        resolvedByEmail: event.from,
+      });
+
+      const label = pendingHumanApproval.action.trim().replace(/_/g, " ");
+      const approvalReply: AdminReply = {
+        subject: `Re: Approval requested: ${label[0]?.toUpperCase() ?? ""}${label.slice(1)}`,
+        text: [
+          `Approval ${approvalDecision} recorded.`,
+          "",
+          `Action: ${label}`,
+          `Reason: ${pendingHumanApproval.reason}`,
+          "",
+          "-- Frank",
+        ].join("\n"),
+        html: [
+          `<p>Approval <strong>${approvalDecision}</strong> recorded.</p>`,
+          `<p><strong>Action:</strong> ${label}<br>`,
+          `<strong>Reason:</strong> ${pendingHumanApproval.reason}</p>`,
+          "<p>&mdash; Frank</p>",
+        ].join(""),
+      };
+
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: approvalReply,
+        context: {
+          userId: user.id,
+          projectId: pendingHumanApproval.project_id,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildApprovalWaitReply(pendingHumanApproval.action, pendingHumanApproval.reason),
+      context: {
+        userId: user.id,
+        projectId: pendingHumanApproval.project_id,
+        eventId: event.eventId,
+        duplicate: false,
       },
     };
   }
@@ -970,6 +1790,87 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
 
   const rpmStructuredMode = role === "rpm" && !projectCreatedThisInbound;
+  const escalationBlock = parseEscalationBlock(contentEvent.rawBody);
+  if (escalationBlock) {
+    const escalationRpmEmail = activeRpmEmail ?? getMasterUserEmail();
+    const escalationProjectSummary = buildEscalationProjectSummary(accessState);
+
+    if (escalationBlock.type === "RPM") {
+      const { notification } = await escalateToRPM(repo, {
+        projectId: project.id,
+        rpmEmail: escalationRpmEmail,
+        reason: escalationBlock.reason,
+        projectSummary: escalationProjectSummary,
+        senderEmail: event.from,
+      });
+      return {
+        recipients: notification.recipients,
+        payload: undefined,
+        outboundMode: "escalation",
+        rpmProfileProposal: null,
+        escalationAction: {
+          type: "RPM",
+          notification,
+        },
+        context: {
+          userId: user.id,
+          projectId: project.id,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    if (escalationBlock.type === "Review") {
+      await flagForReview(repo, {
+        projectId: project.id,
+        reason: escalationBlock.reason,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "escalation",
+        rpmProfileProposal: null,
+        escalationAction: {
+          type: "Review",
+        },
+        context: {
+          userId: user.id,
+          projectId: project.id,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    const { approval, notification } = await requestHumanApproval(repo, {
+      projectId: project.id,
+      rpmEmail: escalationRpmEmail,
+      action: "hire_developer",
+      reason: escalationBlock.reason,
+      projectSummary: escalationProjectSummary,
+      senderEmail: event.from,
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return {
+      recipients: notification.recipients,
+      payload: undefined,
+      outboundMode: "escalation",
+      rpmProfileProposal: null,
+      escalationAction: {
+        type: "Approval",
+        notification,
+        approvalId: approval.id,
+      },
+      context: {
+        userId: user.id,
+        projectId: project.id,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
 
   const requestedProjectName = normalizeProjectNameCandidate(contentEvent.parsed.projectName || "");
   const currentProjectName = normalizeProjectNameCandidate(project.name || "");
@@ -1189,6 +2090,14 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   }
   if (!rpmStructuredMode || contentEvent.parsed.projectSectionPresence.recommendations) {
     await repo.updateRecommendations(project.id, contentEvent.parsed.recommendations);
+  }
+  const parsedFollowUps = contentEvent.parsed.followUps ?? [];
+  if (parsedFollowUps.length > 0) {
+    await repo.storeFollowUps(project.id, parsedFollowUps, event.eventId);
+    await repo.appendRecentUpdate(
+      project.id,
+      `Follow-up(s) added: ${parsedFollowUps.map((item) => item.action).join("; ")}`,
+    );
   }
   const rpmCorrectionNotes =
     role === "rpm" && contentEvent.parsed.correction?.trim()

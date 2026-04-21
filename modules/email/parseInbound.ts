@@ -1,11 +1,13 @@
 import type {
   NormalizedEmailEvent,
+  ProjectFollowUp,
   ProjectSectionPresence,
   ProjectStatus,
   TransactionEvent,
   TransactionRateCurrency,
 } from "@/modules/contracts/types";
 import { cleanOverviewText } from "@/modules/domain/overviewCleaning";
+import { resolveFollowUpDueDate } from "@/modules/domain/followUps";
 import { mergeUniqueStringsPreserveOrder } from "@/modules/domain/mergeUniqueStrings";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { filterIgnoredNoteLines, isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
@@ -33,6 +35,9 @@ const MEMORY_SECTION_LABELS = [
   "Summary",
   "Recommendations",
   "Notes",
+  "FollowUp",
+  "Follow Up",
+  "Follow Ups",
 ] as const;
 
 const SPECIAL_SECTION_LABELS = [
@@ -380,6 +385,79 @@ function parseSummaryBlock(sectionText: string): string | null {
   return cleanOverviewText(trimmed);
 }
 
+function parseFollowUpsBlock(sectionText: string, timestamp: string): ProjectFollowUp[] {
+  const normalized = stripMarkdownBold(sectionText).trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const followUps: ProjectFollowUp[] = [];
+  const lines = normalized.split("\n");
+  let current: { action: string; target: string; whenText: string } | null = null;
+
+  const pushCurrent = () => {
+    if (!current?.action.trim()) {
+      current = null;
+      return;
+    }
+
+    const action = current.action.trim();
+    const target = current.target.trim();
+    const whenText = current.whenText.trim();
+    followUps.push({
+      action,
+      target,
+      whenText,
+      dueDate: resolveFollowUpDueDate(whenText, timestamp),
+      status: "pending",
+    });
+    current = null;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const bulletFree = trimmed.replace(/^\s*[-*+]\s+/, "").trim();
+    const match = bulletFree.match(/^(Action|Target|When)\s*:\s*(.*)$/i);
+    if (!match?.[1]) {
+      continue;
+    }
+
+    const key = match[1].toLowerCase();
+    const value = match[2].trim();
+
+    if (key === "action") {
+      pushCurrent();
+      current = {
+        action: value,
+        target: "",
+        whenText: "",
+      };
+      continue;
+    }
+
+    if (!current) {
+      current = {
+        action: "",
+        target: "",
+        whenText: "",
+      };
+    }
+
+    if (key === "target") {
+      current.target = value;
+    } else if (key === "when") {
+      current.whenText = value;
+    }
+  }
+
+  pushCurrent();
+  return followUps;
+}
+
 export function buildProjectSectionPresence(normalizedContent: string): ProjectSectionPresence {
   return {
     goals: hasSectionHeading(normalizedContent, "Goals"),
@@ -391,6 +469,10 @@ export function buildProjectSectionPresence(normalizedContent: string): ProjectS
     summary: hasSectionHeading(normalizedContent, "Summary"),
     recommendations: hasSectionHeading(normalizedContent, "Recommendations"),
     notes: hasSectionHeading(normalizedContent, "Notes"),
+    followUps:
+      hasSectionHeading(normalizedContent, "FollowUp") ||
+      hasSectionHeading(normalizedContent, "Follow Up") ||
+      hasSectionHeading(normalizedContent, "Follow Ups"),
   };
 }
 
@@ -404,7 +486,8 @@ export function hasAnyProjectMemoryPresence(p: ProjectSectionPresence): boolean 
     p.risks ||
     p.summary ||
     p.recommendations ||
-    p.notes
+    p.notes ||
+    p.followUps
   );
 }
 
@@ -837,7 +920,7 @@ export function detectPaymentReceivedAck(normalizedContent: string, transactionE
   return /^paid\.?$/i.test(lines[0]);
 }
 
-export function parseNormalizedContent(content: string) {
+export function parseNormalizedContent(content: string, options?: { timestamp?: string }) {
   const normalizedContent = normalizeSectionHeadings(content);
   const projectSectionPresence = buildProjectSectionPresence(normalizedContent);
   const projectStatus = normalizeProjectStatus(
@@ -853,6 +936,12 @@ export function parseNormalizedContent(content: string) {
   const risksFromSingular = dedupeListValues(toBulletList(extractSection(normalizedContent, "Risk")));
   const risks = mergeUniqueStringsPreserveOrder(risksFromPlural, risksFromSingular);
   const recommendations = dedupeListValues(toBulletList(extractSection(normalizedContent, "Recommendations")));
+  const followUps = parseFollowUpsBlock(
+    extractSection(normalizedContent, "FollowUp") ||
+      extractSection(normalizedContent, "Follow Up") ||
+      extractSection(normalizedContent, "Follow Ups"),
+    options?.timestamp ?? new Date().toISOString(),
+  );
   const summarySectionRaw = extractSection(normalizedContent, "Summary");
   const summaryFromSection = parseSummaryBlock(summarySectionRaw);
   const notesSection = filterIgnoredNoteLines(dedupeListValues(toBulletList(extractSection(normalizedContent, "Notes"))));
@@ -878,6 +967,7 @@ export function parseNormalizedContent(content: string) {
     decisions.length > 0 ||
     risks.length > 0 ||
     recommendations.length > 0 ||
+    followUps.length > 0 ||
     Boolean(summaryFromSection) ||
     notesSection.length > 0 ||
     Boolean(userProfileContext) ||
@@ -916,6 +1006,7 @@ export function parseNormalizedContent(content: string) {
     risks,
     recommendations,
     notes,
+    followUps,
     userProfileContext: userProfileContext || null,
     rpmSuggestion: rpmSuggestionContent
       ? {
@@ -1049,7 +1140,7 @@ export function parseInbound(payload: unknown, provider = "generic"): Normalized
   const cc = normalizeRecipientList(source.cc);
   const timestamp = extractEventTimestamp(root, source);
   const providerEventId = messageId || stableProviderEventId(provider, senderEmail, subject, cleanedBody);
-  const parsed = parseNormalizedContent(cleanedBody);
+  const parsed = parseNormalizedContent(cleanedBody, { timestamp });
   const attachments = extractInboundAttachments(root, source);
 
   if (parsed.rpmSuggestion) {

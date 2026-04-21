@@ -147,6 +147,43 @@ describe("handleInboundEmailEvent", () => {
     );
   });
 
+  it("records escalation email audits without sending a project update", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["rpm@example.com"],
+      outboundMode: "escalation",
+      rpmProfileProposal: null,
+      escalationAction: {
+        type: "RPM",
+        notification: {
+          recipients: ["rpm@example.com"],
+          subject: "Escalation: User needs help",
+          text: "Reason: User is unsure about next steps",
+        },
+      },
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_escalation",
+        duplicate: false,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    const response = await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(response).toMatchObject({ userId: "u1", projectId: "p1", duplicate: false });
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "p1",
+        userId: "u1",
+        kind: "escalation-rpm",
+        status: "sent",
+        recipientCount: 1,
+      }),
+    );
+  });
+
   it("sends payment instructions after project email when paymentInstructions is present", async () => {
     const result: InboundProcessingResult = {
       recipients: ["owner@example.com"],

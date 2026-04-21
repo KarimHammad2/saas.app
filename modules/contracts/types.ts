@@ -120,6 +120,7 @@ export interface ProjectContext {
   risks: string[];
   recommendations: string[];
   notes: string[];
+  followUps?: ProjectFollowUp[];
   /** Emails on this project thread (from/to/cc), excluding the system inbox address. */
   participants: string[];
   /** Dated lines for ## Recent Updates in the LLM project file. */
@@ -171,6 +172,7 @@ export interface ProjectSectionPresence {
   summary: boolean;
   recommendations: boolean;
   notes: boolean;
+  followUps: boolean;
 }
 
 export const EMPTY_PROJECT_SECTION_PRESENCE: ProjectSectionPresence = {
@@ -183,7 +185,19 @@ export const EMPTY_PROJECT_SECTION_PRESENCE: ProjectSectionPresence = {
   summary: false,
   recommendations: false,
   notes: false,
+  followUps: false,
 };
+
+export interface ProjectFollowUp {
+  id?: string;
+  projectId?: string;
+  action: string;
+  target: string;
+  whenText: string;
+  dueDate: string | null;
+  status: "pending" | "done";
+  createdAt?: string;
+}
 
 export interface NormalizedEmailEvent {
   eventId: string;
@@ -218,6 +232,7 @@ export interface NormalizedEmailEvent {
     risks: string[];
     recommendations: string[];
     notes: string[];
+    followUps?: ProjectFollowUp[];
     userProfileContext: string | null;
     rpmSuggestion: {
       content: string;

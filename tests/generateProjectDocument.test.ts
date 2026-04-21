@@ -76,6 +76,7 @@ describe("generateProjectDocument", () => {
       "### Completed",
       "## Risks",
       "## Decisions",
+      "## Follow Ups",
       "## Notes",
       "## Recent Updates",
       "## Pending Suggestions",
@@ -113,10 +114,39 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("### Completed\n\n(none)");
     expect(content).toContain("## Risks");
     expect(content).toContain("## Decisions");
+    expect(content).toContain("## Follow Ups");
     expect(content).toContain("## Notes");
     expect(content).toContain("## Recent Updates");
     expect(content).toContain("## Pending Suggestions");
     expect(content.match(/\(none\)/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
+  });
+
+  it("renders follow ups with absolute dates and raw when text", () => {
+    const payload = buildPayload();
+    payload.context.followUps = [
+      {
+        action: "Follow up with John about API access",
+        target: "John",
+        whenText: "Tomorrow",
+        dueDate: "2026-04-22",
+        status: "pending",
+      },
+      {
+        action: "Send project update email",
+        target: "Client",
+        whenText: "Friday",
+        dueDate: "2026-04-25",
+        status: "pending",
+      },
+    ];
+
+    const content = generateProjectDocument(payload);
+    expect(content).toContain("## Follow Ups");
+    expect(content).toContain("- [2026-04-22] Follow up with John about API access (Target: John, When: Tomorrow)");
+    expect(content).toContain("- [2026-04-25] Send project update email (Target: Client, When: Friday)");
+    expect(content.indexOf("Follow up with John about API access")).toBeLessThan(
+      content.indexOf("Send project update email"),
+    );
   });
 
   it("falls back to initialSummary when the current summary is empty", () => {

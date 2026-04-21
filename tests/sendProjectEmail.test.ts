@@ -109,6 +109,10 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content?.indexOf("Project Name:")).toBeLessThan(attachment?.content?.indexOf("Last Contact:") ?? -1);
     expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Instructions to LLM");
+    expect(attachment?.content).toContain("## Escalation & Human Involvement");
+    expect(attachment?.content).toContain("Type: RPM | Review | Approval");
+    expect(attachment?.content).toContain("## Follow-up & Communication");
+    expect(attachment?.content).toContain("FollowUp:");
     expect(attachment?.content).toContain("Project Status:");
     expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Goals");
@@ -307,6 +311,31 @@ describe("sendProjectEmail", () => {
     const { validateProjectDocumentForAttachment } = await import("@/modules/output/sendProjectEmail");
     expect(() => validateProjectDocumentForAttachment("# PROJECT FILE\n\nbroken")).toThrow(
       "Generated project document is missing required section: ## Project Metadata",
+    );
+  });
+
+  it("requires a Follow Ups heading in the attached document", async () => {
+    const { validateProjectDocumentForAttachment } = await import("@/modules/output/sendProjectEmail");
+    const document = [
+      "# PROJECT FILE",
+      "## Project Metadata",
+      "## User Profile Context",
+      "## Instructions to LLM",
+      "## Summary",
+      "## Project Overview",
+      "## Goals",
+      "## Tasks",
+      "### In Progress",
+      "### Completed",
+      "## Risks",
+      "## Decisions",
+      "## Notes",
+      "## Recent Updates",
+      "## Pending Suggestions",
+    ].join("\n\n");
+
+    expect(() => validateProjectDocumentForAttachment(document)).toThrow(
+      "Generated project document is missing required section: ## Follow Ups",
     );
   });
 });

@@ -1,4 +1,5 @@
 import type { ProjectContext, TransactionRecord, UserProfileContext } from "@/modules/contracts/types";
+import { formatFollowUpDisplayLine } from "@/modules/domain/followUps";
 import { formatMoneyAmountForEmail } from "@/modules/output/checkoutCurrencyDisplay";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
@@ -32,6 +33,37 @@ When interacting with the user:
 Conversation boundary:
  - This conversation should remain centered on the project in this file.
  - If the user changes the subject to something unrelated, briefly redirect them back to the project and ask what they want to update, decide, or solve next.
+
+### Escalation & Human Involvement
+
+If a situation requires human involvement, use:
+
+Escalation:
+Type: RPM | Review | Approval
+Reason: <clear explanation>
+
+Guidelines:
+
+ - Use RPM when the user needs direct human help
+ - Use Review when something seems incorrect or inconsistent
+ - Use Approval when a decision requires authorization
+ - Always include a clear reason
+
+Important:
+
+ - Do NOT assume escalation is resolved
+ - Only signal it, the system will handle the rest
+
+### Follow-up & Communication
+
+When a follow-up or reminder is needed, use:
+
+FollowUp:
+ - Action:
+ - Target:
+ - When:
+
+Keep it simple and actionable.
 
 Keeping Frank updated:
 
@@ -200,6 +232,33 @@ function formatPendingSuggestions(payload: ProjectEmailPayload): string {
   return lines.length > 0 ? lines.join("\n") : "(none)";
 }
 
+function formatFollowUpsMarkdown(context: ProjectContext): string {
+  const pending = (context.followUps ?? [])
+    .filter((followUp) => followUp.status === "pending")
+    .map((followUp) => ({
+      action: followUp.action.trim(),
+      target: followUp.target.trim(),
+      whenText: followUp.whenText.trim(),
+      dueDate: followUp.dueDate?.trim() || null,
+    }))
+    .filter((followUp) => followUp.action.length > 0);
+
+  if (pending.length === 0) {
+    return "(none)";
+  }
+
+  pending.sort((a, b) => {
+    const aKey = a.dueDate ?? "9999-12-31";
+    const bKey = b.dueDate ?? "9999-12-31";
+    if (aKey !== bKey) {
+      return aKey.localeCompare(bKey);
+    }
+    return a.action.localeCompare(b.action);
+  });
+
+  return pending.map((followUp) => formatFollowUpDisplayLine(followUp)).join("\n");
+}
+
 function appendRecordBullets(label: string, rec: Record<string, unknown>, lines: string[]): number {
   let added = 0;
   for (const [k, v] of Object.entries(rec)) {
@@ -366,6 +425,7 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
   const goalsBlock = formatBulletSection(context.goals, "(none)");
   const decisionsBlock = formatBulletSection(context.decisions, "(none)");
   const risksBlock = formatBulletSection(context.risks, "(none)");
+  const followUpsBlock = formatFollowUpsMarkdown(context);
   const notesBlock = formatBulletSection(context.notes, "(none)");
 
   const tasksIncomplete = formatTasksInProgress(context.actionItems);
@@ -447,6 +507,10 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     "Project Status:",
     `- ${projectStatus}`,
+    "",
+    "## Follow Ups",
+    "",
+    followUpsBlock,
     "",
     "---",
     "",

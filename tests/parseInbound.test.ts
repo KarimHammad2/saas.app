@@ -650,4 +650,27 @@ describe("parseNormalizedContent extended project sections", () => {
     expect(p.projectSectionPresence.summary).toBe(true);
     expect(p.projectSectionPresence.recommendations).toBe(true);
   });
+
+  it("parses FollowUp blocks and resolves relative dates from the inbound timestamp", () => {
+    const raw = `
+FollowUp:
+- Action: Follow up with John about API access
+- Target: John
+- When: Tomorrow
+`;
+    const p = parseNormalizedContent(raw, {
+      timestamp: "2026-04-21T12:00:00.000Z",
+    });
+
+    expect(p.followUps).toEqual([
+      {
+        action: "Follow up with John about API access",
+        target: "John",
+        whenText: "Tomorrow",
+        dueDate: "2026-04-22",
+        status: "pending",
+      },
+    ]);
+    expect(p.projectSectionPresence.followUps).toBe(true);
+  });
 });

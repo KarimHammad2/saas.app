@@ -297,8 +297,11 @@ function inferKickoffProjectDomain(event: NormalizedEmailEvent): ProjectDomain {
 export function buildKickoffSummary(event: NormalizedEmailEvent, projectId: string): KickoffSummary {
   const variant = stableVariantIndex(projectId) as PlaybookVariant;
   const projectDomain = inferKickoffProjectDomain(event);
-  const baseOverview = cleanOverviewText(event.parsed.summary || event.rawBody);
   const seedMatch = extractKickoffSeed(event.rawBody);
+  // For large free-form emails, the seed's source paragraph is a much better
+  // overview base than the full raw body (which is dominated by greeting/intro).
+  const overviewSource = event.parsed.summary || seedMatch.sourceParagraph || event.rawBody;
+  const baseOverview = cleanOverviewText(overviewSource);
   const seed = seedMatch.seed;
   const seedSentence = seed ? cleanOverviewText(`Project focus: ${seed}.`) : "";
   const shouldAppendBaseOverview =

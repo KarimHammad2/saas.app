@@ -67,6 +67,25 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
   if (!result.context.duplicate) {
     const repo = new MemoryRepository();
     const payload = result.payload;
+    if (result.escalationAction) {
+      if (result.escalationAction.notification) {
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: result.escalationAction.type === "Approval" ? "approval-request" : "escalation-rpm",
+          provider: event.provider,
+          status: "sent",
+          recipientCount: result.escalationAction.notification.recipients.length,
+        });
+      }
+      return {
+        userId: result.context.userId,
+        projectId: result.context.projectId,
+        duplicate: result.context.duplicate,
+        clarificationSent: false,
+      };
+    }
     if (!result.adminReply && !payload) {
       throw new Error("Missing project payload for non-admin inbound response.");
     }

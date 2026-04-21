@@ -3,6 +3,7 @@ import { getSupabaseAdminClient } from "@/lib/supabase";
 import type {
   CommunicationStyleContext,
   ProjectContext,
+  ProjectFollowUp,
   ProjectDomain,
   ProjectStatus,
   RPMSuggestion,
@@ -24,6 +25,7 @@ import { parseSowSignalsFromUnknown } from "@/modules/domain/sowSignalsPatch";
 import { normalizeMessageId } from "@/modules/email/messageId";
 import { isIgnoredNoteInput } from "@/modules/email/noteInputValidation";
 import { resolvePlanEntitlements } from "@/modules/domain/entitlements";
+import { normalizeFollowUpKey } from "@/modules/domain/followUps";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import { normalizeTaskMatchKey } from "@/modules/domain/taskLabels";
 import { parseStoredProjectDomain } from "@/modules/domain/projectDomain";
@@ -62,6 +64,7 @@ export interface ProjectRecord {
   usage_count: number;
   kickoff_completed_at: string | null;
   last_contact_at: string | null;
+  archived_at?: string | null;
   created_at: string;
   created_by_email?: string | null;
   created_by_user_id?: string | null;
@@ -97,6 +100,39 @@ export interface AdminEmailActionRecord {
   action_kind: string;
   action_payload: Record<string, unknown>;
   status: "pending" | "executed" | "expired";
+  source_subject: string;
+  source_raw_body: string;
+  resolved_by_email: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export interface EscalationLogRecord {
+  id: string;
+  project_id: string | null;
+  type: string;
+  reason: string;
+  created_at: string;
+}
+
+export interface ReviewFlagRecord {
+  id: string;
+  project_id: string;
+  reason: string;
+  status: "pending_review" | "resolved";
+  resolved_by_email: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export interface PendingApprovalRecord {
+  id: string;
+  action: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  rpm_email: string;
+  project_id: string | null;
+  requested_by_email: string | null;
   source_subject: string;
   source_raw_body: string;
   resolved_by_email: string | null;
@@ -344,6 +380,17 @@ type TransactionSelectRow = {
   status: string | null;
 };
 
+type FollowUpSelectRow = {
+  id: string;
+  project_id: string;
+  action: string;
+  target: string;
+  when_text: string;
+  due_date: string | null;
+  status: string;
+  created_at: string;
+};
+
 function normalizeTransactionPaymentStatus(raw: string | null | undefined): TransactionRecord["paymentStatus"] {
   if (raw === "paid" || raw === "cancelled" || raw === "pending_payment") {
     return raw;
@@ -375,7 +422,7 @@ function mapTransactionRowToRecord(row: TransactionSelectRow): TransactionRecord
 }
 
 const PROJECT_SELECT_COLUMNS =
-  "id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, last_contact_at, created_at";
+  "id, user_id, owner_email, name, status, project_code, remainder_balance, reminder_balance, usage_count, kickoff_completed_at, last_contact_at, archived_at, created_at";
 const PROJECT_SELECT_COLUMNS_WITH_CREATOR = `${PROJECT_SELECT_COLUMNS}, created_by_email, created_by_user_id`;
 
 export class MemoryRepository {
@@ -943,6 +990,111 @@ export class MemoryRepository {
 
     if (error) {
       throw new Error(`Failed to resolve admin email action: ${error.message}`);
+    }
+  }
+
+  async createEscalationLog(input: {
+    projectId?: string | null;
+    type: string;
+    reason: string;
+  }): Promise<EscalationLogRecord> {
+    const { data, error } = await this.supabase
+      .from("escalation_logs")
+      .insert({
+        project_id: input.projectId ?? null,
+        type: input.type,
+        reason: input.reason,
+      })
+      .select("id, project_id, type, reason, created_at")
+      .single<EscalationLogRecord>();
+    if (error || !data) {
+      throw new Error(`Failed to create escalation log: ${error?.message ?? "Unknown error"}`);
+    }
+    return data;
+  }
+
+  async createReviewFlag(input: { projectId: string; reason: string }): Promise<ReviewFlagRecord> {
+    const { data, error } = await this.supabase
+      .from("review_flags")
+      .insert({
+        project_id: input.projectId,
+        reason: input.reason,
+        status: "pending_review",
+      })
+      .select("id, project_id, reason, status, resolved_by_email, resolved_at, created_at")
+      .single<ReviewFlagRecord>();
+    if (error || !data) {
+      throw new Error(`Failed to create review flag: ${error?.message ?? "Unknown error"}`);
+    }
+    return data;
+  }
+
+  async createPendingApproval(input: {
+    action: string;
+    reason: string;
+    status: "pending";
+    rpmEmail: string;
+    projectId?: string | null;
+    requestedByEmail?: string | null;
+    sourceSubject?: string;
+    sourceRawBody?: string;
+  }): Promise<PendingApprovalRecord> {
+    const { data, error } = await this.supabase
+      .from("pending_human_approvals")
+      .insert({
+        action: input.action,
+        reason: input.reason,
+        status: input.status,
+        rpm_email: input.rpmEmail,
+        project_id: input.projectId ?? null,
+        requested_by_email: input.requestedByEmail ?? null,
+        source_subject: input.sourceSubject ?? "",
+        source_raw_body: input.sourceRawBody ?? "",
+      })
+      .select(
+        "id, action, reason, status, rpm_email, project_id, requested_by_email, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .single<PendingApprovalRecord>();
+    if (error || !data) {
+      throw new Error(`Failed to create pending approval: ${error?.message ?? "Unknown error"}`);
+    }
+    return data;
+  }
+
+  async findLatestPendingApproval(rpmEmail: string): Promise<PendingApprovalRecord | null> {
+    const normalized = normalizeEmail(rpmEmail);
+    const { data, error } = await this.supabase
+      .from("pending_human_approvals")
+      .select(
+        "id, action, reason, status, rpm_email, project_id, requested_by_email, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .eq("rpm_email", normalized)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<PendingApprovalRecord>();
+    if (error) {
+      throw new Error(`Failed to load pending human approval: ${error.message}`);
+    }
+    return data ?? null;
+  }
+
+  async resolvePendingApproval(input: {
+    approvalId: string;
+    status: "approved" | "rejected" | "expired";
+    resolvedByEmail: string;
+  }): Promise<void> {
+    const { error } = await this.supabase
+      .from("pending_human_approvals")
+      .update({
+        status: input.status,
+        resolved_by_email: normalizeEmail(input.resolvedByEmail),
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", input.approvalId)
+      .eq("status", "pending");
+    if (error) {
+      throw new Error(`Failed to resolve pending approval: ${error.message}`);
     }
   }
 
@@ -1516,6 +1668,75 @@ export class MemoryRepository {
 
     if (error) {
       throw new Error(`Failed to create project update: ${error.message}`);
+    }
+  }
+
+  async storeFollowUps(
+    projectId: string,
+    followUps: ProjectFollowUp[],
+    sourceInboundEventId?: string | null,
+  ): Promise<void> {
+    const normalized = followUps
+      .map((followUp) => ({
+        action: followUp.action.replace(/\s+/g, " ").trim(),
+        target: followUp.target.replace(/\s+/g, " ").trim(),
+        whenText: followUp.whenText.replace(/\s+/g, " ").trim(),
+        dueDate: followUp.dueDate ?? null,
+        status: followUp.status === "done" ? "done" : "pending",
+      }))
+      .filter((followUp) => followUp.action.length > 0);
+
+    if (normalized.length === 0) {
+      return;
+    }
+
+    const { data: existing, error: fetchError } = await this.supabase
+      .from("followups")
+      .select("action, target, when_text, due_date, status")
+      .eq("project_id", projectId)
+      .eq("status", "pending");
+
+    if (fetchError) {
+      throw new Error(`Failed to read existing follow-ups: ${fetchError.message}`);
+    }
+
+    const existingRows = (existing ?? []) as FollowUpSelectRow[];
+    const seen = new Set<string>(
+      existingRows.map((row) =>
+        normalizeFollowUpKey({
+          action: row.action,
+          target: row.target,
+          whenText: row.when_text,
+          dueDate: row.due_date,
+        }),
+      ),
+    );
+
+    const rows: Array<Record<string, unknown>> = [];
+    for (const followUp of normalized) {
+      const key = normalizeFollowUpKey(followUp);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      rows.push({
+        project_id: projectId,
+        action: followUp.action,
+        target: followUp.target,
+        when_text: followUp.whenText,
+        due_date: followUp.dueDate,
+        status: followUp.status,
+        source_inbound_event_id: sourceInboundEventId ?? null,
+      });
+    }
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const { error } = await this.supabase.from("followups").insert(rows);
+    if (error) {
+      throw new Error(`Failed to store follow-ups: ${error.message}`);
     }
   }
 
@@ -2475,6 +2696,29 @@ export class MemoryRepository {
       mapTransactionRowToRecord(row as TransactionSelectRow),
     );
 
+    const { data: followUps, error: followUpError } = await this.supabase
+      .from("followups")
+      .select("id, project_id, action, target, when_text, due_date, status, created_at")
+      .eq("project_id", projectId)
+      .eq("status", "pending")
+      .order("due_date", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (followUpError) {
+      throw new Error(`Failed to load follow-ups: ${followUpError.message}`);
+    }
+
+    const followUpRecords: ProjectFollowUp[] = (followUps ?? []).map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      action: row.action,
+      target: row.target,
+      whenText: row.when_text,
+      dueDate: row.due_date,
+      status: row.status === "done" ? "done" : "pending",
+      createdAt: row.created_at,
+    }));
+
     const tier = userRow?.tier ?? "freemium";
     const entitlements = resolvePlanEntitlements(tier);
     const projectDomain = parseStoredProjectDomain(project.project_domain ?? undefined);
@@ -2505,6 +2749,7 @@ export class MemoryRepository {
       risks: asStringArray(state?.risks),
       recommendations: asStringArray(state?.recommendations),
       notes: asStringArray(state?.notes),
+      followUps: followUpRecords,
       participants: asStringArray(project?.participant_emails),
       recentUpdatesLog: asStringArray(state?.recent_updates),
       remainderBalance: Number(project.remainder_balance ?? 0),
@@ -2518,6 +2763,356 @@ export class MemoryRepository {
       },
       transactionHistory,
     };
+  }
+
+  /**
+   * Admin project-by-name resolver. Returns matching rows without scoping to the master account,
+   * optionally narrowed to a single owner (by user id). Name comparison is case-insensitive and
+   * whitespace-normalized; archived projects are included so `restore_project` can reach them.
+   */
+  async findProjectsByName(
+    input: { name: string; userId?: string | null },
+  ): Promise<ProjectRecord[]> {
+    const normalized = normalizeProjectNameCandidate(input.name);
+    if (!normalized) {
+      return [];
+    }
+    let query = this.supabase.from("projects").select(PROJECT_SELECT_COLUMNS);
+    if (input.userId) {
+      query = query.eq("user_id", input.userId);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Failed to look up projects by name: ${error.message}`);
+    }
+    const key = normalized.toLowerCase();
+    return ((data ?? []) as ProjectRecord[]).filter(
+      (row) => (normalizeProjectNameCandidate(row.name) ?? "").toLowerCase() === key,
+    );
+  }
+
+  async setProjectArchived(projectId: string, archivedAtIso: string | null): Promise<void> {
+    const { error } = await this.supabase
+      .from("projects")
+      .update({ archived_at: archivedAtIso })
+      .eq("id", projectId);
+    if (error) {
+      throw new Error(`Failed to update project archived_at: ${error.message}`);
+    }
+  }
+
+  async replaceProjectRisks(projectId: string, risks: string[]): Promise<void> {
+    const normalized = risks.map((entry) => entry.trim()).filter(Boolean);
+    const { error } = await this.supabase
+      .from("project_states")
+      .update({ risks: normalized })
+      .eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to replace project risks: ${error.message}`);
+    }
+  }
+
+  async replaceProjectNotes(projectId: string, notes: string[]): Promise<void> {
+    const normalized = notes.map((entry) => entry.trim()).filter(Boolean);
+    const { error } = await this.supabase
+      .from("project_states")
+      .update({ notes: normalized })
+      .eq("project_id", projectId);
+    if (error) {
+      throw new Error(`Failed to replace project notes: ${error.message}`);
+    }
+  }
+
+  async replaceProjectSummary(projectId: string, summary: string): Promise<void> {
+    const compact = compactOverviewForDocument(summary);
+    const { error } = await this.supabase
+      .from("project_states")
+      .upsert({ project_id: projectId, summary: compact }, { onConflict: "project_id" });
+    if (error) {
+      throw new Error(`Failed to replace project summary: ${error.message}`);
+    }
+  }
+
+  async replaceProjectCurrentStatus(projectId: string, status: string): Promise<void> {
+    const trimmed = status.trim();
+    const { error } = await this.supabase
+      .from("project_states")
+      .upsert({ project_id: projectId, current_status: trimmed }, { onConflict: "project_id" });
+    if (error) {
+      throw new Error(`Failed to replace project current status: ${error.message}`);
+    }
+  }
+
+  async listProjectUpdates(
+    projectId: string,
+    limit = 20,
+  ): Promise<Array<{ id: string; createdAt: string; contentPreview: string; senderEmail: string | null }>> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+    const { data, error } = await this.supabase
+      .from("project_updates")
+      .select("id, created_at, content, raw_email")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(safeLimit);
+    if (error) {
+      throw new Error(`Failed to list project updates: ${error.message}`);
+    }
+    return ((data ?? []) as Array<{
+      id: string;
+      created_at: string;
+      content: string | null;
+      raw_email: Record<string, unknown> | null;
+    }>).map((row) => {
+      const content = typeof row.content === "string" ? row.content : "";
+      const preview = content.replace(/\s+/g, " ").trim();
+      const fromValue = row.raw_email && typeof row.raw_email === "object"
+        ? (row.raw_email as Record<string, unknown>).from
+        : null;
+      const senderEmail = typeof fromValue === "string" && fromValue.trim() ? fromValue.trim().toLowerCase() : null;
+      return {
+        id: row.id,
+        createdAt: row.created_at,
+        contentPreview: preview.length > 120 ? `${preview.slice(0, 120)}…` : preview || "(empty)",
+        senderEmail,
+      };
+    });
+  }
+
+  async listOutboundDocumentEvents(
+    projectId: string,
+    limit = 20,
+  ): Promise<Array<{ id: string; createdAt: string; kind: string; status: string; recipientCount: number }>> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+    const { data, error } = await this.supabase
+      .from("outbound_email_events")
+      .select("id, created_at, kind, status, recipient_count")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(safeLimit);
+    if (error) {
+      throw new Error(`Failed to list outbound document events: ${error.message}`);
+    }
+    return ((data ?? []) as Array<{
+      id: string;
+      created_at: string;
+      kind: string;
+      status: string;
+      recipient_count: number | null;
+    }>).map((row) => ({
+      id: row.id,
+      createdAt: row.created_at,
+      kind: row.kind,
+      status: row.status,
+      recipientCount: Number(row.recipient_count ?? 0),
+    }));
+  }
+
+  async listSystemSettings(keyPrefix?: string | null): Promise<Array<{ key: string; valueJson: unknown }>> {
+    let query = this.supabase
+      .from("system_settings")
+      .select("key, value_json")
+      .order("key", { ascending: true });
+    const normalizedPrefix = keyPrefix?.trim();
+    if (normalizedPrefix) {
+      query = query.ilike("key", `${normalizedPrefix.replace(/[%_]/g, "\\$&")}%`);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Failed to list system settings: ${error.message}`);
+    }
+    return ((data ?? []) as Array<{ key: string; value_json: unknown }>).map((row) => ({
+      key: row.key,
+      valueJson: row.value_json,
+    }));
+  }
+
+  async getSystemSetting(key: string): Promise<{ key: string; valueJson: unknown } | null> {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) {
+      return null;
+    }
+    const { data, error } = await this.supabase
+      .from("system_settings")
+      .select("key, value_json")
+      .eq("key", normalizedKey)
+      .maybeSingle<{ key: string; value_json: unknown }>();
+    if (error) {
+      throw new Error(`Failed to read system setting: ${error.message}`);
+    }
+    if (!data) {
+      return null;
+    }
+    return { key: data.key, valueJson: data.value_json };
+  }
+
+  async upsertSystemSetting(key: string, valueJson: unknown): Promise<{ key: string; valueJson: unknown; previous: unknown | null }> {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) {
+      throw new Error("System setting key is required.");
+    }
+    const existing = await this.getSystemSetting(normalizedKey);
+    const { data, error } = await this.supabase
+      .from("system_settings")
+      .upsert(
+        { key: normalizedKey, value_json: valueJson, updated_at: new Date().toISOString() },
+        { onConflict: "key" },
+      )
+      .select("key, value_json")
+      .single<{ key: string; value_json: unknown }>();
+    if (error || !data) {
+      throw new Error(`Failed to upsert system setting: ${error?.message ?? "Unknown error"}`);
+    }
+    return { key: data.key, valueJson: data.value_json, previous: existing?.valueJson ?? null };
+  }
+
+  async listEmailTemplates(
+    key?: string | null,
+  ): Promise<Array<{ key: string; subject: string; textBody: string; htmlBody: string; updatedAt: string }>> {
+    let query = this.supabase
+      .from("email_templates")
+      .select("key, subject, text_body, html_body, updated_at")
+      .order("key", { ascending: true });
+    const normalizedKey = key?.trim();
+    if (normalizedKey) {
+      query = query.eq("key", normalizedKey);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Failed to list email templates: ${error.message}`);
+    }
+    return ((data ?? []) as Array<{
+      key: string;
+      subject: string | null;
+      text_body: string | null;
+      html_body: string | null;
+      updated_at: string;
+    }>).map((row) => ({
+      key: row.key,
+      subject: row.subject ?? "",
+      textBody: row.text_body ?? "",
+      htmlBody: row.html_body ?? "",
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  async upsertEmailTemplate(
+    key: string,
+    patch: { subject?: string; textBody?: string; htmlBody?: string },
+  ): Promise<{
+    key: string;
+    subject: string;
+    textBody: string;
+    htmlBody: string;
+    previous: { subject: string; textBody: string; htmlBody: string } | null;
+  }> {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) {
+      throw new Error("Email template key is required.");
+    }
+    const existingRows = await this.listEmailTemplates(normalizedKey);
+    const existing = existingRows[0] ?? null;
+    const nextRow = {
+      key: normalizedKey,
+      subject: patch.subject ?? existing?.subject ?? "",
+      text_body: patch.textBody ?? existing?.textBody ?? "",
+      html_body: patch.htmlBody ?? existing?.htmlBody ?? "",
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await this.supabase
+      .from("email_templates")
+      .upsert(nextRow, { onConflict: "key" })
+      .select("key, subject, text_body, html_body")
+      .single<{ key: string; subject: string | null; text_body: string | null; html_body: string | null }>();
+    if (error || !data) {
+      throw new Error(`Failed to upsert email template: ${error?.message ?? "Unknown error"}`);
+    }
+    return {
+      key: data.key,
+      subject: data.subject ?? "",
+      textBody: data.text_body ?? "",
+      htmlBody: data.html_body ?? "",
+      previous: existing
+        ? { subject: existing.subject, textBody: existing.textBody, htmlBody: existing.htmlBody }
+        : null,
+    };
+  }
+
+  async listInstructions(
+    key?: string | null,
+  ): Promise<Array<{ key: string; content: string; updatedAt: string }>> {
+    let query = this.supabase
+      .from("instructions")
+      .select("key, content, updated_at")
+      .order("key", { ascending: true });
+    const normalizedKey = key?.trim();
+    if (normalizedKey) {
+      query = query.eq("key", normalizedKey);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Failed to list instructions: ${error.message}`);
+    }
+    return ((data ?? []) as Array<{ key: string; content: string | null; updated_at: string }>).map((row) => ({
+      key: row.key,
+      content: row.content ?? "",
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  async upsertInstruction(
+    key: string,
+    content: string,
+  ): Promise<{ key: string; content: string; previous: string | null }> {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) {
+      throw new Error("Instruction key is required.");
+    }
+    const normalizedContent = content.trim();
+    const existingRows = await this.listInstructions(normalizedKey);
+    const existing = existingRows[0] ?? null;
+    const { data, error } = await this.supabase
+      .from("instructions")
+      .upsert(
+        { key: normalizedKey, content: normalizedContent, updated_at: new Date().toISOString() },
+        { onConflict: "key" },
+      )
+      .select("key, content")
+      .single<{ key: string; content: string | null }>();
+    if (error || !data) {
+      throw new Error(`Failed to upsert instruction: ${error?.message ?? "Unknown error"}`);
+    }
+    return {
+      key: data.key,
+      content: data.content ?? "",
+      previous: existing?.content ?? null,
+    };
+  }
+
+  async recordAdminAuditLog(input: {
+    adminActionId?: string | null;
+    actorEmail: string;
+    actionKind: string;
+    entityType: string;
+    entityRef: string;
+    beforeJson?: unknown;
+    afterJson?: unknown;
+  }): Promise<void> {
+    const normalizedActor = normalizeEmail(input.actorEmail);
+    if (!isEmail(normalizedActor)) {
+      throw new Error("A valid actor email is required for the admin audit log.");
+    }
+    const { error } = await this.supabase.from("admin_audit_log").insert({
+      admin_action_id: input.adminActionId ?? null,
+      actor_email: normalizedActor,
+      action_kind: input.actionKind,
+      entity_type: input.entityType,
+      entity_ref: input.entityRef,
+      before_json: input.beforeJson ?? null,
+      after_json: input.afterJson ?? null,
+    });
+    if (error) {
+      throw new Error(`Failed to record admin audit log: ${error.message}`);
+    }
   }
 
   async snapshotProjectContext(projectId: string): Promise<void> {
