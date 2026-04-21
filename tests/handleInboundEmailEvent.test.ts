@@ -15,6 +15,7 @@ import {
   sendPdfResubmissionEmail,
   sendRpmStructuredProjectClarificationEmail,
 } from "@/modules/orchestration/sendClarificationEmail";
+import { sendEmail } from "@/modules/email/sendEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
 const { storeOutboundThreadMapping, recordOutboundEmailEvent, updateProjectLastContactAt } = vi.hoisted(() => ({
@@ -55,11 +56,16 @@ vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
   sendRpmStructuredProjectClarificationEmail: vi.fn(),
 }));
 
+vi.mock("@/modules/email/sendEmail", () => ({
+  sendEmail: vi.fn(),
+}));
+
 const mockedProcessInboundEmail = vi.mocked(processInboundEmail);
 const mockedSendProjectEmail = vi.mocked(sendProjectEmail);
 const mockedSendPaymentInstructionsEmail = vi.mocked(sendPaymentInstructionsEmail);
 const mockedSendPaymentConfirmedEmail = vi.mocked(sendPaymentConfirmedEmail);
 const mockedSendRpmProfileProposalEmail = vi.mocked(sendRpmProfileProposalEmail);
+const mockedSendEmail = vi.mocked(sendEmail);
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
 const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
 const mockedSendCcMembershipConfirmationEmail = vi.mocked(sendCcMembershipConfirmationEmail);
@@ -72,6 +78,7 @@ describe("handleInboundEmailEvent", () => {
     mockedSendPaymentInstructionsEmail.mockResolvedValue(["payment-instructions-msg-id"]);
     mockedSendPaymentConfirmedEmail.mockResolvedValue(["payment-confirmed-msg-id"]);
     mockedSendRpmProfileProposalEmail.mockResolvedValue({ outboundMessageId: "rpm-proposal-msg-id" });
+    mockedSendEmail.mockResolvedValue(undefined);
   });
 
   it("sends project email for non-duplicate inbound events", async () => {
@@ -647,5 +654,47 @@ describe("handleInboundEmailEvent", () => {
         recipientCount: 1,
       }),
     );
+  });
+
+  it("sends admin replies directly to Daniel", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["daniel@saassquared.com"],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: {
+        subject: "Re: Admin",
+        text: "Admin Menu",
+        html: "<p>Admin Menu</p>",
+      },
+      context: {
+        userId: "u-admin",
+        projectId: null,
+        eventId: "evt_admin",
+        duplicate: false,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(mockedSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "daniel@saassquared.com",
+        subject: "Re: Admin",
+        text: "Admin Menu",
+        html: "<p>Admin Menu</p>",
+        allowMasterUserAsDirectRecipient: true,
+      }),
+    );
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "admin-response",
+        status: "sent",
+        projectId: null,
+        userId: "u-admin",
+      }),
+    );
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
   });
 });

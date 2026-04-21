@@ -90,6 +90,20 @@ export interface CcMembershipConfirmationRecord {
   created_at: string;
 }
 
+export interface AdminEmailActionRecord {
+  id: string;
+  sender_user_id: string;
+  sender_email: string;
+  action_kind: string;
+  action_payload: Record<string, unknown>;
+  status: "pending" | "executed" | "expired";
+  source_subject: string;
+  source_raw_body: string;
+  resolved_by_email: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
 function emptyProfile(): UserProfileContext {
   return emptyUserProfileContext();
 }
@@ -587,6 +601,40 @@ export class MemoryRepository {
     return { user: createdUser, created: true };
   }
 
+  async findUserByEmail(email: string): Promise<UserRecord | null> {
+    const normalized = normalizeEmail(email);
+    if (!isEmail(normalized)) {
+      return null;
+    }
+
+    const { data, error } = await this.supabase
+      .from("users")
+      .select("id, email, display_name, tier, created_at")
+      .eq("email", normalized)
+      .maybeSingle<UserRecord>();
+
+    if (error) {
+      throw new Error(`Failed to look up user by email: ${error.message}`);
+    }
+
+    return data ?? null;
+  }
+
+  async listUsers(limit = 25): Promise<UserRecord[]> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 25;
+    const { data, error } = await this.supabase
+      .from("users")
+      .select("id, email, display_name, tier, created_at")
+      .order("created_at", { ascending: false })
+      .limit(safeLimit);
+
+    if (error) {
+      throw new Error(`Failed to list users: ${error.message}`);
+    }
+
+    return (data ?? []) as UserRecord[];
+  }
+
   async addAdditionalEmails(userId: string, emails: string[]): Promise<number> {
     const uniqueEmails = Array.from(
       new Set(
@@ -794,6 +842,107 @@ export class MemoryRepository {
       .eq("status", "pending");
     if (error) {
       throw new Error(`Failed to resolve CC membership confirmation: ${error.message}`);
+    }
+  }
+
+  async createOrReusePendingAdminAction(input: {
+    senderUserId: string;
+    senderEmail: string;
+    actionKind: string;
+    actionPayload: Record<string, unknown>;
+    sourceSubject: string;
+    sourceRawBody: string;
+  }): Promise<AdminEmailActionRecord> {
+    const normalizedSender = normalizeEmail(input.senderEmail);
+    if (!isEmail(normalizedSender)) {
+      throw new Error("A valid sender email is required.");
+    }
+
+    await this.supabase
+      .from("admin_email_actions")
+      .update({
+        status: "expired",
+        resolved_by_email: normalizedSender,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("sender_user_id", input.senderUserId)
+      .eq("status", "pending");
+
+    const { data, error } = await this.supabase
+      .from("admin_email_actions")
+      .insert({
+        sender_user_id: input.senderUserId,
+        sender_email: normalizedSender,
+        action_kind: input.actionKind,
+        action_payload: input.actionPayload,
+        status: "pending",
+        source_subject: input.sourceSubject,
+        source_raw_body: input.sourceRawBody,
+      })
+      .select(
+        "id, sender_user_id, sender_email, action_kind, action_payload, status, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .single<AdminEmailActionRecord>();
+
+    if (error || !data) {
+      throw new Error(`Failed to create admin email action: ${error?.message ?? "Unknown error"}`);
+    }
+
+    return {
+      ...data,
+      action_payload:
+        data.action_payload && typeof data.action_payload === "object" && !Array.isArray(data.action_payload)
+          ? (data.action_payload as Record<string, unknown>)
+          : {},
+    };
+  }
+
+  async findLatestPendingAdminAction(senderUserId: string): Promise<AdminEmailActionRecord | null> {
+    const { data, error } = await this.supabase
+      .from("admin_email_actions")
+      .select(
+        "id, sender_user_id, sender_email, action_kind, action_payload, status, source_subject, source_raw_body, resolved_by_email, resolved_at, created_at",
+      )
+      .eq("sender_user_id", senderUserId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<AdminEmailActionRecord>();
+
+    if (error) {
+      throw new Error(`Failed to load pending admin action: ${error.message}`);
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      ...data,
+      action_payload:
+        data.action_payload && typeof data.action_payload === "object" && !Array.isArray(data.action_payload)
+          ? (data.action_payload as Record<string, unknown>)
+          : {},
+    };
+  }
+
+  async resolvePendingAdminAction(input: {
+    actionId: string;
+    status: "executed" | "expired";
+    resolvedByEmail: string;
+  }): Promise<void> {
+    const { error } = await this.supabase
+      .from("admin_email_actions")
+      .update({
+        status: input.status,
+        resolved_by_email: normalizeEmail(input.resolvedByEmail),
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", input.actionId)
+      .eq("status", "pending");
+
+    if (error) {
+      throw new Error(`Failed to resolve admin email action: ${error.message}`);
     }
   }
 

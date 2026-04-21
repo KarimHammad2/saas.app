@@ -82,6 +82,8 @@ const repoState = {
   registerInboundEvent: vi.fn(),
   ensureUserProfileRow: vi.fn(),
   getOrCreateUserByEmail: vi.fn(),
+  findUserByEmail: vi.fn(),
+  listUsers: vi.fn(),
   findProjectByCodeAndUser: vi.fn(),
   findProjectByCode: vi.fn(),
   findProjectByThreadMessageIdForUser: vi.fn(),
@@ -130,6 +132,9 @@ const repoState = {
   createOrReusePendingCcMembershipConfirmation: vi.fn(),
   findLatestPendingCcMembershipConfirmation: vi.fn(),
   resolveCcMembershipConfirmation: vi.fn(),
+  createOrReusePendingAdminAction: vi.fn(),
+  findLatestPendingAdminAction: vi.fn(),
+  resolvePendingAdminAction: vi.fn(),
   findProjectById: vi.fn(),
   assignRpm: vi.fn(),
   applyAgencyTierRpmTransition: vi.fn(),
@@ -157,6 +162,8 @@ vi.mock("@/modules/memory/repository", async () => {
       registerInboundEvent = repoState.registerInboundEvent;
       ensureUserProfileRow = repoState.ensureUserProfileRow;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
+      findUserByEmail = repoState.findUserByEmail;
+      listUsers = repoState.listUsers;
       findProjectByCodeAndUser = repoState.findProjectByCodeAndUser;
       findProjectByCode = repoState.findProjectByCode;
       findProjectByThreadMessageIdForUser = repoState.findProjectByThreadMessageIdForUser;
@@ -205,6 +212,9 @@ vi.mock("@/modules/memory/repository", async () => {
       createOrReusePendingCcMembershipConfirmation = repoState.createOrReusePendingCcMembershipConfirmation;
       findLatestPendingCcMembershipConfirmation = repoState.findLatestPendingCcMembershipConfirmation;
       resolveCcMembershipConfirmation = repoState.resolveCcMembershipConfirmation;
+      createOrReusePendingAdminAction = repoState.createOrReusePendingAdminAction;
+      findLatestPendingAdminAction = repoState.findLatestPendingAdminAction;
+      resolvePendingAdminAction = repoState.resolvePendingAdminAction;
       findProjectById = repoState.findProjectById;
       assignRpm = repoState.assignRpm;
       applyAgencyTierRpmTransition = repoState.applyAgencyTierRpmTransition;
@@ -240,6 +250,8 @@ describe("processInboundEmail", () => {
       },
       created: false,
     });
+    repoState.findUserByEmail.mockResolvedValue(null);
+    repoState.listUsers.mockResolvedValue([]);
     repoState.findProjectByCodeAndUser.mockResolvedValue(null);
     repoState.findProjectByCode.mockResolvedValue(null);
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(null);
@@ -276,6 +288,21 @@ describe("processInboundEmail", () => {
       resolved_at: null,
       created_at: new Date().toISOString(),
     });
+    repoState.createOrReusePendingAdminAction.mockResolvedValue({
+      id: "admin_1",
+      sender_user_id: "u1",
+      sender_email: "daniel@saassquared.com",
+      action_kind: "update_tier",
+      action_payload: {},
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Admin",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValue(null);
+    repoState.resolvePendingAdminAction.mockResolvedValue(undefined);
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
@@ -4335,5 +4362,137 @@ Prefer concise updates.
     const result = await processInboundEmail(event);
     expect(result.context.projectId).toBe("p1");
     expect(result.recipients).toContain("member@example.com");
+  });
+
+  it("returns the admin menu for the master sender without creating a project", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-menu",
+      provider: "resend",
+      providerEventId: "m-admin-menu",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Admin",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.outboundMode).toBe("admin");
+    expect(result.context.projectId).toBeNull();
+    expect(result.adminReply?.text).toContain("Admin Menu");
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+    expect(repoState.findLatestPendingCcMembershipConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("confirms a pending admin tier update and executes it", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce({
+      id: "admin_1",
+      sender_user_id: "u-admin",
+      sender_email: "daniel@saassquared.com",
+      action_kind: "update_tier",
+      action_payload: {
+        userEmail: "john@example.com",
+        tier: "agency",
+      },
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Make john@example.com an agency",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.findUserByEmail.mockResolvedValueOnce({
+      id: "u-target",
+      email: "john@example.com",
+      display_name: null,
+      tier: "freemium",
+      created_at: new Date().toISOString(),
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-confirm",
+      provider: "resend",
+      providerEventId: "m-admin-confirm",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Re: Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "CONFIRM",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(repoState.setUserTier).toHaveBeenCalledWith("u-target", "agency");
+    expect(repoState.applyAgencyTierRpmTransition).toHaveBeenCalledWith("u-target");
+    expect(repoState.resolvePendingAdminAction).toHaveBeenCalledWith({
+      actionId: "admin_1",
+      status: "executed",
+      resolvedByEmail: "daniel@saassquared.com",
+    });
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("john@example.com is now an Agency user");
   });
 });

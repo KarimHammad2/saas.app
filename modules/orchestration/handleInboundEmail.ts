@@ -1,5 +1,7 @@
+import { getDefaultFromEmail } from "@/lib/env";
 import type { NormalizedEmailEvent } from "@/modules/contracts/types";
 import { log } from "@/lib/log";
+import { sendEmail } from "@/modules/email/sendEmail";
 import { MemoryRepository } from "@/modules/memory/repository";
 import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, OutboundEmailDeliveryError } from "@/modules/orchestration/errors";
 import { processInboundEmail } from "@/modules/orchestration/processInboundEmail";
@@ -64,19 +66,41 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
 
   if (!result.context.duplicate) {
     const repo = new MemoryRepository();
-    const withLastContactAt = (payload: typeof result.payload, lastContactAt: string) => ({
-      ...payload,
+    const payload = result.payload;
+    if (!result.adminReply && !payload) {
+      throw new Error("Missing project payload for non-admin inbound response.");
+    }
+    const withLastContactAt = (payloadInput: NonNullable<typeof result.payload>, lastContactAt: string) => ({
+      ...payloadInput,
       context: {
-        ...payload.context,
+        ...payloadInput.context,
         lastContactAt,
       },
     });
     try {
-      const ownerEmail = result.payload.context.ownerEmail?.trim();
-      if (result.outboundMode === "rpm_profile_proposal" && result.rpmProfileProposal && ownerEmail) {
+      const ownerEmail = payload?.context.ownerEmail?.trim();
+      if (result.adminReply) {
+        await sendEmail({
+          to: result.recipients.join(", "),
+          subject: result.adminReply.subject,
+          text: result.adminReply.text,
+          html: result.adminReply.html,
+          allowMasterUserAsDirectRecipient: true,
+          headers: { From: getDefaultFromEmail() },
+        });
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: "admin-response",
+          provider: event.provider,
+          status: "sent",
+          recipientCount: result.recipients.length,
+        });
+      } else if (result.outboundMode === "rpm_profile_proposal" && result.rpmProfileProposal && ownerEmail && payload) {
         const { outboundMessageId } = await sendRpmProfileProposalEmail({
           ownerEmail,
-          context: result.payload.context,
+          context: payload.context,
           suggestion: result.rpmProfileProposal,
         });
         await repo.updateProjectLastContactAt(result.context.projectId);
@@ -95,7 +119,7 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
         const lastContactAt = new Date().toISOString();
         const { outboundMessageIds } = await sendProjectEmail(
           result.recipients,
-          withLastContactAt(result.payload, lastContactAt),
+          withLastContactAt(payload, lastContactAt),
         );
         await repo.updateProjectLastContactAt(result.context.projectId, lastContactAt);
         for (const messageId of outboundMessageIds) {
@@ -180,7 +204,7 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
         projectId: result.context.projectId,
         userId: result.context.userId,
         recipientCount:
-          result.outboundMode === "rpm_profile_proposal" ? 1 : result.recipients.length,
+          result.adminReply ? result.recipients.length : result.outboundMode === "rpm_profile_proposal" ? 1 : result.recipients.length,
         causeMessage,
       });
       try {
@@ -188,11 +212,15 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           projectId: result.context.projectId,
           userId: result.context.userId,
           inboundEventId: result.context.eventId,
-          kind: result.outboundMode === "rpm_profile_proposal" ? "rpm-profile-proposal" : "project-update",
+          kind: result.adminReply
+            ? "admin-response"
+            : result.outboundMode === "rpm_profile_proposal"
+              ? "rpm-profile-proposal"
+              : "project-update",
           provider: event.provider,
           status: "failed",
           recipientCount:
-            result.outboundMode === "rpm_profile_proposal" ? 1 : result.recipients.length,
+            result.adminReply ? result.recipients.length : result.outboundMode === "rpm_profile_proposal" ? 1 : result.recipients.length,
           errorMessage: causeMessage,
         });
       } catch (auditError) {
