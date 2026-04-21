@@ -17,15 +17,17 @@ import {
 } from "@/modules/orchestration/sendClarificationEmail";
 import { handleInboundEmailEvent } from "@/modules/orchestration/handleInboundEmail";
 
-const { storeOutboundThreadMapping, recordOutboundEmailEvent } = vi.hoisted(() => ({
+const { storeOutboundThreadMapping, recordOutboundEmailEvent, updateProjectLastContactAt } = vi.hoisted(() => ({
   storeOutboundThreadMapping: vi.fn(),
   recordOutboundEmailEvent: vi.fn(),
+  updateProjectLastContactAt: vi.fn(),
 }));
 
 vi.mock("@/modules/memory/repository", () => ({
   MemoryRepository: class {
     storeOutboundThreadMapping = storeOutboundThreadMapping;
     recordOutboundEmailEvent = recordOutboundEmailEvent;
+    updateProjectLastContactAt = updateProjectLastContactAt;
   },
 }));
 
@@ -118,9 +120,17 @@ describe("handleInboundEmailEvent", () => {
     const response = await handleInboundEmailEvent({} as never);
 
     expect(response).toMatchObject({ userId: "u1", projectId: "p1", duplicate: false });
-    expect(mockedSendProjectEmail).toHaveBeenCalledWith(result.recipients, result.payload);
+    expect(mockedSendProjectEmail).toHaveBeenCalledWith(
+      result.recipients,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          lastContactAt: expect.any(String),
+        }),
+      }),
+    );
     expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
     expect(storeOutboundThreadMapping).toHaveBeenCalledWith("outbound-test-msg-id", "p1");
+    expect(updateProjectLastContactAt).toHaveBeenCalledWith("p1", expect.any(String));
     expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: "p1",
@@ -272,14 +282,105 @@ describe("handleInboundEmailEvent", () => {
       plainTextBody: "Payment confirmed.\n\nDone.",
     });
     expect(mockedSendProjectEmail).toHaveBeenCalledTimes(2);
-    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(1, result.recipients, result.payload);
-    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(2, result.recipients, result.paymentConfirmed!.followUpProjectPayload);
+    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(
+      1,
+      result.recipients,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          lastContactAt: expect.any(String),
+        }),
+      }),
+    );
+    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(
+      2,
+      result.recipients,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          lastContactAt: expect.any(String),
+        }),
+      }),
+    );
     expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "payment-confirmed", status: "sent" }),
     );
     expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "payment-confirmed-followup", status: "sent" }),
     );
+  });
+
+  it("passes the active RPM through the payment-confirmed outbound flow", async () => {
+    mockedSendProjectEmail
+      .mockResolvedValueOnce({ outboundMessageId: "out-1", outboundMessageIds: ["out-1"] })
+      .mockResolvedValueOnce({ outboundMessageId: "out-follow", outboundMessageIds: ["out-follow"] });
+
+    const basePayload: InboundProcessingResult["payload"] = {
+      context: {
+        projectId: "p1",
+        userId: "u1",
+        projectCode: "pjt-a1b2c3d4",
+        projectStatus: "active",
+        summary: "s",
+        initialSummary: "s",
+        currentStatus: "",
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        participants: [],
+        recentUpdatesLog: [],
+        remainderBalance: 0,
+        reminderBalance: 3,
+        usageCount: 0,
+        tier: "solopreneur",
+        transactionHistory: [],
+        activeRpmEmail: "rpm@example.com",
+      },
+      userProfile: emptyUserProfileContext(),
+      pendingSuggestions: [],
+      nextSteps: [],
+      isWelcome: false,
+      emailKind: "update",
+    };
+
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com", "rpm@example.com"],
+      payload: basePayload,
+      outboundMode: "full",
+      rpmProfileProposal: null,
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_pc_rpm",
+        duplicate: false,
+      },
+      paymentConfirmed: {
+        recipients: ["owner@example.com", "rpm@example.com"],
+        plainTextBody: "Payment confirmed.\n\nDone.",
+        followUpProjectPayload: { ...basePayload, emailKind: "update" },
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(mockedSendPaymentConfirmedEmail).toHaveBeenCalledWith({
+      recipients: ["owner@example.com", "rpm@example.com"],
+      activeRpmEmail: "rpm@example.com",
+      plainTextBody: "Payment confirmed.\n\nDone.",
+    });
+    expect(mockedSendProjectEmail).toHaveBeenNthCalledWith(
+      2,
+      result.recipients,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          lastContactAt: expect.any(String),
+        }),
+      }),
+    );
+    expect(updateProjectLastContactAt).toHaveBeenCalledWith("p1", expect.any(String));
   });
 
   it("does not send project email for duplicate inbound events", async () => {

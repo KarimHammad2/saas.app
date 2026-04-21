@@ -64,6 +64,13 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
 
   if (!result.context.duplicate) {
     const repo = new MemoryRepository();
+    const withLastContactAt = (payload: typeof result.payload, lastContactAt: string) => ({
+      ...payload,
+      context: {
+        ...payload.context,
+        lastContactAt,
+      },
+    });
     try {
       const ownerEmail = result.payload.context.ownerEmail?.trim();
       if (result.outboundMode === "rpm_profile_proposal" && result.rpmProfileProposal && ownerEmail) {
@@ -72,6 +79,7 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           context: result.payload.context,
           suggestion: result.rpmProfileProposal,
         });
+        await repo.updateProjectLastContactAt(result.context.projectId);
         await repo.storeOutboundThreadMapping(outboundMessageId, result.context.projectId);
         await repo.recordOutboundEmailEvent({
           projectId: result.context.projectId,
@@ -84,7 +92,12 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           messageId: outboundMessageId,
         });
       } else {
-        const { outboundMessageIds } = await sendProjectEmail(result.recipients, result.payload);
+        const lastContactAt = new Date().toISOString();
+        const { outboundMessageIds } = await sendProjectEmail(
+          result.recipients,
+          withLastContactAt(result.payload, lastContactAt),
+        );
+        await repo.updateProjectLastContactAt(result.context.projectId, lastContactAt);
         for (const messageId of outboundMessageIds) {
           await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
         }
@@ -103,6 +116,7 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
       if (result.paymentInstructions) {
         const pi = result.paymentInstructions;
         const instructionIds = await sendPaymentInstructionsEmail(pi);
+        await repo.updateProjectLastContactAt(result.context.projectId);
         for (const messageId of instructionIds) {
           await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
           await repo.recordOutboundEmailEvent({
@@ -125,6 +139,7 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           activeRpmEmail: pc.followUpProjectPayload.context.activeRpmEmail ?? null,
           plainTextBody: pc.plainTextBody,
         });
+        await repo.updateProjectLastContactAt(result.context.projectId);
         for (const messageId of confirmedIds) {
           await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
           await repo.recordOutboundEmailEvent({
@@ -138,7 +153,12 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
             messageId,
           });
         }
-        const { outboundMessageIds: followUpIds } = await sendProjectEmail(pc.recipients, pc.followUpProjectPayload);
+        const followUpLastContactAt = new Date().toISOString();
+        const { outboundMessageIds: followUpIds } = await sendProjectEmail(
+          pc.recipients,
+          withLastContactAt(pc.followUpProjectPayload, followUpLastContactAt),
+        );
+        await repo.updateProjectLastContactAt(result.context.projectId, followUpLastContactAt);
         for (const messageId of followUpIds) {
           await repo.storeOutboundThreadMapping(messageId, result.context.projectId);
         }

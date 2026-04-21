@@ -103,6 +103,8 @@ export interface ProjectContext {
   projectStatus: ProjectStatus;
   ownerDisplayName?: string;
   ownerEmail?: string;
+  /** Last project touch, rendered read-only in the outbound markdown. */
+  lastContactAt?: string;
   /** Active human RPM from rpm_assignments; included when present for outbound routing and docs. */
   activeRpmEmail?: string;
   summary: string;

@@ -32,9 +32,18 @@ async function runReminders(): Promise<{ sent: number; candidates: number }> {
       const state = await repo.getProjectState(c.projectId);
       const pending = await repo.getPendingSuggestions(c.userId);
       const userProfile = await repo.getUserProfile(c.userId);
-      const payload = buildReminderEmailPayload(state, pending, userProfile);
+      const lastContactAt = new Date().toISOString();
+      const payload = buildReminderEmailPayload(
+        {
+          ...state,
+          lastContactAt,
+        },
+        pending,
+        userProfile,
+      );
       const recipients = buildProjectEmailRecipientList(state);
       const { outboundMessageIds } = await sendProjectEmail(recipients.length > 0 ? recipients : [c.userEmail], payload);
+      await repo.updateProjectLastContactAt(c.projectId, lastContactAt);
       for (const messageId of outboundMessageIds) {
         await repo.storeOutboundThreadMapping(messageId, c.projectId);
       }

@@ -847,8 +847,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   await repo.snapshotProjectContext(project.id);
   await repo.incrementProjectUsageCount(project.id);
 
-  const projectState = await repo.getProjectState(project.id);
   const pendingSuggestions: RPMSuggestion[] = await repo.getPendingSuggestions(ownerUserId, project.id);
+  const lastContactAt = await repo.updateProjectLastContactAt(project.id);
+  const projectState = {
+    ...projectStateForRpm,
+    usageCount: projectStateForRpm.usageCount + 1,
+    lastContactAt,
+  };
   const ownerRecipient = projectState.ownerEmail ?? (await repo.getUserEmailById(ownerUserId));
   const recipients = ensureSenderRecipient(
     ensureOwnerRecipient(buildProjectEmailRecipientList(projectState), ownerRecipient),

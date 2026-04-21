@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NormalizedEmailEvent } from "@/modules/contracts/types";
+import type { NormalizedEmailEvent, ProjectContext } from "@/modules/contracts/types";
 import { EMPTY_PROJECT_SECTION_PRESENCE, emptyUserProfileContext } from "@/modules/contracts/types";
 import { extractKickoffSeed } from "@/modules/domain/kickoffSeed";
 import { generateShortProjectName } from "@/modules/domain/projectName";
@@ -44,8 +44,39 @@ const defaultMockProject = {
   reminder_balance: 3,
   usage_count: 0,
   kickoff_completed_at: new Date().toISOString(),
+  last_contact_at: null,
   created_at: new Date().toISOString(),
 };
+
+function buildProjectState(overrides: Partial<ProjectContext> = {}): ProjectContext {
+  return {
+    projectId: "p1",
+    userId: "u1",
+    projectCode: "pjt-a1b2c3d4",
+    projectStatus: "active",
+    ownerEmail: "user@example.com",
+    summary: "summary",
+    initialSummary: "summary",
+    currentStatus: "",
+    goals: [],
+    actionItems: [],
+    completedTasks: [],
+    decisions: [],
+    risks: [],
+    recommendations: [],
+    notes: [],
+    participants: [],
+    recentUpdatesLog: [],
+    remainderBalance: 0,
+    reminderBalance: 3,
+    usageCount: 0,
+    tier: "freemium",
+    featureFlags: { collaborators: false, oversight: false },
+    transactionHistory: [],
+    activeRpmEmail: null,
+    ...overrides,
+  };
+}
 
 const repoState = {
   registerInboundEvent: vi.fn(),
@@ -79,6 +110,7 @@ const repoState = {
   updateCurrentStatus: vi.fn(),
   updateProjectStatus: vi.fn(),
   updateProjectName: vi.fn(),
+  updateProjectLastContactAt: vi.fn(),
   storeUserProfileContext: vi.fn(),
   getUserProfile: vi.fn(),
   replaceStructuredUserProfileContext: vi.fn(),
@@ -153,6 +185,7 @@ vi.mock("@/modules/memory/repository", async () => {
       updateCurrentStatus = repoState.updateCurrentStatus;
       updateProjectStatus = repoState.updateProjectStatus;
       updateProjectName = repoState.updateProjectName;
+      updateProjectLastContactAt = repoState.updateProjectLastContactAt;
       storeUserProfileContext = repoState.storeUserProfileContext;
       getUserProfile = repoState.getUserProfile;
       replaceStructuredUserProfileContext = repoState.replaceStructuredUserProfileContext;
@@ -218,6 +251,7 @@ describe("processInboundEmail", () => {
     repoState.getUserEmailsById.mockResolvedValue(["user@example.com"]);
     repoState.appendRecentUpdate.mockResolvedValue(undefined);
     repoState.updateProjectName.mockResolvedValue(undefined);
+    repoState.updateProjectLastContactAt.mockResolvedValue("2026-04-21T12:00:00.000Z");
     repoState.createProjectForUser.mockResolvedValue({
       project: { ...defaultMockProject },
       created: true,
@@ -343,6 +377,8 @@ describe("processInboundEmail", () => {
     expect(result.recipients).toEqual(["user@example.com"]);
     expect(result.context.projectId).toBe("p1");
     expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", "hello");
+    expect(repoState.updateProjectLastContactAt).toHaveBeenCalledWith("p1");
+    expect(result.payload.context.lastContactAt).toBe("2026-04-21T12:00:00.000Z");
     expect(repoState.updateNotes).toHaveBeenCalledWith("p1", [], event.timestamp);
     expect(repoState.mergeStructuredUserProfileContext).toHaveBeenCalled();
     expect(repoState.getPendingSuggestions).toHaveBeenCalledWith("u1", "p1");
@@ -1029,6 +1065,7 @@ describe("processInboundEmail", () => {
   });
 
   it("records recent updates when goals, tasks, decisions, risks, and notes are provided", async () => {
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
       eventId: "e_recent",
@@ -1062,13 +1099,56 @@ describe("processInboundEmail", () => {
       },
     };
 
-    await processInboundEmail(event);
+    const result = await processInboundEmail(event);
     const recentLines = repoState.appendRecentUpdate.mock.calls.map((call) => String(call[1]));
+    expect(result.recipients).toContain("rpm@example.com");
     expect(recentLines.some((line) => line.includes("Goals updated:"))).toBe(true);
     expect(recentLines.some((line) => line.includes("Task(s) added:"))).toBe(true);
     expect(recentLines.some((line) => line.includes("Decision(s) added:"))).toBe(true);
     expect(recentLines.some((line) => line.includes("Risk(s) added:"))).toBe(true);
     expect(recentLines.some((line) => line.includes("Notes updated"))).toBe(true);
+  });
+
+  it("includes active RPM in recipients when scope changes", async () => {
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const event: NormalizedEmailEvent = {
+      eventId: "e_scope_change",
+      provider: "resend",
+      providerEventId: "m_scope_change",
+      timestamp: new Date().toISOString(),
+      from: "user@example.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: Update [PJT-A1B2C3D4]",
+      inReplyTo: null,
+      references: [],
+      rawBody: "We are no longer building a mobile app, instead we are building a B2B dashboard.",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(result.recipients).toContain("rpm@example.com");
+    expect(repoState.updateSummaryDisplay).toHaveBeenCalledWith("p1", expect.stringContaining("B2B dashboard"));
+    expect(repoState.appendRecentUpdate).toHaveBeenCalledWith("p1", "Scope changed");
   });
 
   it("routes unmatched completion-like text to notes when no confident task match is found", async () => {
@@ -1659,6 +1739,7 @@ describe("processInboundEmail", () => {
   });
 
   it("commits transaction immediately for user role", async () => {
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
       eventId: "e_user_txn",
@@ -1699,7 +1780,7 @@ describe("processInboundEmail", () => {
       },
     };
 
-    await processInboundEmail(event);
+    const result = await processInboundEmail(event);
     expect(repoState.storeTransactionEvent).toHaveBeenCalledWith(
       "p1",
       "user@example.com",
@@ -1709,9 +1790,12 @@ describe("processInboundEmail", () => {
       }),
     );
     expect(repoState.storeProtectedTransactionSuggestion).not.toHaveBeenCalled();
+    expect(result.recipients).toContain("rpm@example.com");
+    expect(result.paymentInstructions).toBeDefined();
   });
 
   it("includes paymentInstructions when a user transaction is recorded", async () => {
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
     const event: NormalizedEmailEvent = {
@@ -1754,6 +1838,7 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
+    expect(result.recipients).toContain("rpm@example.com");
     expect(result.paymentInstructions).toEqual(
       expect.objectContaining({
         projectCode: "pjt-a1b2c3d4",
@@ -1761,6 +1846,7 @@ describe("processInboundEmail", () => {
           paymentTotal: 500,
           paymentLinkUrl: "https://pay.saassquared.com/b/mock",
         }),
+        activeRpmEmail: "rpm@example.com",
       }),
     );
     expect(repoState.setUserTier).not.toHaveBeenCalled();
@@ -1770,6 +1856,7 @@ describe("processInboundEmail", () => {
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
     repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
     const paidRecord = {
       id: "tx-paid-1",
       type: "hourPurchase" as const,
@@ -1826,8 +1913,10 @@ describe("processInboundEmail", () => {
     expect(repoState.markLatestPendingHourPurchasePaid).toHaveBeenCalledWith("p1", "user@example.com");
     expect(repoState.setUserTier).toHaveBeenCalledWith("u1", "solopreneur");
     expect(repoState.assignRpm).toHaveBeenCalledWith("p1", expect.any(String), "user@example.com");
+    expect(result.recipients).toContain("rpm@example.com");
     expect(result.paymentConfirmed?.plainTextBody).toContain("Payment confirmed.");
     expect(result.paymentConfirmed?.followUpProjectPayload.recordedTransaction).toBeUndefined();
+    expect(result.paymentConfirmed?.followUpProjectPayload.context.activeRpmEmail).toBe("rpm@example.com");
     expect(result.paymentInstructions).toBeUndefined();
   });
 
@@ -3069,32 +3158,13 @@ describe("processInboundEmail", () => {
   });
 
   it("includes active RPM in recipients when tier has human oversight", async () => {
-    repoState.getProjectState.mockResolvedValue({
-      projectId: "p1",
-      userId: "u1",
-      projectCode: "pjt-a1b2c3d4",
-      projectStatus: "active",
-      ownerEmail: "user@example.com",
-      summary: "summary",
-      initialSummary: "summary",
-      currentStatus: "",
-      goals: [],
-      actionItems: [],
-      completedTasks: [],
-      decisions: [],
-      risks: [],
-      recommendations: [],
-      notes: [],
-      participants: [],
-      recentUpdatesLog: [],
-      remainderBalance: 0,
-      reminderBalance: 3,
-      usageCount: 0,
-      tier: "solopreneur",
-      featureFlags: { collaborators: false, oversight: true },
-      activeRpmEmail: "rpm@example.com",
-      transactionHistory: [],
-    });
+    repoState.getProjectState.mockResolvedValue(
+      buildProjectState({
+        tier: "solopreneur",
+        featureFlags: { collaborators: false, oversight: true },
+        activeRpmEmail: "rpm@example.com",
+      }),
+    );
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     const event: NormalizedEmailEvent = {
       eventId: "e_recip_rpm",

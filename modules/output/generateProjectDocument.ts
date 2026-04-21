@@ -156,6 +156,17 @@ function formatProjectStatusLabel(status: string | undefined): string {
   }
 }
 
+function formatDateOnly(iso: string | undefined): string {
+  if (!iso) {
+    return "(none)";
+  }
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return "(none)";
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
 function formatPendingSuggestions(payload: ProjectEmailPayload): string {
   const pending = payload.pendingSuggestions
     .filter((s) => s.status === "pending")
@@ -377,6 +388,8 @@ export function generateProjectDocument(payload: ProjectEmailPayload): string {
     "",
     "Project Name:",
     `- ${projectName}`,
+    "Last Contact:",
+    `- ${formatDateOnly(context.lastContactAt)}`,
     "",
     ...agencyRpmLines,
     "---",

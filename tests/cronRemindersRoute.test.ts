@@ -8,6 +8,7 @@ const getUserProfile = vi.fn();
 const reserveReminderSlot = vi.fn();
 const releaseReminderSlot = vi.fn();
 const storeOutboundThreadMapping = vi.fn();
+const updateProjectLastContactAt = vi.fn();
 const sendProjectEmail = vi.fn();
 
 vi.mock("@/modules/memory/repository", () => ({
@@ -19,6 +20,7 @@ vi.mock("@/modules/memory/repository", () => ({
     reserveReminderSlot = reserveReminderSlot;
     releaseReminderSlot = releaseReminderSlot;
     storeOutboundThreadMapping = storeOutboundThreadMapping;
+    updateProjectLastContactAt = updateProjectLastContactAt;
   },
 }));
 
@@ -47,6 +49,7 @@ describe("GET /api/cron/reminders", () => {
     reserveReminderSlot.mockResolvedValue("2026-03-27T00:00:00.000Z");
     sendProjectEmail.mockResolvedValue({ outboundMessageId: "reminder-out-id", outboundMessageIds: ["reminder-out-id"] });
     getUserProfile.mockResolvedValue(emptyUserProfileContext());
+    updateProjectLastContactAt.mockResolvedValue(undefined);
   });
 
   it("returns 401 without bearer token", async () => {
@@ -98,8 +101,17 @@ describe("GET /api/cron/reminders", () => {
     expect(body.sent).toBe(1);
     expect(body.candidates).toBe(1);
     expect(sendProjectEmail).toHaveBeenCalledOnce();
-    expect(sendProjectEmail).toHaveBeenCalledWith(["user@example.com"], expect.objectContaining({ emailKind: "reminder" }));
+    expect(sendProjectEmail).toHaveBeenCalledWith(
+      ["user@example.com"],
+      expect.objectContaining({
+        emailKind: "reminder",
+        context: expect.objectContaining({
+          lastContactAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        }),
+      }),
+    );
     expect(storeOutboundThreadMapping).toHaveBeenCalledWith("reminder-out-id", "p1");
+    expect(updateProjectLastContactAt).toHaveBeenCalledWith("p1", expect.any(String));
     expect(reserveReminderSlot).toHaveBeenCalledWith("p1", 7);
     expect(releaseReminderSlot).not.toHaveBeenCalled();
   });

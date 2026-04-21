@@ -17,6 +17,12 @@ describe("schema and persistence contracts", () => {
     expect(sql).toMatch(/p\.kickoff_completed_at is not null/i);
   });
 
+  it("adds project last-contact tracking to the projects schema", async () => {
+    const sql = await readRepoFile("supabase/migrations/20260424_000032_project_last_contact.sql");
+    expect(sql).toMatch(/alter table public\.projects/i);
+    expect(sql).toMatch(/add column if not exists last_contact_at timestamptz/i);
+  });
+
   it("keeps project version snapshot contract in alignment migration", async () => {
     const sql = await readRepoFile("supabase/migrations/20260327_000008_phase2_alignment.sql");
     expect(sql).toMatch(/create table if not exists public\.project_versions/i);

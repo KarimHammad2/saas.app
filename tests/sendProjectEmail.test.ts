@@ -32,6 +32,7 @@ function buildPayload(isWelcome: boolean): ProjectEmailPayload {
       userId: "u1",
       projectCode: "pjt-a1b2c3d4",
       projectName: "AI Real Estate Copilot",
+        lastContactAt: "2026-04-21T12:34:56.000Z",
       projectStatus: "active",
       summary: "AI SaaS for real estate",
       initialSummary: "AI SaaS for real estate",
@@ -103,6 +104,9 @@ describe("sendProjectEmail", () => {
     expect(attachment?.content).toContain("## User Profile Context");
     expect(attachment?.content).toContain("Project Name:");
     expect(attachment?.content).toContain("- AI Real Estate Copilot");
+    expect(attachment?.content).toContain("Last Contact:");
+    expect(attachment?.content).toContain("- 2026-04-21");
+    expect(attachment?.content?.indexOf("Project Name:")).toBeLessThan(attachment?.content?.indexOf("Last Contact:") ?? -1);
     expect(attachment?.content).toContain("- Active");
     expect(attachment?.content).toContain("## Instructions to LLM");
     expect(attachment?.content).toContain("Project Status:");
