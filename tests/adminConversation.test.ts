@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildAdminMenuReply, parseAdminRequest } from "@/modules/orchestration/adminConversation";
+import {
+  buildAdminConfirmationReply,
+  buildAdminMenuReply,
+  parseAdminRequest,
+} from "@/modules/orchestration/adminConversation";
 
 describe("parseAdminRequest", () => {
   it("returns menu for 'Admin'", () => {
@@ -82,6 +86,46 @@ describe("parseAdminRequest", () => {
       kind: "restore_project",
       projectName: "Alpha Launch",
       userEmail: "john@example.com",
+    });
+  });
+
+  it("parses delete project using the project name (not an id)", () => {
+    expect(parseAdminRequest("Delete project Alpha Launch for john@example.com")).toEqual({
+      kind: "delete_project",
+      projectName: "Alpha Launch",
+      userEmail: "john@example.com",
+    });
+  });
+
+  it("parses delete project without an owner when the name is unique", () => {
+    expect(parseAdminRequest("Delete project Alpha Launch")).toEqual({
+      kind: "delete_project",
+      projectName: "Alpha Launch",
+      userEmail: null,
+    });
+  });
+
+  it("parses create user with an email", () => {
+    expect(parseAdminRequest("Create user alice@example.com")).toEqual({
+      kind: "create_user",
+      userEmail: "alice@example.com",
+    });
+  });
+
+  it("parses create user with no email as missing", () => {
+    expect(parseAdminRequest("Create user")).toEqual({
+      kind: "create_user",
+      userEmail: null,
+    });
+  });
+
+  it("parses create project with a project name and owner email", () => {
+    expect(
+      parseAdminRequest("Create project Alpha Launch for alice@example.com"),
+    ).toEqual({
+      kind: "create_project",
+      projectName: "Alpha Launch",
+      userEmail: "alice@example.com",
     });
   });
 
@@ -170,5 +214,78 @@ describe("buildAdminMenuReply", () => {
     expect(reply.html).toContain("Admin Menu");
     expect(reply.html).toContain("View (read-only)");
     expect(reply.html).toContain("Manage (requires CONFIRM)");
+  });
+
+  it("advertises Delete a project under Manage", () => {
+    const reply = buildAdminMenuReply("Admin");
+    expect(reply.text).toContain("Delete a project");
+    expect(reply.html).toContain("Delete a project");
+  });
+
+  it("advertises Create a user and Create a project under Manage", () => {
+    const reply = buildAdminMenuReply("Admin");
+    expect(reply.text).toContain("Create a user");
+    expect(reply.text).toContain("Create a project");
+    expect(reply.html).toContain("Create a user");
+    expect(reply.html).toContain("Create a project");
+  });
+});
+
+describe("buildAdminConfirmationReply for delete_project", () => {
+  it("warns the action is permanent in both text and html", () => {
+    const reply = buildAdminConfirmationReply("Admin", {
+      kind: "delete_project",
+      projectName: "Alpha Launch",
+      userEmail: "john@example.com",
+    });
+    expect(reply.subject).toBe("Re: Admin");
+    expect(reply.text).toContain("Delete project (permanent)");
+    expect(reply.text.toLowerCase()).toContain("permanently remove");
+    expect(reply.text).toContain("Alpha Launch");
+    expect(reply.text).toContain("john@example.com");
+    expect(reply.text).toContain('Reply "CONFIRM"');
+    expect(reply.html).toContain("Delete project (permanent)");
+    expect(reply.html.toLowerCase()).toContain("permanently remove");
+    expect(reply.html).toContain("Alpha Launch");
+  });
+
+  it("falls back to (first unique match) when no owner is provided", () => {
+    const reply = buildAdminConfirmationReply("Admin", {
+      kind: "delete_project",
+      projectName: "Alpha Launch",
+      userEmail: null,
+    });
+    expect(reply.text).toContain("Owner: (first unique match)");
+    expect(reply.html).toContain("(first unique match)");
+  });
+});
+
+describe("buildAdminConfirmationReply for create_user and create_project", () => {
+  it("echoes the user email and default tier for create_user", () => {
+    const reply = buildAdminConfirmationReply("Admin", {
+      kind: "create_user",
+      userEmail: "alice@example.com",
+    });
+    expect(reply.text).toContain("Create user");
+    expect(reply.text).toContain("alice@example.com");
+    expect(reply.text).toContain("Tier: Freemium (default)");
+    expect(reply.text).toContain('Reply "CONFIRM"');
+    expect(reply.html).toContain("Create user");
+    expect(reply.html).toContain("alice@example.com");
+    expect(reply.html).toContain("Freemium (default)");
+  });
+
+  it("echoes the project name and owner email for create_project", () => {
+    const reply = buildAdminConfirmationReply("Admin", {
+      kind: "create_project",
+      projectName: "Alpha Launch",
+      userEmail: "alice@example.com",
+    });
+    expect(reply.text).toContain("Create project");
+    expect(reply.text).toContain("Project: Alpha Launch");
+    expect(reply.text).toContain("Owner: alice@example.com");
+    expect(reply.html).toContain("Create project");
+    expect(reply.html).toContain("Alpha Launch");
+    expect(reply.html).toContain("alice@example.com");
   });
 });

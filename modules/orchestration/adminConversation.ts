@@ -8,6 +8,9 @@ export type AdminActionKind =
   | "edit_project_field"
   | "archive_project"
   | "restore_project"
+  | "delete_project"
+  | "create_user"
+  | "create_project"
   | "upsert_instruction"
   | "upsert_email_template"
   | "upsert_system_setting";
@@ -63,6 +66,20 @@ export type AdminActionPayload =
       userEmail: string | null;
     }
   | {
+      kind: "delete_project";
+      projectName: string;
+      userEmail: string | null;
+    }
+  | {
+      kind: "create_user";
+      userEmail: string;
+    }
+  | {
+      kind: "create_project";
+      projectName: string;
+      userEmail: string;
+    }
+  | {
       kind: "upsert_instruction";
       key: string;
       content: string;
@@ -108,6 +125,9 @@ export type AdminRequest =
     }
   | { kind: "archive_project"; projectName: string | null; userEmail: string | null }
   | { kind: "restore_project"; projectName: string | null; userEmail: string | null }
+  | { kind: "delete_project"; projectName: string | null; userEmail: string | null }
+  | { kind: "create_user"; userEmail: string | null }
+  | { kind: "create_project"; projectName: string | null; userEmail: string | null }
   | { kind: "upsert_instruction"; key: string | null; content: string | null }
   | {
       kind: "upsert_email_template";
@@ -384,6 +404,27 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     };
   }
 
+  if (/\bcreate\s+user\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "create_user", userEmail: emails[0] ?? null };
+  }
+
+  if (/\bcreate\s+project\b/i.test(candidate)) {
+    return {
+      kind: "create_project",
+      projectName: extractProjectName(candidate),
+      userEmail: extractForUserEmail(candidate),
+    };
+  }
+
+  if (/\bdelete\s+project\b/i.test(candidate)) {
+    return {
+      kind: "delete_project",
+      projectName: extractProjectName(candidate),
+      userEmail: extractForUserEmail(candidate),
+    };
+  }
+
   if (/\barchive\s+project\b/i.test(candidate)) {
     return {
       kind: "archive_project",
@@ -496,12 +537,15 @@ const MENU_VIEW_ITEMS: string[] = [
 ];
 
 const MENU_MANAGE_ITEMS: string[] = [
+  'Create a user — "Create user alice@example.com"',
+  'Create a project — "Create project Alpha Launch for alice@example.com"',
   'Update a user\'s tier — "Make user@email.com an agency"',
   'Assign an RPM — "Assign user@email.com to john@company.com for project Alpha Launch"',
   'Remove an RPM — "Remove the RPM from user@email.com for project Alpha Launch"',
   'Edit a project field — "Set current status for project Alpha Launch to: Design review in progress"',
   'Archive a project — "Archive project Alpha Launch for user@email.com"',
   'Restore a project — "Restore project Alpha Launch for user@email.com"',
+  'Delete a project — "Delete project Alpha Launch for user@email.com"',
   'Update an instruction — "Set instruction llm_document_usage to: <content>"',
   'Update an email template — "Update template project_update subject to: <value>"',
   'Update a system setting — "Set setting email.admin_bcc.enabled to true"',
@@ -658,6 +702,50 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
       ].join("\n");
     }
 
+    if (payload.kind === "delete_project") {
+      return [
+        "I understood:",
+        "",
+        "Delete project (permanent)",
+        `Project: ${payload.projectName}`,
+        payload.userEmail ? `Owner: ${payload.userEmail}` : "Owner: (first unique match)",
+        "",
+        "This will permanently remove the project and all related updates, transactions, and documents. This cannot be undone.",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
+    if (payload.kind === "create_user") {
+      return [
+        "I understood:",
+        "",
+        "Create user",
+        `User: ${payload.userEmail}`,
+        "Tier: Freemium (default)",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
+    if (payload.kind === "create_project") {
+      return [
+        "I understood:",
+        "",
+        "Create project",
+        `Project: ${payload.projectName}`,
+        `Owner: ${payload.userEmail}`,
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
     if (payload.kind === "upsert_instruction") {
       return [
         "I understood:",
@@ -762,6 +850,40 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
         `<p><strong>${escapeHtml(heading)}</strong><br>`,
         `Project: <strong>${escapeHtml(payload.projectName)}</strong><br>`,
         `Owner: ${escapeHtml(payload.userEmail ?? "(first unique match)")}</p>`,
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "delete_project") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Delete project (permanent)</strong><br>",
+        `Project: <strong>${escapeHtml(payload.projectName)}</strong><br>`,
+        `Owner: ${escapeHtml(payload.userEmail ?? "(first unique match)")}</p>`,
+        "<p><strong>Warning:</strong> this will permanently remove the project and all related updates, transactions, and documents. This cannot be undone.</p>",
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "create_user") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Create user</strong><br>",
+        `User: ${escapeHtml(payload.userEmail)}<br>`,
+        "Tier: Freemium (default)</p>",
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "create_project") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Create project</strong><br>",
+        `Project: <strong>${escapeHtml(payload.projectName)}</strong><br>`,
+        `Owner: ${escapeHtml(payload.userEmail)}</p>`,
         '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
         "<p>&mdash; Frank</p>",
       ].join("");
@@ -1071,6 +1193,15 @@ export function summarizeAdminAction(action: AdminActionPayload): string {
   }
   if (action.kind === "restore_project") {
     return `Restore project ${action.projectName}`;
+  }
+  if (action.kind === "delete_project") {
+    return `Delete project ${action.projectName}`;
+  }
+  if (action.kind === "create_user") {
+    return `Create user ${action.userEmail}`;
+  }
+  if (action.kind === "create_project") {
+    return `Create project ${action.projectName} for ${action.userEmail}`;
   }
   if (action.kind === "upsert_instruction") {
     return `Update instruction ${action.key}`;

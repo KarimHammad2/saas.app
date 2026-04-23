@@ -219,6 +219,11 @@ function normalizeAdminActionPayload(action: AdminActionPayload): Record<string,
       };
     case "archive_project":
     case "restore_project":
+    case "delete_project":
+      return { projectName: action.projectName, userEmail: action.userEmail };
+    case "create_user":
+      return { userEmail: action.userEmail };
+    case "create_project":
       return { projectName: action.projectName, userEmail: action.userEmail };
     case "upsert_instruction":
       return { key: action.key, content: action.content };
@@ -298,7 +303,8 @@ function reconstructAdminActionPayload(
       };
     }
     case "archive_project":
-    case "restore_project": {
+    case "restore_project":
+    case "delete_project": {
       const projectName = asString(payload.projectName);
       if (!projectName) {
         return null;
@@ -308,6 +314,21 @@ function reconstructAdminActionPayload(
         projectName,
         userEmail: asEmail(payload.userEmail) ?? null,
       };
+    }
+    case "create_user": {
+      const userEmail = asEmail(payload.userEmail);
+      if (!userEmail) {
+        return null;
+      }
+      return { kind: "create_user", userEmail };
+    }
+    case "create_project": {
+      const projectName = asString(payload.projectName);
+      const userEmail = asEmail(payload.userEmail);
+      if (!projectName || !userEmail) {
+        return null;
+      }
+      return { kind: "create_project", projectName, userEmail };
     }
     case "upsert_instruction": {
       const key = asString(payload.key);
@@ -672,7 +693,8 @@ async function handleAdminRequest(
     }
 
     // Generic dispatcher for all other admin action kinds (edit_project_field, archive_project,
-    // restore_project, upsert_instruction, upsert_email_template, upsert_system_setting).
+    // restore_project, delete_project, create_user, create_project, upsert_instruction,
+    // upsert_email_template, upsert_system_setting).
     const reconstructed = reconstructAdminActionPayload(
       pendingAdminAction.action_kind,
       actionPayload,
@@ -1271,6 +1293,80 @@ async function handleAdminRequest(
     }
     const payload: AdminActionPayload = {
       kind: request.kind,
+      projectName: request.projectName,
+      userEmail: request.userEmail,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "delete_project") {
+    if (!request.projectName) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include the project name (e.g. "Delete project Alpha Launch for user@email.com").',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "delete_project",
+      projectName: request.projectName,
+      userEmail: request.userEmail,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "create_user") {
+    if (!request.userEmail) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include the user email (e.g. "Create user alice@example.com").',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "create_user",
+      userEmail: request.userEmail,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "create_project") {
+    if (!request.projectName || !request.userEmail) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include both the project name and owner email (e.g. "Create project Alpha Launch for alice@example.com").',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "create_project",
       projectName: request.projectName,
       userEmail: request.userEmail,
     };

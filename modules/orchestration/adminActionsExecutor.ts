@@ -259,6 +259,134 @@ async function executeProjectLifecycle(
   };
 }
 
+async function executeCreateUser(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "create_user" }>,
+  context: { actorEmail: string; adminActionId?: string | null },
+): Promise<AdminExecutionResult> {
+  const existing = await repo.findUserByEmail(action.userEmail);
+  if (existing) {
+    return {
+      ok: true,
+      heading: "Already exists",
+      lines: [`User ${action.userEmail} already exists (tier: ${existing.tier}).`],
+      nextSteps: [`Show projects for ${action.userEmail}`],
+    };
+  }
+  const { user } = await repo.getOrCreateUserByEmail(action.userEmail);
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "create_user",
+    entityType: "user",
+    entityRef: user.email,
+    beforeJson: null,
+    afterJson: { id: user.id, email: user.email, tier: user.tier },
+  });
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines: [`${user.email} has been created (tier: ${user.tier}).`],
+    nextSteps: [
+      `Create project <Name> for ${user.email}`,
+      `Make ${user.email} an agency`,
+    ],
+  };
+}
+
+async function executeCreateProject(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "create_project" }>,
+  context: { actorEmail: string; adminActionId?: string | null },
+): Promise<AdminExecutionResult> {
+  const owner = await repo.findUserByEmail(action.userEmail);
+  if (!owner) {
+    return {
+      ok: false,
+      reason: `I couldn’t find a user for ${action.userEmail}. Run "Create user ${action.userEmail}" first.`,
+    };
+  }
+  const normalizedName = normalizeProjectNameCandidate(action.projectName);
+  if (!normalizedName) {
+    return { ok: false, reason: `Project name "${action.projectName}" is not recognizable.` };
+  }
+  const existingMatches = await repo.findProjectsByName({ name: normalizedName, userId: owner.id });
+  if (existingMatches.length > 0) {
+    const [p] = existingMatches;
+    const code = p.project_code ? ` [${p.project_code}]` : "";
+    return {
+      ok: true,
+      heading: "Already exists",
+      lines: [`${action.userEmail} already owns a project named "${p.name}"${code}.`],
+    };
+  }
+  const { project } = await repo.createProjectForUser(owner.id, normalizedName, {
+    createdByEmail: context.actorEmail,
+  });
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "create_project",
+    entityType: "project",
+    entityRef: project.name,
+    beforeJson: null,
+    afterJson: {
+      id: project.id,
+      name: project.name,
+      user_id: project.user_id,
+      owner_email: project.owner_email ?? null,
+    },
+  });
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines: [
+      `Project "${project.name}" created for ${action.userEmail}.`,
+      ...(project.project_code ? [`Code: ${project.project_code}`] : []),
+    ],
+    nextSteps: [
+      `Show projects for ${action.userEmail}`,
+      `Assign ${action.userEmail} to <rpm@email> for project ${project.name}`,
+    ],
+  };
+}
+
+async function executeDeleteProject(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "delete_project" }>,
+  context: { actorEmail: string; adminActionId?: string | null },
+): Promise<AdminExecutionResult> {
+  const lookup = await resolveAdminProjectByName(repo, action.projectName, action.userEmail);
+  if (!lookup.ok) {
+    return lookup;
+  }
+  const project = lookup.project;
+
+  const beforeJson = await repo.loadProjectDeletionSnapshot(project.id);
+  await repo.hardDeleteProject(project.id);
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "delete_project",
+    entityType: "project",
+    entityRef: project.name,
+    beforeJson,
+    afterJson: null,
+  });
+
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines: [
+      `Project "${project.name}" has been permanently deleted.`,
+      "Audit snapshot saved to admin_audit_log.",
+    ],
+    nextSteps: action.userEmail
+      ? [`Show projects for ${action.userEmail}`]
+      : ["Show me all users"],
+  };
+}
+
 async function executeUpsertInstruction(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "upsert_instruction" }>,
@@ -463,6 +591,12 @@ export async function executeAdminAction(
     case "archive_project":
     case "restore_project":
       return executeProjectLifecycle(repo, action, context);
+    case "delete_project":
+      return executeDeleteProject(repo, action, context);
+    case "create_user":
+      return executeCreateUser(repo, action, context);
+    case "create_project":
+      return executeCreateProject(repo, action, context);
     case "upsert_instruction":
       return executeUpsertInstruction(repo, action, context);
     case "upsert_email_template":

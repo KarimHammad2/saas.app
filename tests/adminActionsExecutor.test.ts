@@ -34,6 +34,33 @@ function makeRepo(overrides: Partial<Record<keyof MemoryRepository, unknown>> = 
     findUserByEmail: vi.fn(async () => null),
     findProjectsByName: vi.fn(async () => []),
     setProjectArchived: vi.fn(async () => undefined),
+    loadProjectDeletionSnapshot: vi.fn(async () => ({ project: null, state: null, rpmEmail: null })),
+    hardDeleteProject: vi.fn(async () => undefined),
+    getOrCreateUserByEmail: vi.fn(async (email: string) => ({
+      user: {
+        id: "u-new",
+        email,
+        display_name: null,
+        tier: "freemium",
+        created_at: "2026-04-23T00:00:00.000Z",
+      },
+      created: true,
+    })),
+    createProjectForUser: vi.fn(async (userId: string, name: string) => ({
+      project: {
+        id: "p-new",
+        user_id: userId,
+        owner_email: "owner@example.com",
+        name,
+        status: "active",
+        project_code: "PJT-ABCD12",
+        remainder_balance: 0,
+        reminder_balance: 0,
+        usage_count: 0,
+        archived_at: null,
+      },
+      created: true,
+    })),
     recordAdminAuditLog: vi.fn(async () => undefined),
     getProjectState: vi.fn(async () => defaultProjectContext),
     replaceGoals: vi.fn(async () => undefined),
@@ -150,6 +177,82 @@ describe("executeAdminAction - project lifecycle by project name", () => {
       expect(result.reason).toMatch(/2 projects named/);
     }
     expect(repo.setProjectArchived).not.toHaveBeenCalled();
+  });
+
+  it("hard-deletes a project by name, snapshotting before_json and cascading via FK", async () => {
+    const project = {
+      id: "p-target",
+      name: "Alpha Launch",
+      user_id: "u-owner",
+      archived_at: null,
+    };
+    const snapshot = {
+      project: { id: "p-target", name: "Alpha Launch", user_id: "u-owner" },
+      state: { project_id: "p-target", goals: ["keep goal"] },
+      rpmEmail: null,
+    };
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({ id: "u-owner", email: "owner@example.com", tier: "freemium" })),
+      findProjectsByName: vi.fn(async () => [project]),
+      loadProjectDeletionSnapshot: vi.fn(async () => snapshot),
+      hardDeleteProject: vi.fn(async () => undefined),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "delete_project",
+        projectName: "Alpha Launch",
+        userEmail: "owner@example.com",
+      },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.heading).toBe("Done ✅");
+      expect(result.lines.join(" ")).toMatch(/permanently deleted/i);
+    }
+    expect((repo.loadProjectDeletionSnapshot as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("p-target");
+    expect((repo.hardDeleteProject as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("p-target");
+    expect((repo.recordAdminAuditLog as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKind: "delete_project",
+        entityType: "project",
+        entityRef: "Alpha Launch",
+        adminActionId: "a1",
+        beforeJson: snapshot,
+        afterJson: null,
+      }),
+    );
+
+    const deleteOrder = (repo.hardDeleteProject as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const snapshotOrder = (repo.loadProjectDeletionSnapshot as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(snapshotOrder).toBeLessThan(deleteOrder);
+  });
+
+  it("refuses to delete when multiple projects share the name and no owner is given", async () => {
+    const repo = makeRepo({
+      findProjectsByName: vi.fn(async () => [
+        { id: "p-a", name: "Alpha Launch", user_id: "u-a", archived_at: null },
+        { id: "p-b", name: "Alpha Launch", user_id: "u-b", archived_at: null },
+      ]),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "delete_project",
+        projectName: "Alpha Launch",
+        userEmail: null,
+      },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(repo.hardDeleteProject).not.toHaveBeenCalled();
+    expect(repo.loadProjectDeletionSnapshot).not.toHaveBeenCalled();
+    expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
   });
 
   it("returns a no-op message when archiving an already-archived project", async () => {
@@ -336,5 +439,204 @@ describe("executeAdminAction - configuration upserts", () => {
       "email.admin_bcc.enabled",
       true,
     );
+  });
+});
+
+describe("executeAdminAction - create_user", () => {
+  it("creates a new user and records the audit log with afterJson", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => null),
+      getOrCreateUserByEmail: vi.fn(async (email: string) => ({
+        user: {
+          id: "u-new",
+          email,
+          display_name: null,
+          tier: "freemium" as const,
+          created_at: "2026-04-23T00:00:00.000Z",
+        },
+        created: true,
+      })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "create_user", userEmail: "alice@example.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.heading).toBe("Done ✅");
+      expect(result.lines.join(" ")).toContain("alice@example.com");
+    }
+    expect((repo.getOrCreateUserByEmail as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      "alice@example.com",
+    );
+    expect((repo.recordAdminAuditLog as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKind: "create_user",
+        entityType: "user",
+        entityRef: "alice@example.com",
+        beforeJson: null,
+        afterJson: expect.objectContaining({ id: "u-new", email: "alice@example.com", tier: "freemium" }),
+        adminActionId: "a1",
+      }),
+    );
+  });
+
+  it("is idempotent when the user already exists", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({
+        id: "u-existing",
+        email: "alice@example.com",
+        display_name: null,
+        tier: "agency" as const,
+        created_at: "2026-04-20T00:00:00.000Z",
+      })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "create_user", userEmail: "alice@example.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.heading).toBe("Already exists");
+      expect(result.lines.join(" ")).toMatch(/already exists/i);
+      expect(result.lines.join(" ")).toMatch(/agency/i);
+    }
+    expect(repo.getOrCreateUserByEmail).not.toHaveBeenCalled();
+    expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAdminAction - create_project", () => {
+  it("creates a project for an existing owner and records the audit log", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({
+        id: "u-owner",
+        email: "owner@example.com",
+        display_name: null,
+        tier: "freemium" as const,
+        created_at: "2026-04-20T00:00:00.000Z",
+      })),
+      findProjectsByName: vi.fn(async () => []),
+      createProjectForUser: vi.fn(async (userId: string, name: string) => ({
+        project: {
+          id: "p-new",
+          user_id: userId,
+          owner_email: "owner@example.com",
+          name,
+          status: "active",
+          project_code: "PJT-ABCD12",
+          remainder_balance: 0,
+          reminder_balance: 0,
+          usage_count: 0,
+          archived_at: null,
+        },
+        created: true,
+      })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "create_project",
+        projectName: "Alpha Launch",
+        userEmail: "owner@example.com",
+      },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.heading).toBe("Done ✅");
+      expect(result.lines.join(" ")).toContain("Alpha Launch");
+      expect(result.lines.join(" ")).toContain("PJT-ABCD12");
+    }
+    expect((repo.createProjectForUser as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      "u-owner",
+      "Alpha Launch",
+      expect.objectContaining({ createdByEmail: actorContext.actorEmail }),
+    );
+    expect((repo.recordAdminAuditLog as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKind: "create_project",
+        entityType: "project",
+        entityRef: "Alpha Launch",
+        beforeJson: null,
+        afterJson: expect.objectContaining({ id: "p-new", name: "Alpha Launch", user_id: "u-owner" }),
+      }),
+    );
+  });
+
+  it("rejects when the owner does not exist and does not create anything", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => null),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "create_project",
+        projectName: "Alpha Launch",
+        userEmail: "missing@example.com",
+      },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/create user/i);
+      expect(result.reason).toContain("missing@example.com");
+    }
+    expect(repo.createProjectForUser).not.toHaveBeenCalled();
+    expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("returns Already exists when the owner already has a project with that name", async () => {
+    const existingProject = {
+      id: "p-existing",
+      user_id: "u-owner",
+      owner_email: "owner@example.com",
+      name: "Alpha Launch",
+      status: "active",
+      project_code: "PJT-EXISTS",
+      remainder_balance: 0,
+      reminder_balance: 0,
+      usage_count: 0,
+      archived_at: null,
+    };
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({
+        id: "u-owner",
+        email: "owner@example.com",
+        display_name: null,
+        tier: "freemium" as const,
+        created_at: "2026-04-20T00:00:00.000Z",
+      })),
+      findProjectsByName: vi.fn(async () => [existingProject]),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "create_project",
+        projectName: "Alpha Launch",
+        userEmail: "owner@example.com",
+      },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.heading).toBe("Already exists");
+      expect(result.lines.join(" ")).toContain("Alpha Launch");
+      expect(result.lines.join(" ")).toContain("PJT-EXISTS");
+    }
+    expect(repo.createProjectForUser).not.toHaveBeenCalled();
+    expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
   });
 });

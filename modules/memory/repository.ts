@@ -2801,6 +2801,55 @@ export class MemoryRepository {
     }
   }
 
+  /**
+   * Build a full before-snapshot for `admin_audit_log.before_json` prior to a hard delete.
+   * Captures the project row, its state row, and the currently-assigned RPM email so the
+   * delete can be manually reconstructed from the audit log if needed.
+   */
+  async loadProjectDeletionSnapshot(projectId: string): Promise<Record<string, unknown>> {
+    const { data: projectRow, error: projectError } = await this.supabase
+      .from("projects")
+      .select("*")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (projectError) {
+      throw new Error(`Failed to load project snapshot: ${projectError.message}`);
+    }
+
+    const { data: stateRow, error: stateError } = await this.supabase
+      .from("project_states")
+      .select("*")
+      .eq("project_id", projectId)
+      .maybeSingle();
+    if (stateError) {
+      throw new Error(`Failed to load project state snapshot: ${stateError.message}`);
+    }
+
+    const rpmEmail = await this.getActiveRpm(projectId);
+
+    return {
+      project: projectRow ?? null,
+      state: stateRow ?? null,
+      rpmEmail,
+    };
+  }
+
+  /**
+   * Permanently delete a project row. Child tables declare `on delete cascade` on
+   * `project_id`, so all dependent rows (updates, transactions, documents, goals,
+   * risks, outbound events, escalations, follow-ups, cc-membership confirmations,
+   * etc.) are removed by the database in the same statement.
+   */
+  async hardDeleteProject(projectId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId);
+    if (error) {
+      throw new Error(`Failed to delete project: ${error.message}`);
+    }
+  }
+
   async replaceProjectRisks(projectId: string, risks: string[]): Promise<void> {
     const normalized = risks.map((entry) => entry.trim()).filter(Boolean);
     const { error } = await this.supabase
