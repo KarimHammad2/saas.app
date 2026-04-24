@@ -6,6 +6,7 @@ import { normalizeMessageId } from "@/modules/email/messageId";
 import { sendEmail } from "@/modules/email/sendEmail";
 import { getRuntimeConfig } from "@/modules/config/runtimeConfig";
 import { generateProjectDocument } from "@/modules/output/generateProjectDocument";
+import { generateProjectDocumentDocx } from "@/modules/output/generateProjectDocumentDocx";
 import { formatProjectEmail, formatProjectEmailForRpm } from "@/modules/output/formatProjectEmail";
 import type { ProjectEmailKind, ProjectEmailPayload } from "@/modules/output/types";
 
@@ -125,6 +126,7 @@ export async function sendProjectEmail(
   const runtime = await getRuntimeConfig();
   const document = generateProjectDocument(payload);
   validateProjectDocumentForAttachment(document);
+  const documentDocx = await generateProjectDocumentDocx(document);
   const kind = resolveEmailKind(payload);
   const messageType =
     kind === "reminder"
@@ -148,10 +150,10 @@ export async function sendProjectEmail(
     outboundMessageIds.push(outboundMessageId);
     const introHtml = bodyToHtmlParagraphs(emailBody);
     const footerHtml =
-      '<p class="email-footer">Attachment: <strong>project-document.md</strong> (LLM operating context).</p>';
+      '<p class="email-footer">Attachments: <strong>project-document.md</strong> and <strong>project-document.docx</strong> (LLM operating context).</p>';
     const innerHtml = [introHtml, footerHtml].join("\n");
     const html = wrapEmailDocument(innerHtml);
-    const text = [emailBody, "", "Attachment: project-document.md"].join("\n");
+    const text = [emailBody, "", "Attachments: project-document.md, project-document.docx"].join("\n");
 
     const useBcc = includeAdminBcc ? bcc : undefined;
     const useAllowMasterInBcc = includeAdminBcc && allowMasterUserInBcc;
@@ -174,6 +176,10 @@ export async function sendProjectEmail(
         {
           filename: "project-document.md",
           content: document,
+        },
+        {
+          filename: "project-document.docx",
+          content: documentDocx,
         },
       ],
     });

@@ -75,7 +75,7 @@ Outbound messages aim to give you a **single readable picture**, typically inclu
 
 Depending on your workflow, the same channel can also surface **pending suggestions** (awaiting approval) and **recent transaction or tier-related history** when that applies to your account.
 
-The attached **`project-document.md`** (when enabled) is the full structured artifact for LLM use: it can include **follow-ups**, **escalation** guidance, task lists, and account context—see **`PROJECT_DOCUMENT_MODE`** (`minimal` vs `full`) in the developer section.
+The attached **`project-document.md`** and **`project-document.docx`** (when enabled) are the full structured artifact for LLM use: they can include **follow-ups**, **escalation** guidance, task lists, and account context—see **`PROJECT_DOCUMENT_MODE`** (`minimal` vs `full`) in the developer section. Both files carry the same content; the `.docx` is provided for convenience in Word-based workflows.
 
 ---
 
@@ -122,7 +122,7 @@ This repository implements the **SaaS² orchestration layer** for the full MVP e
 - **Escalation** blocks (`Escalation:` + Type RPM | Review | Approval) with logging and notifications  
 - **Follow-up** tracking (`FollowUp:` action / target / when) with natural-language date resolution  
 - **Admin** email command flow: pending actions, confirmations, tier/RPM/archive/template/system-setting edits, with **audit log**  
-- Outbound: minimal body + **`project-document.md`** attachment (configurable **minimal** vs **full** document); optional **admin BCC** on outbound  
+- Outbound: minimal body + **`project-document.md`** and **`project-document.docx`** attachments (configurable **minimal** vs **full** document); optional **admin BCC** on outbound  
 
 **Data & ops**
 
@@ -189,7 +189,7 @@ MASTER_USER_EMAIL=daniel@saassquared.com
 # Days without inbound before a project is eligible for idle reminders (default 7)
 # REMINDER_IDLE_DAYS=
 
-# project-document.md: minimal | full
+# project-document.md / project-document.docx: minimal | full
 # PROJECT_DOCUMENT_MODE=minimal
 
 # Overview: frozen (kickoff-only) | rules-based regeneration
@@ -326,7 +326,7 @@ If the problem is **sending** mail through the Resend API (dashboard “sent”,
 7. **Webhook idempotency** — Replay same inbound provider event id; verify second request is `duplicate=true` and no extra outbound email.  
 8. **Retry storm safety** — Simulate worker transient failures, confirm retries then terminal fallback once at max attempts.  
 9. **Bounce/failed monitoring** — Send provider failure event (`email.bounced` / `email.failed`) and verify it is logged/audited without queueing inbound work.  
-10. **Attachment validation** — Ensure outbound `project-document.md` includes required sections; malformed document generation should fail fast.  
+10. **Attachment validation** — Ensure outbound `project-document.md` includes required sections and that a matching `project-document.docx` is attached; malformed document generation should fail fast.  
 11. **Escalation** — Inbound body includes valid `Escalation:` / `Type:` / `Reason:`; verify logging and optional notification.  
 12. **Follow-up** — `FollowUp:` block stored and reflected in project document / state as designed.  
 13. **Idle reminder** — After `REMINDER_IDLE_DAYS` without inbound, `configure_reminders_webhook` fires `/api/cron/reminders` and a reminder sends once per reservation rules.  

@@ -125,19 +125,27 @@ describe("sendProjectEmail", () => {
     expect(call?.html).toContain('charset="utf-8"');
     expect(call?.html).toContain('class="email-root"');
     expect(call?.html).toContain("project-document.md");
+    expect(call?.html).toContain("project-document.docx");
     expect(call?.html).not.toContain("<strong>Project:</strong>");
     expect(call?.html).not.toContain("<strong>Status:</strong>");
     expect(call?.html).not.toContain("<strong>Last Update:</strong>");
     expect(call?.html).not.toContain("You are working on:");
     expect(call?.text).toBe(
-      "Here is your updated project file.\n\nUpload it into your LLM and continue working on your project.\n\nAttachment: project-document.md",
+      "Here is your updated project file.\n\nUpload it into your LLM and continue working on your project.\n\nAttachments: project-document.md, project-document.docx",
     );
     expect(call?.text).not.toContain("Project:");
     expect(call?.text).not.toContain("Status:");
     expect(call?.text).not.toContain("Last Update:");
     expect(call?.text).not.toContain("You are working on:");
-    expect(call?.text).toContain("Attachment: project-document.md");
+    expect(call?.text).toContain("Attachments: project-document.md, project-document.docx");
     expect(call?.text).not.toContain("{{summary}}");
+
+    const docxAttachment = call?.attachments?.find((a) => a.filename === "project-document.docx");
+    expect(docxAttachment).toBeDefined();
+    expect(Buffer.isBuffer(docxAttachment?.content)).toBe(true);
+    const docxBuffer = docxAttachment?.content as Buffer;
+    expect(docxBuffer.length).toBeGreaterThan(0);
+    expect(docxBuffer.slice(0, 4).toString("binary")).toBe("PK\u0003\u0004");
   });
 
   it("uses fixed subject for update", async () => {
@@ -304,7 +312,7 @@ describe("sendProjectEmail", () => {
     expect(ownerSend?.text).not.toContain("assigned RPM");
     expect(rpmSend?.text).toContain("assigned RPM");
     expect(rpmSend?.text).toContain("Correction:");
-    expect(rpmSend?.text).toContain("Attachment: project-document.md");
+    expect(rpmSend?.text).toContain("Attachments: project-document.md, project-document.docx");
   });
 
   it("validates required document headings before attachment send", async () => {
