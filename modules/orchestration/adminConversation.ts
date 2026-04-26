@@ -10,6 +10,7 @@ export type AdminActionKind =
   | "restore_project"
   | "delete_project"
   | "create_user"
+  | "delete_user"
   | "create_project"
   | "upsert_instruction"
   | "upsert_email_template"
@@ -75,6 +76,10 @@ export type AdminActionPayload =
       userEmail: string;
     }
   | {
+      kind: "delete_user";
+      userEmail: string;
+    }
+  | {
       kind: "create_project";
       projectName: string;
       userEmail: string;
@@ -127,6 +132,7 @@ export type AdminRequest =
   | { kind: "restore_project"; projectName: string | null; userEmail: string | null }
   | { kind: "delete_project"; projectName: string | null; userEmail: string | null }
   | { kind: "create_user"; userEmail: string | null }
+  | { kind: "delete_user"; userEmail: string | null }
   | { kind: "create_project"; projectName: string | null; userEmail: string | null }
   | { kind: "upsert_instruction"; key: string | null; content: string | null }
   | {
@@ -409,6 +415,11 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     return { kind: "create_user", userEmail: emails[0] ?? null };
   }
 
+  if (/\bdelete\s+user\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "delete_user", userEmail: emails[0] ?? null };
+  }
+
   if (/\bcreate\s+project\b/i.test(candidate)) {
     return {
       kind: "create_project",
@@ -538,6 +549,7 @@ const MENU_VIEW_ITEMS: string[] = [
 
 const MENU_MANAGE_ITEMS: string[] = [
   'Create a user — "Create user alice@example.com"',
+  'Delete a user — "Delete user alice@example.com"',
   'Create a project — "Create project Alpha Launch for alice@example.com"',
   'Update a user\'s tier — "Make user@email.com an agency"',
   'Assign an RPM — "Assign user@email.com to john@company.com for project Alpha Launch"',
@@ -732,6 +744,21 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
       ].join("\n");
     }
 
+    if (payload.kind === "delete_user") {
+      return [
+        "I understood:",
+        "",
+        "Delete user (permanent)",
+        `User: ${payload.userEmail}`,
+        "",
+        "This will permanently remove the user account and all of their projects, transactions, and documents. This cannot be undone.",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
     if (payload.kind === "create_project") {
       return [
         "I understood:",
@@ -873,6 +900,17 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
         "<p><strong>Create user</strong><br>",
         `User: ${escapeHtml(payload.userEmail)}<br>`,
         "Tier: Freemium (default)</p>",
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "delete_user") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Delete user (permanent)</strong><br>",
+        `User: ${escapeHtml(payload.userEmail)}</p>`,
+        "<p><strong>Warning:</strong> this will permanently remove the user account and all of their projects, transactions, and documents. This cannot be undone.</p>",
         '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
         "<p>&mdash; Frank</p>",
       ].join("");
@@ -1199,6 +1237,9 @@ export function summarizeAdminAction(action: AdminActionPayload): string {
   }
   if (action.kind === "create_user") {
     return `Create user ${action.userEmail}`;
+  }
+  if (action.kind === "delete_user") {
+    return `Delete user ${action.userEmail}`;
   }
   if (action.kind === "create_project") {
     return `Create project ${action.projectName} for ${action.userEmail}`;

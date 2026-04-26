@@ -223,6 +223,8 @@ function normalizeAdminActionPayload(action: AdminActionPayload): Record<string,
       return { projectName: action.projectName, userEmail: action.userEmail };
     case "create_user":
       return { userEmail: action.userEmail };
+    case "delete_user":
+      return { userEmail: action.userEmail };
     case "create_project":
       return { projectName: action.projectName, userEmail: action.userEmail };
     case "upsert_instruction":
@@ -321,6 +323,13 @@ function reconstructAdminActionPayload(
         return null;
       }
       return { kind: "create_user", userEmail };
+    }
+    case "delete_user": {
+      const userEmail = asEmail(payload.userEmail);
+      if (!userEmail) {
+        return null;
+      }
+      return { kind: "delete_user", userEmail };
     }
     case "create_project": {
       const projectName = asString(payload.projectName);
@@ -1343,6 +1352,39 @@ async function handleAdminRequest(
     }
     const payload: AdminActionPayload = {
       kind: "create_user",
+      userEmail: request.userEmail,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "delete_user") {
+    if (!request.userEmail) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include the user email (e.g. "Delete user alice@example.com").',
+        ),
+      );
+    }
+    const targetEmailNormalized = request.userEmail.trim().toLowerCase();
+    if (targetEmailNormalized === getMasterUserEmail()) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          "I can’t delete the master admin account.",
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "delete_user",
       userEmail: request.userEmail,
     };
     await repo.createOrReusePendingAdminAction({

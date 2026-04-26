@@ -1,3 +1,4 @@
+import { getMasterUserEmail } from "@/lib/env";
 import type { Tier } from "@/modules/contracts/types";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
 import type { MemoryRepository } from "@/modules/memory/repository";
@@ -291,6 +292,45 @@ async function executeCreateUser(
       `Create project <Name> for ${user.email}`,
       `Make ${user.email} an agency`,
     ],
+  };
+}
+
+async function executeDeleteUser(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "delete_user" }>,
+  context: { actorEmail: string; adminActionId?: string | null },
+): Promise<AdminExecutionResult> {
+  const targetEmail = action.userEmail.trim().toLowerCase();
+  if (targetEmail === getMasterUserEmail()) {
+    return { ok: false, reason: "I can’t delete the master admin account." };
+  }
+
+  const target = await repo.findUserByEmail(action.userEmail);
+  if (!target) {
+    return { ok: false, reason: `I couldn’t find a user for ${action.userEmail}.` };
+  }
+
+  const beforeJson = await repo.loadUserDeletionSnapshot(target.id);
+  await repo.hardDeleteUser(target.id);
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "delete_user",
+    entityType: "user",
+    entityRef: target.email,
+    beforeJson,
+    afterJson: null,
+  });
+
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines: [
+      `User ${target.email} has been permanently deleted.`,
+      "All owned projects, transactions, and documents were removed via cascading deletes.",
+      "Audit snapshot saved to admin_audit_log.",
+    ],
+    nextSteps: ["Show me all users"],
   };
 }
 
@@ -595,6 +635,8 @@ export async function executeAdminAction(
       return executeDeleteProject(repo, action, context);
     case "create_user":
       return executeCreateUser(repo, action, context);
+    case "delete_user":
+      return executeDeleteUser(repo, action, context);
     case "create_project":
       return executeCreateProject(repo, action, context);
     case "upsert_instruction":

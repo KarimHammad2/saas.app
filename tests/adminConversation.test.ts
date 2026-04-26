@@ -119,6 +119,20 @@ describe("parseAdminRequest", () => {
     });
   });
 
+  it("parses delete user with an email", () => {
+    expect(parseAdminRequest("Delete user alice@example.com")).toEqual({
+      kind: "delete_user",
+      userEmail: "alice@example.com",
+    });
+  });
+
+  it("parses delete user with no email as missing", () => {
+    expect(parseAdminRequest("Delete user")).toEqual({
+      kind: "delete_user",
+      userEmail: null,
+    });
+  });
+
   it("parses create project with a project name and owner email", () => {
     expect(
       parseAdminRequest("Create project Alpha Launch for alice@example.com"),
@@ -229,6 +243,12 @@ describe("buildAdminMenuReply", () => {
     expect(reply.html).toContain("Create a user");
     expect(reply.html).toContain("Create a project");
   });
+
+  it("advertises Delete a user under Manage", () => {
+    const reply = buildAdminMenuReply("Admin");
+    expect(reply.text).toContain("Delete a user");
+    expect(reply.html).toContain("Delete a user");
+  });
 });
 
 describe("buildAdminConfirmationReply for delete_project", () => {
@@ -286,6 +306,23 @@ describe("buildAdminConfirmationReply for create_user and create_project", () =>
     expect(reply.text).toContain("Owner: alice@example.com");
     expect(reply.html).toContain("Create project");
     expect(reply.html).toContain("Alpha Launch");
+    expect(reply.html).toContain("alice@example.com");
+  });
+});
+
+describe("buildAdminConfirmationReply for delete_user", () => {
+  it("warns the action is permanent in both text and html", () => {
+    const reply = buildAdminConfirmationReply("Admin", {
+      kind: "delete_user",
+      userEmail: "alice@example.com",
+    });
+    expect(reply.subject).toBe("Re: Admin");
+    expect(reply.text).toContain("Delete user (permanent)");
+    expect(reply.text.toLowerCase()).toContain("permanently remove");
+    expect(reply.text).toContain("alice@example.com");
+    expect(reply.text).toContain('Reply "CONFIRM"');
+    expect(reply.html).toContain("Delete user (permanent)");
+    expect(reply.html.toLowerCase()).toContain("permanently remove");
     expect(reply.html).toContain("alice@example.com");
   });
 });

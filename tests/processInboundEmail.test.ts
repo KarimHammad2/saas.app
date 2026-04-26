@@ -213,6 +213,10 @@ const repoState = {
   listInstructions: vi.fn(),
   upsertInstruction: vi.fn(),
   recordAdminAuditLog: vi.fn(),
+  loadProjectDeletionSnapshot: vi.fn(),
+  hardDeleteProject: vi.fn(),
+  loadUserDeletionSnapshot: vi.fn(),
+  hardDeleteUser: vi.fn(),
 };
 
 // Intent classification is tested separately in classifyInboundIntent.test.ts.
@@ -312,6 +316,10 @@ vi.mock("@/modules/memory/repository", async () => {
       listInstructions = repoState.listInstructions;
       upsertInstruction = repoState.upsertInstruction;
       recordAdminAuditLog = repoState.recordAdminAuditLog;
+      loadProjectDeletionSnapshot = repoState.loadProjectDeletionSnapshot;
+      hardDeleteProject = repoState.hardDeleteProject;
+      loadUserDeletionSnapshot = repoState.loadUserDeletionSnapshot;
+      hardDeleteUser = repoState.hardDeleteUser;
     },
   };
 });
@@ -483,6 +491,10 @@ describe("processInboundEmail", () => {
       previous: null,
     }));
     repoState.recordAdminAuditLog.mockResolvedValue(undefined);
+    repoState.loadProjectDeletionSnapshot.mockResolvedValue({ project: null, state: null, rpmEmail: null });
+    repoState.hardDeleteProject.mockResolvedValue(undefined);
+    repoState.loadUserDeletionSnapshot.mockResolvedValue({ user: null, projects: [], emails: [] });
+    repoState.hardDeleteUser.mockResolvedValue(undefined);
   });
 
   it("returns recipients and state payload", async () => {
@@ -4858,4 +4870,225 @@ Prefer concise updates.
     expect(result.adminReply?.text).toContain("RPM removed from john@example.com");
     expect(result.adminReply?.text).toContain("Project: Target Project");
   });
+
+  it("creates a pending delete_user admin action and returns the permanent-delete confirmation", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+    repoState.createOrReusePendingAdminAction.mockResolvedValueOnce({
+      id: "admin_delete_user",
+      sender_user_id: "u-admin",
+      sender_email: "daniel@saassquared.com",
+      action_kind: "delete_user",
+      action_payload: { userEmail: "victim@example.com" },
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Delete user victim@example.com",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-delete-user",
+      provider: "resend",
+      providerEventId: "m-admin-delete-user",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Delete user victim@example.com",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(repoState.createOrReusePendingAdminAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderEmail: "daniel@saassquared.com",
+        actionKind: "delete_user",
+        actionPayload: { userEmail: "victim@example.com" },
+      }),
+    );
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("Delete user (permanent)");
+    expect(result.adminReply?.text).toContain("victim@example.com");
+    expect(result.adminReply?.text).toContain('Reply "CONFIRM"');
+    expect(repoState.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it("blocks deletion of the master admin email at staging time without creating a pending action", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-delete-master",
+      provider: "resend",
+      providerEventId: "m-admin-delete-master",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Delete user daniel@saassquared.com",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text.toLowerCase()).toContain("master");
+    expect(repoState.createOrReusePendingAdminAction).not.toHaveBeenCalled();
+    expect(repoState.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it("confirms a pending delete_user action and executes the hard delete", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-admin",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce({
+      id: "admin_delete_user_confirm",
+      sender_user_id: "u-admin",
+      sender_email: "daniel@saassquared.com",
+      action_kind: "delete_user",
+      action_payload: { userEmail: "victim@example.com" },
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Delete user victim@example.com",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+    repoState.findUserByEmail.mockResolvedValueOnce({
+      id: "u-victim",
+      email: "victim@example.com",
+      display_name: null,
+      tier: "freemium",
+      created_at: new Date().toISOString(),
+    });
+    const snapshot = {
+      user: { id: "u-victim", email: "victim@example.com", tier: "freemium" },
+      projects: [
+        { id: "p-1", name: "Alpha", project_code: "PJT-AAA111", status: "active", archived_at: null },
+      ],
+      emails: [{ email: "victim@example.com", is_primary: true }],
+    };
+    repoState.loadUserDeletionSnapshot.mockResolvedValueOnce(snapshot);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-admin-delete-user-confirm",
+      provider: "resend",
+      providerEventId: "m-admin-delete-user-confirm",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: "Daniel",
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Re: Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "CONFIRM",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(repoState.findUserByEmail).toHaveBeenCalledWith("victim@example.com");
+    expect(repoState.loadUserDeletionSnapshot).toHaveBeenCalledWith("u-victim");
+    expect(repoState.hardDeleteUser).toHaveBeenCalledWith("u-victim");
+    expect(repoState.recordAdminAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKind: "delete_user",
+        entityType: "user",
+        entityRef: "victim@example.com",
+        adminActionId: "admin_delete_user_confirm",
+        beforeJson: snapshot,
+        afterJson: null,
+      }),
+    );
+    expect(repoState.resolvePendingAdminAction).toHaveBeenCalledWith({
+      actionId: "admin_delete_user_confirm",
+      status: "executed",
+      resolvedByEmail: "daniel@saassquared.com",
+    });
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toMatch(/permanently deleted/i);
+  });
+
 });

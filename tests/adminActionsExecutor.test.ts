@@ -36,6 +36,8 @@ function makeRepo(overrides: Partial<Record<keyof MemoryRepository, unknown>> = 
     setProjectArchived: vi.fn(async () => undefined),
     loadProjectDeletionSnapshot: vi.fn(async () => ({ project: null, state: null, rpmEmail: null })),
     hardDeleteProject: vi.fn(async () => undefined),
+    loadUserDeletionSnapshot: vi.fn(async () => ({ user: null, projects: [], emails: [] })),
+    hardDeleteUser: vi.fn(async () => undefined),
     getOrCreateUserByEmail: vi.fn(async (email: string) => ({
       user: {
         id: "u-new",
@@ -508,6 +510,97 @@ describe("executeAdminAction - create_user", () => {
       expect(result.lines.join(" ")).toMatch(/agency/i);
     }
     expect(repo.getOrCreateUserByEmail).not.toHaveBeenCalled();
+    expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAdminAction - delete_user", () => {
+  it("hard-deletes a user by email, snapshotting before_json and recording the audit log", async () => {
+    const target = {
+      id: "u-target",
+      email: "victim@example.com",
+      display_name: null,
+      tier: "freemium" as const,
+      created_at: "2026-04-20T00:00:00.000Z",
+    };
+    const snapshot = {
+      user: { id: "u-target", email: "victim@example.com", tier: "freemium" },
+      projects: [{ id: "p-1", name: "Alpha", project_code: "PJT-AAA111", status: "active", archived_at: null }],
+      emails: [{ email: "victim@example.com", is_primary: true }],
+    };
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => target),
+      loadUserDeletionSnapshot: vi.fn(async () => snapshot),
+      hardDeleteUser: vi.fn(async () => undefined),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "delete_user", userEmail: "victim@example.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.heading).toBe("Done ✅");
+      expect(result.lines.join(" ")).toMatch(/permanently deleted/i);
+      expect(result.lines.join(" ")).toContain("victim@example.com");
+    }
+    expect((repo.findUserByEmail as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("victim@example.com");
+    expect((repo.loadUserDeletionSnapshot as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("u-target");
+    expect((repo.hardDeleteUser as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("u-target");
+    expect((repo.recordAdminAuditLog as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKind: "delete_user",
+        entityType: "user",
+        entityRef: "victim@example.com",
+        adminActionId: "a1",
+        beforeJson: snapshot,
+        afterJson: null,
+      }),
+    );
+
+    const deleteOrder = (repo.hardDeleteUser as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const snapshotOrder = (repo.loadUserDeletionSnapshot as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(snapshotOrder).toBeLessThan(deleteOrder);
+  });
+
+  it("returns ok:false when the target user does not exist", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => null),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "delete_user", userEmail: "missing@example.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("missing@example.com");
+    }
+    expect(repo.loadUserDeletionSnapshot).not.toHaveBeenCalled();
+    expect(repo.hardDeleteUser).not.toHaveBeenCalled();
+    expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("blocks deletion of the master admin email", async () => {
+    const repo = makeRepo();
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "delete_user", userEmail: "daniel@saassquared.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.toLowerCase()).toContain("master");
+    }
+    expect(repo.findUserByEmail).not.toHaveBeenCalled();
+    expect(repo.loadUserDeletionSnapshot).not.toHaveBeenCalled();
+    expect(repo.hardDeleteUser).not.toHaveBeenCalled();
     expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
   });
 });

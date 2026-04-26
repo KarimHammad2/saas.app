@@ -2850,6 +2850,61 @@ export class MemoryRepository {
     }
   }
 
+  /**
+   * Build a full before-snapshot for `admin_audit_log.before_json` prior to a hard user delete.
+   * Captures the user row, owned project ids/names, and account email aliases so the deletion
+   * can be reconstructed from the audit log if required.
+   */
+  async loadUserDeletionSnapshot(userId: string): Promise<Record<string, unknown>> {
+    const { data: userRow, error: userError } = await this.supabase
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+    if (userError) {
+      throw new Error(`Failed to load user snapshot: ${userError.message}`);
+    }
+
+    const { data: projectRows, error: projectsError } = await this.supabase
+      .from("projects")
+      .select("id, name, project_code, status, archived_at")
+      .eq("user_id", userId);
+    if (projectsError) {
+      throw new Error(`Failed to load owned projects snapshot: ${projectsError.message}`);
+    }
+
+    const { data: emailRows, error: emailsError } = await this.supabase
+      .from("user_emails")
+      .select("email, is_primary")
+      .eq("user_id", userId);
+    if (emailsError) {
+      throw new Error(`Failed to load user_emails snapshot: ${emailsError.message}`);
+    }
+
+    return {
+      user: userRow ?? null,
+      projects: projectRows ?? [],
+      emails: emailRows ?? [],
+    };
+  }
+
+  /**
+   * Permanently delete a user row. Child tables declare `on delete cascade` on `user_id`
+   * (projects, user_emails, user_profiles, project_members, rpm_suggestions,
+   * user_profile_context, cc_membership_confirmations, admin_email_actions), so all
+   * dependent rows are removed by the database in the same statement. Project-scoped
+   * tables are then cascaded a second hop via `projects.user_id`.
+   */
+  async hardDeleteUser(userId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from("users")
+      .delete()
+      .eq("id", userId);
+    if (error) {
+      throw new Error(`Failed to delete user: ${error.message}`);
+    }
+  }
+
   async replaceProjectRisks(projectId: string, risks: string[]): Promise<void> {
     const normalized = risks.map((entry) => entry.trim()).filter(Boolean);
     const { error } = await this.supabase
