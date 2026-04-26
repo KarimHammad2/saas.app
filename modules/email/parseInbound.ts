@@ -535,16 +535,44 @@ function normalizeSectionHeadings(content: string): string {
     .join("\n");
 }
 
+/**
+ * Inline list support for prose emails:
+ * `Goals: I'd like to assess: - Product - Pricing - Workflow`
+ * should yield separate entries while preserving ordinary dash punctuation.
+ */
+function splitInlineListSegments(line: string): string[] {
+  const normalizedLine = line.trim().replace(/[ \t]+/g, " ");
+  if (!normalizedLine) {
+    return [];
+  }
+
+  // Keep explicit per-line bullets/numbering untouched; downstream stripping handles them.
+  if (/^(?:[-*+]\s+|\d+[.)]\s+)/.test(normalizedLine)) {
+    return [normalizedLine];
+  }
+
+  const inlineMarkers = Array.from(normalizedLine.matchAll(/\s[-*+]\s+/g));
+  if (inlineMarkers.length === 0) {
+    return [normalizedLine];
+  }
+
+  // Conservative split rule: either explicit "label: - item" or multiple inline bullets.
+  const hasColonIntroducedInlineList = /:\s[-*+]\s+/.test(normalizedLine);
+  if (!hasColonIntroducedInlineList && inlineMarkers.length < 2) {
+    return [normalizedLine];
+  }
+
+  return normalizedLine
+    .split(/\s[-*+]\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
 function toBulletList(content: string): string[] {
   return content
     .split("\n")
-    .map((line) =>
-      line
-        .replace(/^\s*[-*+]\s+\[(?: |x|X)\]\s*/, "")
-        .replace(/^\s*[-*+]\s*/, "")
-        .replace(/^\s*\d+[.)]\s*/, "")
-        .trim(),
-    )
+    .flatMap((line) => splitInlineListSegments(line))
+    .map((line) => line.replace(/^\s*[-*+]\s+\[(?: |x|X)\]\s*/, "").replace(/^\s*[-*+]\s*/, "").replace(/^\s*\d+[.)]\s*/, "").trim())
     .filter(Boolean);
 }
 

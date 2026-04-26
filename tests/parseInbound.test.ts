@@ -164,6 +164,31 @@ Decisions:
     expect(parsed.parsed.decisions).toEqual(["Use Supabase"]);
   });
 
+  it("parses prose-style section bodies with inline bullet fragments", () => {
+    const payload = {
+      from: "User <user@example.com>",
+      subject: "Audit request",
+      text: `Goals: I’d like to run a structured audit of SaaS² before launch. The goal is to assess clarity, consistency, and risk across: - Product definition - Positioning and narrative - Pricing and program structure - Onboarding and workflow assumptions
+
+Notes: I’ve attached the materials I have so far and I’m looking for guidance on what gaps stand out before launch.
+
+Decisions: No decisions made yet. This phase is exploratory.`,
+    };
+
+    const parsed = parseInbound(payload, "resend");
+    expect(parsed.parsed.goals).toEqual([
+      "I’d like to run a structured audit of SaaS² before launch. The goal is to assess clarity, consistency, and risk across:",
+      "Product definition",
+      "Positioning and narrative",
+      "Pricing and program structure",
+      "Onboarding and workflow assumptions",
+    ]);
+    expect(parsed.parsed.notes).toEqual([
+      "I’ve attached the materials I have so far and I’m looking for guidance on what gaps stand out before launch.",
+    ]);
+    expect(parsed.parsed.decisions).toEqual(["No decisions made yet. This phase is exploratory."]);
+  });
+
   it("extracts project name from Project Name section", () => {
     const payload = {
       from: "User <user@example.com>",
@@ -704,6 +729,29 @@ FollowUp:
       },
     ]);
     expect(p.projectSectionPresence.followUps).toBe(true);
+  });
+
+  it("splits inline bullet fragments inside a Goals section line", () => {
+    const p = parseNormalizedContent(
+      "Goals:\nI'd like to assess launch readiness across: - Product definition - Positioning and narrative - Pricing model",
+    );
+    expect(p.goals).toEqual([
+      "I'd like to assess launch readiness across:",
+      "Product definition",
+      "Positioning and narrative",
+      "Pricing model",
+    ]);
+  });
+
+  it("parses mixed Notes prose and bullets while preserving line-based entries", () => {
+    const p = parseNormalizedContent(
+      "Notes:\nThis is exploratory for now.\n- Focus on launch blockers\n- Clarify onboarding assumptions",
+    );
+    expect(p.notes).toEqual([
+      "This is exploratory for now.",
+      "Focus on launch blockers",
+      "Clarify onboarding assumptions",
+    ]);
   });
 });
 
