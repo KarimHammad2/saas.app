@@ -8,7 +8,7 @@ import { processInboundEmail } from "@/modules/orchestration/processInboundEmail
 import {
   sendCcMembershipConfirmationEmail,
   sendClarificationEmail,
-  sendPdfResubmissionEmail,
+  sendUnsupportedDocumentResubmissionEmail,
   sendRpmStructuredProjectClarificationEmail,
 } from "@/modules/orchestration/sendClarificationEmail";
 import {
@@ -19,13 +19,13 @@ import { sendProjectEmail } from "@/modules/output/sendProjectEmail";
 import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProposalEmail";
 
 export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
-  if (event.attachments?.some((attachment) => attachment.isPdf)) {
-    log.info("inbound email includes PDF attachment — sending resubmission reply", {
+  if (event.attachments?.some((a) => a.isPdf || a.isExcel || a.isWord)) {
+    log.info("inbound email includes unsupported document attachment — sending resubmission reply", {
       senderEmail: event.from,
       senderSubject: event.subject,
       attachmentCount: event.attachments.length,
     });
-    await sendPdfResubmissionEmail(event.from, event.subject);
+    await sendUnsupportedDocumentResubmissionEmail(event.from, event.subject);
     return { userId: null, projectId: null, duplicate: false, clarificationSent: true };
   }
 
@@ -79,6 +79,35 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
           recipientCount: result.escalationAction.notification.recipients.length,
         });
       }
+      return {
+        userId: result.context.userId,
+        projectId: result.context.projectId,
+        duplicate: result.context.duplicate,
+        clarificationSent: false,
+      };
+    }
+    if (result.paymentVerificationHandled) {
+      const pv = result.paymentVerificationHandled;
+      if (pv.masterNotificationSent) {
+        await repo.recordOutboundEmailEvent({
+          projectId: result.context.projectId,
+          userId: result.context.userId,
+          inboundEventId: result.context.eventId,
+          kind: "payment-verification-master",
+          provider: event.provider,
+          status: "sent",
+          recipientCount: 1,
+        });
+      }
+      await repo.recordOutboundEmailEvent({
+        projectId: result.context.projectId,
+        userId: result.context.userId,
+        inboundEventId: result.context.eventId,
+        kind: "payment-verification-ack",
+        provider: event.provider,
+        status: "sent",
+        recipientCount: 1,
+      });
       return {
         userId: result.context.userId,
         projectId: result.context.projectId,

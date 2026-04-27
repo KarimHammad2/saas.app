@@ -6,6 +6,18 @@ import { generateShortProjectName } from "@/modules/domain/projectName";
 import { parseNormalizedContent } from "@/modules/email/parseInbound";
 import { CcMembershipConfirmationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 
+const sendPaymentVerificationNotificationsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/modules/output/paymentOutbound", async () => {
+  const actual = await vi.importActual<typeof import("@/modules/output/paymentOutbound")>(
+    "@/modules/output/paymentOutbound",
+  );
+  return {
+    ...actual,
+    sendPaymentVerificationNotifications: sendPaymentVerificationNotificationsMock,
+  };
+});
+
 /** Mirrors `deriveProjectName` in processInboundEmail for assertions on deferred CC kickoff resolution. */
 function expectedDerivedProjectName(rawBody: string, subject: string): string {
   const parsed = parseNormalizedContent(rawBody);
@@ -193,6 +205,11 @@ const repoState = {
   getAgencyDefaultRpmEmail: vi.fn(),
   storeTransactionEvent: vi.fn(),
   markLatestPendingHourPurchasePaid: vi.fn(),
+  getLatestPendingHourPurchaseTransaction: vi.fn(),
+  insertPaymentVerificationPendingIfNotExists: vi.fn(),
+  getOpenPaymentVerificationForProject: vi.fn(),
+  deletePaymentVerificationPendingByTransactionId: vi.fn(),
+  markHourPurchasePaidById: vi.fn(),
   storeProtectedTransactionSuggestion: vi.fn(),
   snapshotProjectContext: vi.fn(),
   getProjectState: vi.fn(),
@@ -296,6 +313,11 @@ vi.mock("@/modules/memory/repository", async () => {
       getAgencyDefaultRpmEmail = repoState.getAgencyDefaultRpmEmail;
       storeTransactionEvent = repoState.storeTransactionEvent;
       markLatestPendingHourPurchasePaid = repoState.markLatestPendingHourPurchasePaid;
+      getLatestPendingHourPurchaseTransaction = repoState.getLatestPendingHourPurchaseTransaction;
+      insertPaymentVerificationPendingIfNotExists = repoState.insertPaymentVerificationPendingIfNotExists;
+      getOpenPaymentVerificationForProject = repoState.getOpenPaymentVerificationForProject;
+      deletePaymentVerificationPendingByTransactionId = repoState.deletePaymentVerificationPendingByTransactionId;
+      markHourPurchasePaidById = repoState.markHourPurchasePaidById;
       storeProtectedTransactionSuggestion = repoState.storeProtectedTransactionSuggestion;
       snapshotProjectContext = repoState.snapshotProjectContext;
       getProjectState = repoState.getProjectState;
@@ -327,6 +349,7 @@ vi.mock("@/modules/memory/repository", async () => {
 describe("processInboundEmail", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    sendPaymentVerificationNotificationsMock.mockResolvedValue(undefined);
     repoState.ensureUserProfileRow.mockResolvedValue(undefined);
     classifyInboundIntentMock.mockReturnValue({
       isNewProjectIntent: true,
@@ -401,6 +424,7 @@ describe("processInboundEmail", () => {
     });
     repoState.findLatestPendingAdminAction.mockResolvedValue(null);
     repoState.resolvePendingAdminAction.mockResolvedValue(undefined);
+    repoState.getLatestPendingHourPurchaseTransaction.mockResolvedValue(null);
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
       userId: "u1",
@@ -2078,13 +2102,15 @@ describe("processInboundEmail", () => {
     expect(repoState.setUserTier).not.toHaveBeenCalled();
   });
 
-  it("marks latest pending purchase paid and returns paymentConfirmed on Paid from owner", async () => {
+  it("queues payment verification and notifies master on Paid from owner (does not mark paid yet)", async () => {
     const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
     repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
     repoState.getActiveRpm.mockResolvedValue(null);
-    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
-    const paidRecord = {
-      id: "tx-paid-1",
+    repoState.getProjectState.mockResolvedValue(
+      buildProjectState({ activeRpmEmail: "rpm@example.com", projectName: "Primary Project" }),
+    );
+    const pendingTx = {
+      id: "tx-pending-1",
       type: "hourPurchase" as const,
       hoursPurchased: 5,
       hourlyRate: 100,
@@ -2097,10 +2123,12 @@ describe("processInboundEmail", () => {
       paymentCurrency: "usd",
       paymentLinkUrl: "https://pay.example/b",
       paymentLinkTierAmount: 500,
-      paidAt: new Date().toISOString(),
-      paymentStatus: "paid" as const,
+      paidAt: null,
+      paymentStatus: "pending_payment" as const,
     };
-    repoState.markLatestPendingHourPurchasePaid.mockResolvedValue(paidRecord);
+    repoState.getLatestPendingHourPurchaseTransaction.mockResolvedValue(pendingTx);
+    repoState.insertPaymentVerificationPendingIfNotExists.mockResolvedValue({ created: true });
+    sendPaymentVerificationNotificationsMock.mockResolvedValue(undefined);
 
     const event: NormalizedEmailEvent = {
       eventId: "e_paid_ack",
@@ -2136,14 +2164,184 @@ describe("processInboundEmail", () => {
     };
 
     const result = await processInboundEmail(event);
-    expect(repoState.markLatestPendingHourPurchasePaid).toHaveBeenCalledWith("p1", "user@example.com");
-    expect(repoState.setUserTier).toHaveBeenCalledWith("u1", "solopreneur");
-    expect(repoState.assignRpm).toHaveBeenCalledWith("p1", expect.any(String), "user@example.com");
-    expect(result.recipients).toContain("rpm@example.com");
+    expect(repoState.insertPaymentVerificationPendingIfNotExists).toHaveBeenCalledWith({
+      transactionId: "tx-pending-1",
+      projectId: "p1",
+      payerAckEmail: "user@example.com",
+    });
+    expect(sendPaymentVerificationNotificationsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payerEmail: "user@example.com",
+        projectName: "Primary Project",
+        projectCode: "pjt-a1b2c3d4",
+        masterNotificationSent: true,
+        payment: pendingTx,
+      }),
+    );
+    expect(repoState.markLatestPendingHourPurchasePaid).not.toHaveBeenCalled();
+    expect(repoState.markHourPurchasePaidById).not.toHaveBeenCalled();
+    expect(repoState.setUserTier).not.toHaveBeenCalled();
+    expect(result.paymentVerificationHandled).toEqual({ masterNotificationSent: true });
+    expect(result.paymentConfirmed).toBeUndefined();
+    expect(result.payload).toBeUndefined();
+  });
+
+  it("marks pending purchase paid and returns paymentConfirmed when master replies Confirm", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
+    const paidRecord = {
+      id: "tx-paid-1",
+      type: "hourPurchase" as const,
+      hoursPurchased: 5,
+      hourlyRate: 100,
+      allocatedHours: 4.5,
+      bufferHours: 0.5,
+      saas2Fee: 50,
+      projectRemainder: 0,
+      createdAt: new Date().toISOString(),
+      paymentTotal: 500,
+      paymentCurrency: "usd",
+      paymentLinkUrl: "https://pay.example/b",
+      paymentLinkTierAmount: 500,
+      paidAt: new Date().toISOString(),
+      paymentStatus: "paid" as const,
+    };
+    repoState.getOpenPaymentVerificationForProject.mockResolvedValue({
+      id: "pvp-1",
+      transactionId: "tx-pending-1",
+      projectId: "p1",
+      payerAckEmail: "user@example.com",
+      createdAt: new Date().toISOString(),
+    });
+    repoState.markHourPurchasePaidById.mockResolvedValue(paidRecord);
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_confirm",
+      provider: "resend",
+      providerEventId: "m_confirm",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: [PJT-A1B2C3D4] payment",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Confirm",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        masterPaymentConfirmAck: true,
+      },
+    };
+
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u-master",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+
+    const result = await processInboundEmail(event);
+    expect(repoState.markHourPurchasePaidById).toHaveBeenCalledWith("tx-pending-1");
+    expect(repoState.deletePaymentVerificationPendingByTransactionId).toHaveBeenCalledWith("tx-pending-1");
+    expect(repoState.markLatestPendingHourPurchasePaid).not.toHaveBeenCalled();
     expect(result.paymentConfirmed?.plainTextBody).toContain("Payment confirmed.");
-    expect(result.paymentConfirmed?.followUpProjectPayload.recordedTransaction).toBeUndefined();
-    expect(result.paymentConfirmed?.followUpProjectPayload.context.activeRpmEmail).toBe("rpm@example.com");
     expect(result.paymentInstructions).toBeUndefined();
+  });
+
+  it("marks latest pending purchase paid on Paid from master without verification queue", async () => {
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    repoState.findProjectByCodeAndUser.mockResolvedValue({ ...defaultMockProject });
+    repoState.getActiveRpm.mockResolvedValue(null);
+    repoState.getProjectState.mockResolvedValue(buildProjectState({ activeRpmEmail: "rpm@example.com" }));
+    const paidRecord = {
+      id: "tx-paid-1",
+      type: "hourPurchase" as const,
+      hoursPurchased: 5,
+      hourlyRate: 100,
+      allocatedHours: 4.5,
+      bufferHours: 0.5,
+      saas2Fee: 50,
+      projectRemainder: 0,
+      createdAt: new Date().toISOString(),
+      paymentTotal: 500,
+      paymentCurrency: "usd",
+      paymentLinkUrl: "https://pay.example/b",
+      paymentLinkTierAmount: 500,
+      paidAt: new Date().toISOString(),
+      paymentStatus: "paid" as const,
+    };
+    repoState.markLatestPendingHourPurchasePaid.mockResolvedValue(paidRecord);
+    repoState.getOrCreateUserByEmail.mockResolvedValue({
+      user: {
+        id: "u-master",
+        email: "daniel@saassquared.com",
+        display_name: null,
+        tier: "freemium",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+
+    const event: NormalizedEmailEvent = {
+      eventId: "e_paid_ack",
+      provider: "resend",
+      providerEventId: "m_paid_ack",
+      timestamp: new Date().toISOString(),
+      from: "daniel@saassquared.com",
+      fromDisplayName: null,
+      to: [],
+      cc: [],
+      subject: "Re: [PJT-A1B2C3D4] payment",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Paid",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+        paymentReceivedAck: true,
+      },
+    };
+
+    const result = await processInboundEmail(event);
+    expect(repoState.markLatestPendingHourPurchasePaid).toHaveBeenCalledWith("p1", "daniel@saassquared.com");
+    expect(repoState.getLatestPendingHourPurchaseTransaction).not.toHaveBeenCalled();
+    expect(sendPaymentVerificationNotificationsMock).not.toHaveBeenCalled();
+    expect(result.paymentConfirmed?.plainTextBody).toContain("Payment confirmed.");
+    expect(result.paymentVerificationHandled).toBeUndefined();
   });
 
   it("marks first inbound as welcome and stores parsed notes", async () => {
@@ -4614,6 +4812,109 @@ Prefer concise updates.
     expect(result.adminReply?.text).toContain("Admin Menu");
     expect(repoState.createProjectForUser).not.toHaveBeenCalled();
     expect(repoState.findLatestPendingCcMembershipConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("returns the agency admin menu for an agency-tier sender", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "agency@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-agency-admin-menu",
+      provider: "resend",
+      providerEventId: "m-agency-admin-menu",
+      timestamp: new Date().toISOString(),
+      from: "agency@example.com",
+      fromDisplayName: null,
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Admin",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("Agency admin menu");
+    expect(result.adminReply?.text).not.toContain("Show me all users");
+    expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("blocks master-only admin commands for agency senders", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "agency@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-agency-admin-blocked",
+      provider: "resend",
+      providerEventId: "m-agency-admin-blocked",
+      timestamp: new Date().toISOString(),
+      from: "agency@example.com",
+      fromDisplayName: null,
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Show me all users",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("system administrator");
+    expect(repoState.listUsers).not.toHaveBeenCalled();
   });
 
   it("confirms a pending admin tier update and executes it", async () => {

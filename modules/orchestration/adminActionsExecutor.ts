@@ -1,7 +1,10 @@
-import { getMasterUserEmail } from "@/lib/env";
+import { getDefaultFromEmail, getMasterUserEmail } from "@/lib/env";
+import { log } from "@/lib/log";
+import { sendNewUserWelcomeEmail } from "@/modules/email/sendNewUserWelcomeEmail";
+import { sendEmail } from "@/modules/email/sendEmail";
 import type { Tier } from "@/modules/contracts/types";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
-import type { MemoryRepository } from "@/modules/memory/repository";
+import { AdditionalEmailConflictError, type MemoryRepository } from "@/modules/memory/repository";
 import type {
   AdminActionPayload,
   AdminEditableProjectField,
@@ -12,6 +15,17 @@ import type {
 export type AdminExecutionResult =
   | { ok: true; heading: string; lines: string[]; nextSteps?: string[] }
   | { ok: false; reason: string };
+
+export interface AdminActionExecutionContext {
+  actorEmail: string;
+  adminActionId?: string | null;
+  /** When set (agency admin), project mutations must belong to this account user id. */
+  enforceOwnerUserId?: string | null;
+}
+
+function escapeHtmlLite(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 function parseListValue(value: string): string[] {
   return value
@@ -72,6 +86,7 @@ async function resolveAdminProjectByName(
   repo: MemoryRepository,
   projectName: string,
   userEmail: string | null,
+  enforceOwnerUserId: string | null = null,
 ): Promise<
   | { ok: true; project: { id: string; name: string; user_id: string; archived_at?: string | null } }
   | { ok: false; reason: string }
@@ -106,15 +121,23 @@ async function resolveAdminProjectByName(
     };
   }
   const [project] = matches;
+  if (enforceOwnerUserId && project.user_id !== enforceOwnerUserId) {
+    return { ok: false, reason: "That project is not part of your agency account." };
+  }
   return { ok: true, project };
 }
 
 async function executeEditProjectField(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "edit_project_field" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
-  const lookup = await resolveAdminProjectByName(repo, action.projectName, action.userEmail);
+  const lookup = await resolveAdminProjectByName(
+    repo,
+    action.projectName,
+    action.userEmail,
+    context.enforceOwnerUserId ?? null,
+  );
   if (!lookup.ok) {
     return lookup;
   }
@@ -199,9 +222,14 @@ async function executeEditProjectField(
 async function executeProjectLifecycle(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "archive_project" | "restore_project" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
-  const lookup = await resolveAdminProjectByName(repo, action.projectName, action.userEmail);
+  const lookup = await resolveAdminProjectByName(
+    repo,
+    action.projectName,
+    action.userEmail,
+    context.enforceOwnerUserId ?? null,
+  );
   if (!lookup.ok) {
     return lookup;
   }
@@ -263,7 +291,7 @@ async function executeProjectLifecycle(
 async function executeCreateUser(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "create_user" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const existing = await repo.findUserByEmail(action.userEmail);
   if (existing) {
@@ -274,7 +302,7 @@ async function executeCreateUser(
       nextSteps: [`Show projects for ${action.userEmail}`],
     };
   }
-  const { user } = await repo.getOrCreateUserByEmail(action.userEmail);
+  const { user, created } = await repo.getOrCreateUserByEmail(action.userEmail);
   await repo.recordAdminAuditLog({
     adminActionId: context.adminActionId ?? null,
     actorEmail: context.actorEmail,
@@ -284,10 +312,23 @@ async function executeCreateUser(
     beforeJson: null,
     afterJson: { id: user.id, email: user.email, tier: user.tier },
   });
+
+  const lines = [`${user.email} has been created (tier: ${user.tier}).`];
+  if (created) {
+    try {
+      await sendNewUserWelcomeEmail(user.email);
+      lines.push(`Welcome email sent to ${user.email}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("welcome email failed after create_user", { recipient: user.email, message });
+      lines.push(`Welcome email could not be sent: ${message}`);
+    }
+  }
+
   return {
     ok: true,
     heading: "Done ✅",
-    lines: [`${user.email} has been created (tier: ${user.tier}).`],
+    lines,
     nextSteps: [
       `Create project <Name> for ${user.email}`,
       `Make ${user.email} an agency`,
@@ -298,7 +339,7 @@ async function executeCreateUser(
 async function executeDeleteUser(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "delete_user" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const targetEmail = action.userEmail.trim().toLowerCase();
   if (targetEmail === getMasterUserEmail()) {
@@ -337,7 +378,7 @@ async function executeDeleteUser(
 async function executeCreateProject(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "create_project" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const owner = await repo.findUserByEmail(action.userEmail);
   if (!owner) {
@@ -394,9 +435,14 @@ async function executeCreateProject(
 async function executeDeleteProject(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "delete_project" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
-  const lookup = await resolveAdminProjectByName(repo, action.projectName, action.userEmail);
+  const lookup = await resolveAdminProjectByName(
+    repo,
+    action.projectName,
+    action.userEmail,
+    context.enforceOwnerUserId ?? null,
+  );
   if (!lookup.ok) {
     return lookup;
   }
@@ -430,7 +476,7 @@ async function executeDeleteProject(
 async function executeUpsertInstruction(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "upsert_instruction" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const result = await repo.upsertInstruction(action.key, action.content);
   await repo.recordAdminAuditLog({
@@ -453,7 +499,7 @@ async function executeUpsertInstruction(
 async function executeUpsertEmailTemplate(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "upsert_email_template" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const patch: AdminEmailTemplatePatch = action.patch;
   if (patch.subject === undefined && patch.textBody === undefined && patch.htmlBody === undefined) {
@@ -480,7 +526,7 @@ async function executeUpsertEmailTemplate(
 async function executeUpsertSystemSetting(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "upsert_system_setting" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const result = await repo.upsertSystemSetting(action.key, action.valueJson);
   await repo.recordAdminAuditLog({
@@ -503,7 +549,7 @@ async function executeUpsertSystemSetting(
 async function executeUpdateTier(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "update_tier" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const user = await repo.findUserByEmail(action.userEmail);
   if (!user) {
@@ -535,13 +581,18 @@ async function executeUpdateTier(
 async function executeAssignRpm(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "assign_rpm" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const user = await repo.findUserByEmail(action.userEmail);
   if (!user) {
     return { ok: false, reason: `I couldn’t find a user for ${action.userEmail}.` };
   }
-  const lookup = await resolveAdminProjectByName(repo, action.projectName, action.userEmail);
+  const lookup = await resolveAdminProjectByName(
+    repo,
+    action.projectName,
+    action.userEmail,
+    context.enforceOwnerUserId ?? null,
+  );
   if (!lookup.ok) {
     return lookup;
   }
@@ -576,13 +627,18 @@ async function executeAssignRpm(
 async function executeRemoveRpm(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "remove_rpm" }>,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
   const user = await repo.findUserByEmail(action.userEmail);
   if (!user) {
     return { ok: false, reason: `I couldn’t find a user for ${action.userEmail}.` };
   }
-  const lookup = await resolveAdminProjectByName(repo, action.projectName, action.userEmail);
+  const lookup = await resolveAdminProjectByName(
+    repo,
+    action.projectName,
+    action.userEmail,
+    context.enforceOwnerUserId ?? null,
+  );
   if (!lookup.ok) {
     return lookup;
   }
@@ -614,11 +670,90 @@ async function executeRemoveRpm(
   };
 }
 
+async function executeAddAgencyMember(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "add_agency_member" }>,
+  context: AdminActionExecutionContext,
+): Promise<AdminExecutionResult> {
+  const agencyUserId = context.enforceOwnerUserId;
+  if (!agencyUserId) {
+    return { ok: false, reason: "Adding members is only available from an agency admin context." };
+  }
+  const primary = await repo.getUserEmailById(agencyUserId);
+  if (!primary) {
+    return { ok: false, reason: "I couldn’t resolve your agency account email." };
+  }
+  const member = action.memberEmail.trim().toLowerCase();
+  try {
+    await repo.addAdditionalEmails(agencyUserId, [member]);
+  } catch (error) {
+    if (error instanceof AdditionalEmailConflictError) {
+      return {
+        ok: false,
+        reason: "That email is already associated with another account.",
+      };
+    }
+    throw error;
+  }
+
+  await sendEmail({
+    to: member,
+    subject: `You were added to ${primary}'s agency on SaaS²`,
+    text: [
+      "Hello,",
+      "",
+      `You have been added as a member of the agency account for ${primary} on SaaS².`,
+      "You can use this email address with Frank and your team’s projects going forward.",
+      "",
+      "— Frank",
+    ].join("\n"),
+    html: [
+      "<p>Hello,</p>",
+      `<p>You have been added as a member of the agency account for <strong>${escapeHtmlLite(primary)}</strong> on SaaS².</p>`,
+      "<p>You can use this email address with Frank and your team’s projects going forward.</p>",
+      "<p>&mdash; Frank</p>",
+    ].join(""),
+    headers: { From: getDefaultFromEmail() },
+  });
+
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "add_agency_member",
+    entityType: "user_email",
+    entityRef: member,
+    beforeJson: null,
+    afterJson: { agencyUserId, memberEmail: member },
+  });
+
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines: [
+      `${member} has been added to your agency account.`,
+      "They have been sent a notification email.",
+    ],
+    nextSteps: ["Show members", "Show all projects"],
+  };
+}
+
 export async function executeAdminAction(
   repo: MemoryRepository,
   action: AdminActionPayload,
-  context: { actorEmail: string; adminActionId?: string | null },
+  context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
+  if (context.enforceOwnerUserId) {
+    const allowed: Array<AdminActionPayload["kind"]> = [
+      "assign_rpm",
+      "remove_rpm",
+      "delete_project",
+      "add_agency_member",
+    ];
+    if (!allowed.includes(action.kind)) {
+      return { ok: false, reason: "That action is not available for agency admin." };
+    }
+  }
+
   switch (action.kind) {
     case "update_tier":
       return executeUpdateTier(repo, action, context);
@@ -639,6 +774,8 @@ export async function executeAdminAction(
       return executeDeleteUser(repo, action, context);
     case "create_project":
       return executeCreateProject(repo, action, context);
+    case "add_agency_member":
+      return executeAddAgencyMember(repo, action, context);
     case "upsert_instruction":
       return executeUpsertInstruction(repo, action, context);
     case "upsert_email_template":

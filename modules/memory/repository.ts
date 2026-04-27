@@ -107,6 +107,14 @@ export interface AdminEmailActionRecord {
   created_at: string;
 }
 
+export interface PaymentVerificationPendingRecord {
+  id: string;
+  transactionId: string;
+  projectId: string;
+  payerAckEmail: string;
+  createdAt: string;
+}
+
 export interface EscalationLogRecord {
   id: string;
   project_id: string | null;
@@ -2542,6 +2550,9 @@ export class MemoryRepository {
     return payment;
   }
 
+  private readonly transactionRecordSelectColumns =
+    "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at, status";
+
   /**
    * Sets **one** pending hour-purchase row to `paid` (latest by `created_at`). Does not alter
    * `project_remainder` on that row or other rows; project `remainder_balance` was already
@@ -2574,9 +2585,125 @@ export class MemoryRepository {
       .update({ status: "paid", paid_at: paidAtIso })
       .eq("id", latest.id)
       .eq("status", "pending_payment")
-      .select(
-        "id, type, hours_purchased, hourly_rate, allocated_hours, buffer_hours, saas2_fee, project_remainder, created_at, payment_total, payment_currency, payment_link_url, payment_link_tier_amount, paid_at, status",
-      )
+      .select(this.transactionRecordSelectColumns)
+      .maybeSingle<TransactionSelectRow>();
+
+    if (updErr) {
+      throw new Error(`Failed to mark hour purchase paid: ${updErr.message}`);
+    }
+    if (!updated) {
+      return null;
+    }
+
+    return mapTransactionRowToRecord(updated);
+  }
+
+  /** Latest pending_payment hour purchase for the project (same ordering as mark-latest-paid). */
+  async getLatestPendingHourPurchaseTransaction(projectId: string): Promise<TransactionRecord | null> {
+    const { data: row, error } = await this.supabase
+      .from("transactions")
+      .select(this.transactionRecordSelectColumns)
+      .eq("project_id", projectId)
+      .eq("type", "hourPurchase")
+      .eq("status", "pending_payment")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<TransactionSelectRow>();
+
+    if (error) {
+      throw new Error(`Failed to load pending hour purchase: ${error.message}`);
+    }
+    if (!row) {
+      return null;
+    }
+    return mapTransactionRowToRecord(row);
+  }
+
+  /**
+   * Idempotent: if a row already exists for this transaction, returns created: false.
+   */
+  async insertPaymentVerificationPendingIfNotExists(input: {
+    transactionId: string;
+    projectId: string;
+    payerAckEmail: string;
+  }): Promise<{ created: boolean }> {
+    const { data: existing, error: selErr } = await this.supabase
+      .from("payment_verification_pending")
+      .select("id")
+      .eq("transaction_id", input.transactionId)
+      .maybeSingle<{ id: string }>();
+
+    if (selErr) {
+      throw new Error(`Failed to check payment verification pending: ${selErr.message}`);
+    }
+    if (existing?.id) {
+      return { created: false };
+    }
+
+    const { error } = await this.supabase.from("payment_verification_pending").insert({
+      transaction_id: input.transactionId,
+      project_id: input.projectId,
+      payer_ack_email: normalizeEmail(input.payerAckEmail),
+    });
+
+    if (error) {
+      if (error.code === "23505") {
+        return { created: false };
+      }
+      throw new Error(`Failed to record payment verification pending: ${error.message}`);
+    }
+    return { created: true };
+  }
+
+  /** Oldest open verification for the project (FIFO). */
+  async getOpenPaymentVerificationForProject(projectId: string): Promise<PaymentVerificationPendingRecord | null> {
+    const { data: row, error } = await this.supabase
+      .from("payment_verification_pending")
+      .select("id, transaction_id, project_id, payer_ack_email, created_at")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle<{
+        id: string;
+        transaction_id: string;
+        project_id: string;
+        payer_ack_email: string;
+        created_at: string;
+      }>();
+
+    if (error) {
+      throw new Error(`Failed to load payment verification pending: ${error.message}`);
+    }
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      transactionId: row.transaction_id,
+      projectId: row.project_id,
+      payerAckEmail: row.payer_ack_email,
+      createdAt: row.created_at,
+    };
+  }
+
+  async deletePaymentVerificationPendingByTransactionId(transactionId: string): Promise<void> {
+    const { error } = await this.supabase.from("payment_verification_pending").delete().eq("transaction_id", transactionId);
+    if (error) {
+      throw new Error(`Failed to clear payment verification pending: ${error.message}`);
+    }
+  }
+
+  /**
+   * Marks a specific pending hour purchase paid (must still be pending_payment).
+   */
+  async markHourPurchasePaidById(transactionId: string): Promise<TransactionRecord | null> {
+    const paidAtIso = new Date().toISOString();
+    const { data: updated, error: updErr } = await this.supabase
+      .from("transactions")
+      .update({ status: "paid", paid_at: paidAtIso })
+      .eq("id", transactionId)
+      .eq("status", "pending_payment")
+      .select(this.transactionRecordSelectColumns)
       .maybeSingle<TransactionSelectRow>();
 
     if (updErr) {

@@ -846,6 +846,8 @@ type ParsedInboundAttachment = {
   filename: string | null;
   contentType: string | null;
   isPdf: boolean;
+  isExcel: boolean;
+  isWord: boolean;
 };
 
 function attachmentFilename(value: Record<string, unknown>): string | null {
@@ -878,6 +880,37 @@ function isPdfAttachment(filename: string | null, contentType: string | null): b
   return false;
 }
 
+const EXCEL_EXTENSIONS = [".xlsx", ".xlsm", ".xlsb", ".xls"] as const;
+const WORD_EXTENSIONS = [".docx", ".docm", ".doc"] as const;
+
+function isExcelAttachment(filename: string | null, contentType: string | null): boolean {
+  const name = filename?.toLowerCase() ?? "";
+  if (EXCEL_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+    return true;
+  }
+  const ct = contentType?.toLowerCase() ?? "";
+  if (
+    ct.includes("application/vnd.ms-excel") ||
+    ct.includes("officedocument.spreadsheetml") ||
+    ct.includes("application/vnd.openxmlformats-officedocument.spreadsheetml")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isWordAttachment(filename: string | null, contentType: string | null): boolean {
+  const name = filename?.toLowerCase() ?? "";
+  if (WORD_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+    return true;
+  }
+  const ct = contentType?.toLowerCase() ?? "";
+  if (ct.includes("application/msword") || ct.includes("officedocument.wordprocessingml") || ct.includes("wordprocessingml")) {
+    return true;
+  }
+  return false;
+}
+
 function parseAttachmentCandidate(value: unknown): ParsedInboundAttachment | null {
   if (typeof value === "string") {
     const filename = toStringOrNull(value);
@@ -888,6 +921,8 @@ function parseAttachmentCandidate(value: unknown): ParsedInboundAttachment | nul
       filename,
       contentType: null,
       isPdf: isPdfAttachment(filename, null),
+      isExcel: isExcelAttachment(filename, null),
+      isWord: isWordAttachment(filename, null),
     };
   }
 
@@ -906,6 +941,8 @@ function parseAttachmentCandidate(value: unknown): ParsedInboundAttachment | nul
     filename,
     contentType,
     isPdf: isPdfAttachment(filename, contentType),
+    isExcel: isExcelAttachment(filename, contentType),
+    isWord: isWordAttachment(filename, contentType),
   };
 }
 
@@ -971,6 +1008,22 @@ export function detectPaymentReceivedAck(normalizedContent: string, transactionE
   return /^paid\.?$/i.test(lines[0]);
 }
 
+/** Master-only payment verification reply (mirrors Paid detection). */
+export function detectMasterPaymentConfirmAck(normalizedContent: string, transactionEvent: TransactionEvent | null): boolean {
+  if (transactionEvent) {
+    return false;
+  }
+  const lines = normalizedContent
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length !== 1) {
+    return false;
+  }
+  return /^confirm\.?$/i.test(lines[0]);
+}
+
 export function parseNormalizedContent(content: string, options?: { timestamp?: string }) {
   const normalizedContent = normalizeSectionHeadings(content);
   const projectSectionPresence = buildProjectSectionPresence(normalizedContent);
@@ -1005,6 +1058,7 @@ export function parseNormalizedContent(content: string, options?: { timestamp?: 
   const assignRpmEmail = parseAssignRpmEmail(assignRpmSection);
   const transactionEvent = parseTransactionBlock(extractSection(normalizedContent, "Transaction"));
   const paymentReceivedAck = detectPaymentReceivedAck(normalizedContent, transactionEvent);
+  const masterPaymentConfirmAck = detectMasterPaymentConfirmAck(normalizedContent, transactionEvent);
   const approvals = parseApprovals(content);
   const additionalEmails = parseAdditionalEmails(normalizedContent);
   const projectName = parseProjectNameUpdate(content, normalizedContent);
@@ -1027,7 +1081,8 @@ export function parseNormalizedContent(content: string, options?: { timestamp?: 
     Boolean(assignRpmEmail) ||
     Boolean(transactionEvent) ||
     approvals.length > 0 ||
-    paymentReceivedAck;
+    paymentReceivedAck ||
+    masterPaymentConfirmAck;
 
   let summary: string | null = null;
   if (summaryFromSection) {
@@ -1074,6 +1129,7 @@ export function parseNormalizedContent(content: string, options?: { timestamp?: 
     assignRpmEmail: assignRpmEmail ?? null,
     projectSectionPresence,
     paymentReceivedAck,
+    masterPaymentConfirmAck,
   };
 }
 

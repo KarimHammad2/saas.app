@@ -219,6 +219,8 @@ export interface NormalizedEmailEvent {
     filename: string | null;
     contentType: string | null;
     isPdf: boolean;
+    isExcel: boolean;
+    isWord: boolean;
   }>;
   rawBody: string;
   parsed: {
@@ -255,5 +257,7 @@ export interface NormalizedEmailEvent {
     projectSectionPresence: ProjectSectionPresence;
     /** Inbound body is a standalone "Paid" acknowledgement after checkout (no Transaction block in same message). */
     paymentReceivedAck?: boolean;
+    /** Standalone "Confirm" from master to settle a queued payment verification (no Transaction block). */
+    masterPaymentConfirmAck?: boolean;
   };
 }

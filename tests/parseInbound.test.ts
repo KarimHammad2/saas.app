@@ -291,7 +291,9 @@ Decisions:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.attachments).toEqual([{ filename: "brief.pdf", contentType: "application/octet-stream", isPdf: true }]);
+    expect(parsed.attachments).toEqual([
+      { filename: "brief.pdf", contentType: "application/octet-stream", isPdf: true, isExcel: false, isWord: false },
+    ]);
   });
 
   it("extracts attachments and flags PDF by mime type", () => {
@@ -306,7 +308,87 @@ Decisions:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.attachments).toEqual([{ filename: "brief.bin", contentType: "application/pdf", isPdf: true }]);
+    expect(parsed.attachments).toEqual([
+      { filename: "brief.bin", contentType: "application/pdf", isPdf: true, isExcel: false, isWord: false },
+    ]);
+  });
+
+  it("extracts attachments and flags Excel by filename and mime type", () => {
+    const byName = parseInbound(
+      {
+        from: "User <user@example.com>",
+        subject: "xlsx",
+        text: "Goals:\n- Sheet",
+        attachments: [{ filename: "data.xlsx", contentType: "application/octet-stream" }],
+      },
+      "resend",
+    );
+    expect(byName.attachments).toEqual([
+      { filename: "data.xlsx", contentType: "application/octet-stream", isPdf: false, isExcel: true, isWord: false },
+    ]);
+
+    const byMime = parseInbound(
+      {
+        from: "User <user@example.com>",
+        subject: "xlsx mime",
+        text: "Body",
+        attachments: [
+          {
+            filename: "sheet.bin",
+            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          },
+        ],
+      },
+      "resend",
+    );
+    expect(byMime.attachments).toEqual([
+      {
+        filename: "sheet.bin",
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        isPdf: false,
+        isExcel: true,
+        isWord: false,
+      },
+    ]);
+  });
+
+  it("extracts attachments and flags Word by filename and mime type", () => {
+    const byName = parseInbound(
+      {
+        from: "User <user@example.com>",
+        subject: "docx",
+        text: "Goals:\n- Doc",
+        attachments: [{ filename: "brief.docx", contentType: "application/octet-stream" }],
+      },
+      "resend",
+    );
+    expect(byName.attachments).toEqual([
+      { filename: "brief.docx", contentType: "application/octet-stream", isPdf: false, isExcel: false, isWord: true },
+    ]);
+
+    const byMime = parseInbound(
+      {
+        from: "User <user@example.com>",
+        subject: "word mime",
+        text: "Body",
+        attachments: [
+          {
+            filename: "file.bin",
+            contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+      "resend",
+    );
+    expect(byMime.attachments).toEqual([
+      {
+        filename: "file.bin",
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        isPdf: false,
+        isExcel: false,
+        isWord: true,
+      },
+    ]);
   });
 
   it("does not flag non-PDF attachments", () => {
@@ -318,7 +400,9 @@ Decisions:
     };
 
     const parsed = parseInbound(payload, "resend");
-    expect(parsed.attachments).toEqual([{ filename: "notes.txt", contentType: "text/plain", isPdf: false }]);
+    expect(parsed.attachments).toEqual([
+      { filename: "notes.txt", contentType: "text/plain", isPdf: false, isExcel: false, isWord: false },
+    ]);
   });
 
   it("throws when no supported body content fields are present", () => {
@@ -679,6 +763,21 @@ describe("payment received ack", () => {
     expect(parseNormalizedContent("Paid\nGoals: x").paymentReceivedAck).toBe(false);
     expect(
       parseNormalizedContent("Transaction:\nHours Purchased: 1\nHourly Rate: 10\nPaid").paymentReceivedAck,
+    ).toBe(false);
+  });
+});
+
+describe("master payment confirm ack", () => {
+  it("detects standalone Confirm (case-insensitive, optional period)", () => {
+    expect(parseNormalizedContent("Confirm").masterPaymentConfirmAck).toBe(true);
+    expect(parseNormalizedContent("confirm.").masterPaymentConfirmAck).toBe(true);
+    expect(parseNormalizedContent("  CONFIRM  ").masterPaymentConfirmAck).toBe(true);
+  });
+
+  it("does not set master confirm when combined with other lines or a Transaction block", () => {
+    expect(parseNormalizedContent("Confirm\nGoals: x").masterPaymentConfirmAck).toBe(false);
+    expect(
+      parseNormalizedContent("Transaction:\nHours Purchased: 1\nHourly Rate: 10\nConfirm").masterPaymentConfirmAck,
     ).toBe(false);
   });
 });

@@ -46,8 +46,95 @@ export function formatPaymentInstructionsBody(payment: TransactionPaymentMeta): 
     "",
     `Pay here: ${payment.paymentLinkUrl}`,
     "",
-    "After you complete checkout, reply to this email with the word Paid so we can activate your transaction.",
+    "After you complete checkout, reply to this email with the word Paid so our team can verify payment and activate your transaction.",
   ].join("\n");
+}
+
+export function formatPaymentPendingVerificationAckBody(): string {
+  return [
+    "Thanks — we've received your payment notice.",
+    "",
+    "Our team is verifying checkout. You'll get another message when your transaction is active.",
+  ].join("\n");
+}
+
+export function formatPaymentAlreadyPendingVerificationAckBody(): string {
+  return [
+    "We already have your payment notice pending verification.",
+    "",
+    "You'll hear from us once it's confirmed.",
+  ].join("\n");
+}
+
+export function formatMasterPaymentVerificationBody(input: {
+  payerEmail: string;
+  projectName: string;
+  paymentLinkLabel: string;
+}): string {
+  return [
+    `${input.payerEmail} replied Paid for a pending hour purchase.`,
+    "",
+    `Project: ${input.projectName}`,
+    `Payment link: ${input.paymentLinkLabel}`,
+    "",
+    "If checkout cleared, reply to this email with the word Confirm to activate their transaction.",
+  ].join("\n");
+}
+
+/** Sends master notification (optional) and payer acknowledgement inline (cf. escalateToRPM). */
+export async function sendPaymentVerificationNotifications(input: {
+  masterEmail: string;
+  payerEmail: string;
+  projectName: string;
+  projectCode: string;
+  payment: TransactionRecord;
+  masterNotificationSent: boolean;
+}): Promise<void> {
+  const codeBracket =
+    input.projectCode.trim().length > 0 ? formatProjectCodeBracket(input.projectCode) : "";
+  const subjectSuffix = codeBracket ? ` ${codeBracket}` : "";
+  const linkLabel = input.payment.paymentLinkUrl ?? "(no link on file)";
+
+  if (input.masterNotificationSent) {
+    const subject = `Payment verification needed — ${input.projectName}${subjectSuffix}`.trim();
+    const textBody = formatMasterPaymentVerificationBody({
+      payerEmail: input.payerEmail,
+      projectName: input.projectName,
+      paymentLinkLabel: linkLabel,
+    });
+    const html = wrapEmailDocument(bodyToHtmlParagraphs(textBody));
+    const rawMessageId = `<${randomUUID()}@saas2.app>`;
+    await sendEmail({
+      to: input.masterEmail,
+      subject,
+      text: textBody,
+      html,
+      allowMasterUserAsDirectRecipient: true,
+      headers: {
+        "Message-ID": rawMessageId,
+        "X-SaaS2-System": "true",
+        "X-SaaS2-Message-Type": "payment-verification-master",
+      },
+    });
+  }
+
+  const payerText = input.masterNotificationSent
+    ? formatPaymentPendingVerificationAckBody()
+    : formatPaymentAlreadyPendingVerificationAckBody();
+  const payerHtml = wrapEmailDocument(bodyToHtmlParagraphs(payerText));
+  const payerRawId = `<${randomUUID()}@saas2.app>`;
+  await sendEmail({
+    to: input.payerEmail,
+    subject: `Payment notice received — ${input.projectName}${subjectSuffix}`.trim(),
+    text: payerText,
+    html: payerHtml,
+    allowMasterUserAsDirectRecipient: true,
+    headers: {
+      "Message-ID": payerRawId,
+      "X-SaaS2-System": "true",
+      "X-SaaS2-Message-Type": "payment-verification-ack",
+    },
+  });
 }
 
 export function formatPaymentConfirmedPlainText(context: ProjectContext, paid: TransactionRecord): string {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAdminConfirmationReply,
   buildAdminMenuReply,
+  buildAgencyAdminMenuReply,
   parseAdminRequest,
 } from "@/modules/orchestration/adminConversation";
 
@@ -191,6 +192,21 @@ describe("parseAdminRequest", () => {
     });
   });
 
+  it("does not parse structured project Assign RPM block as admin", () => {
+    expect(parseAdminRequest("Assign RPM:\nrpm@example.com\n")).toBeNull();
+  });
+
+  it("parses show agency members", () => {
+    expect(parseAdminRequest("Show members")).toEqual({ kind: "show_agency_members" });
+  });
+
+  it("parses add agency member", () => {
+    expect(parseAdminRequest("Add member alice@example.com")).toEqual({
+      kind: "add_agency_member",
+      memberEmail: "alice@example.com",
+    });
+  });
+
   it("parses remove RPM for project by name", () => {
     expect(parseAdminRequest("Remove the RPM from john@example.com for project Alpha Launch")).toEqual({
       kind: "remove_rpm",
@@ -209,6 +225,16 @@ describe("parseAdminRequest", () => {
 
   it("returns null for unrelated text", () => {
     expect(parseAdminRequest("Hi Frank, please review my project")).toBeNull();
+  });
+});
+
+describe("buildAgencyAdminMenuReply", () => {
+  it("lists agency-scoped options", () => {
+    const reply = buildAgencyAdminMenuReply("Admin");
+    expect(reply.subject).toBe("Re: Admin");
+    expect(reply.text).toContain("Agency admin menu");
+    expect(reply.text).toContain("Show members");
+    expect(reply.text).toContain("Add member");
   });
 });
 

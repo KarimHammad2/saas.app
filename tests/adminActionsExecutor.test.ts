@@ -1,4 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sendNewUserWelcomeEmail } from "@/modules/email/sendNewUserWelcomeEmail";
+
+vi.mock("@/modules/email/sendNewUserWelcomeEmail", () => ({
+  sendNewUserWelcomeEmail: vi.fn(async () => undefined),
+}));
+
+vi.mock("@/modules/email/sendEmail", () => ({
+  sendEmail: vi.fn(async () => undefined),
+}));
+
+import { sendEmail } from "@/modules/email/sendEmail";
 import { executeAdminAction } from "@/modules/orchestration/adminActionsExecutor";
 import type { MemoryRepository } from "@/modules/memory/repository";
 import type { ProjectContext } from "@/modules/contracts/types";
@@ -85,6 +96,8 @@ function makeRepo(overrides: Partial<Record<keyof MemoryRepository, unknown>> = 
     getActiveRpm: vi.fn(async () => null),
     assignRpm: vi.fn(async () => undefined),
     deactivateActiveRpm: vi.fn(async () => undefined),
+    addAdditionalEmails: vi.fn(async () => 2),
+    getUserEmailById: vi.fn(async () => "owner@example.com"),
     ...(overrides as Record<string, unknown>),
   };
   return repo as unknown as MemoryRepository;
@@ -445,6 +458,10 @@ describe("executeAdminAction - configuration upserts", () => {
 });
 
 describe("executeAdminAction - create_user", () => {
+  beforeEach(() => {
+    vi.mocked(sendNewUserWelcomeEmail).mockClear();
+  });
+
   it("creates a new user and records the audit log with afterJson", async () => {
     const repo = makeRepo({
       findUserByEmail: vi.fn(async () => null),
@@ -470,7 +487,10 @@ describe("executeAdminAction - create_user", () => {
     if (result.ok) {
       expect(result.heading).toBe("Done ✅");
       expect(result.lines.join(" ")).toContain("alice@example.com");
+      expect(result.lines.some((l) => /welcome email sent/i.test(l))).toBe(true);
     }
+    expect(sendNewUserWelcomeEmail).toHaveBeenCalledTimes(1);
+    expect(sendNewUserWelcomeEmail).toHaveBeenCalledWith("alice@example.com");
     expect((repo.getOrCreateUserByEmail as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
       "alice@example.com",
     );
@@ -509,6 +529,7 @@ describe("executeAdminAction - create_user", () => {
       expect(result.lines.join(" ")).toMatch(/already exists/i);
       expect(result.lines.join(" ")).toMatch(/agency/i);
     }
+    expect(sendNewUserWelcomeEmail).not.toHaveBeenCalled();
     expect(repo.getOrCreateUserByEmail).not.toHaveBeenCalled();
     expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
   });
@@ -731,5 +752,69 @@ describe("executeAdminAction - create_project", () => {
     }
     expect(repo.createProjectForUser).not.toHaveBeenCalled();
     expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAdminAction - agency scope", () => {
+  it("rejects delete_project when project is not owned by enforceOwnerUserId", async () => {
+    const project = { id: "p-target", name: "Alpha", user_id: "u-intruder", archived_at: null };
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({
+        id: "u-agency",
+        email: "owner@example.com",
+        display_name: null,
+        tier: "agency" as const,
+        created_at: "2026-04-20T00:00:00.000Z",
+      })),
+      findProjectsByName: vi.fn(async () => [project]),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "delete_project", projectName: "Alpha", userEmail: "owner@example.com" },
+      { actorEmail: "owner@example.com", adminActionId: "a-ag", enforceOwnerUserId: "u-agency" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/not part of your agency account/);
+    }
+    expect(repo.hardDeleteProject).not.toHaveBeenCalled();
+  });
+
+  it("add_agency_member adds email and notifies the new member", async () => {
+    vi.mocked(sendEmail).mockClear();
+    const repo = makeRepo({
+      getUserEmailById: vi.fn(async () => "primary@agency.com"),
+      addAdditionalEmails: vi.fn(async () => 3),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "add_agency_member", memberEmail: "newmember@agency.com" },
+      { actorEmail: "primary@agency.com", adminActionId: "a-mem", enforceOwnerUserId: "u-agency" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(repo.addAdditionalEmails).toHaveBeenCalledWith("u-agency", ["newmember@agency.com"]);
+    expect(sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "newmember@agency.com",
+        subject: expect.stringContaining("primary@agency.com"),
+      }),
+    );
+  });
+
+  it("rejects master-only actions when enforceOwnerUserId is set", async () => {
+    const repo = makeRepo({ findUserByEmail: vi.fn(async () => null) });
+    const result = await executeAdminAction(
+      repo,
+      { kind: "create_user", userEmail: "x@y.com" },
+      { ...actorContext, enforceOwnerUserId: "u-agency" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/not available for agency admin/);
+    }
   });
 });

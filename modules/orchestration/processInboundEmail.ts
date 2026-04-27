@@ -46,8 +46,10 @@ import { detectCompletedTasks, extractUnmatchedCompletionNotes, filterCompletedT
 import { applyTaskIntents } from "@/modules/domain/taskIntentClassifier";
 import { detectProjectScopeChange, extractScopeTransition } from "@/modules/domain/scopeChangeDetection";
 import {
+  AGENCY_ADMIN_CONFIRMABLE_ACTION_KINDS,
   buildAdminActionConfirmation,
   buildAdminClarificationReply,
+  buildAgencyAdminMenuReply,
   buildAdminMenuReply,
   buildAdminNoPendingReply,
   buildAdminResultReply,
@@ -61,6 +63,7 @@ import {
   formatAdminTemplateRows,
   formatAdminTransactionRows,
   formatAdminUserRows,
+  isAgencyAdminRequestKind,
   parseAdminRequest,
   type AdminActionPayload,
   type AdminEditableProjectField,
@@ -90,7 +93,10 @@ import { CcMembershipConfirmationRequiredError, ClarificationRequiredError, NonR
 import { classifyInboundIntent } from "@/modules/orchestration/classifyInboundIntent";
 import type { ProjectEmailPayload } from "@/modules/output/types";
 import { compactOverviewForDocument } from "@/modules/output/overviewText";
-import { formatPaymentConfirmedPlainText } from "@/modules/output/paymentOutbound";
+import {
+  formatPaymentConfirmedPlainText,
+  sendPaymentVerificationNotifications,
+} from "@/modules/output/paymentOutbound";
 
 export interface InboundProcessingResult {
   recipients: string[];
@@ -129,6 +135,10 @@ export interface InboundProcessingResult {
     recipients: string[];
     plainTextBody: string;
     followUpProjectPayload: ProjectEmailPayload;
+  };
+  /** Owner replied Paid; master/payer verification emails were sent inline (no project payload). */
+  paymentVerificationHandled?: {
+    masterNotificationSent: boolean;
   };
 }
 
@@ -227,6 +237,8 @@ function normalizeAdminActionPayload(action: AdminActionPayload): Record<string,
       return { userEmail: action.userEmail };
     case "create_project":
       return { projectName: action.projectName, userEmail: action.userEmail };
+    case "add_agency_member":
+      return { memberEmail: action.memberEmail };
     case "upsert_instruction":
       return { key: action.key, content: action.content };
     case "upsert_email_template":
@@ -339,6 +351,13 @@ function reconstructAdminActionPayload(
       }
       return { kind: "create_project", projectName, userEmail };
     }
+    case "add_agency_member": {
+      const memberEmail = asEmail(payload.memberEmail);
+      if (!memberEmail) {
+        return null;
+      }
+      return { kind: "add_agency_member", memberEmail };
+    }
     case "upsert_instruction": {
       const key = asString(payload.key);
       const content = asString(payload.content);
@@ -384,13 +403,94 @@ function adminNextSteps(): string[] {
   ];
 }
 
+function agencyAdminNextSteps(): string[] {
+  return [
+    'Reply with "CONFIRM" to proceed with a pending change.',
+    'Or ask to list your projects, members, assign an RPM, or delete a project.',
+  ];
+}
+
+type AgencyNormalizeResult = { ok: true; request: AdminRequest } | { ok: false; message: string };
+
+async function normalizeAgencyAdminRequest(
+  repo: MemoryRepository,
+  agencyUserId: string,
+  request: AdminRequest,
+): Promise<AgencyNormalizeResult> {
+  const primary = await repo.getUserEmailById(agencyUserId);
+  if (!primary) {
+    return { ok: false, message: "I couldn’t resolve your account email." };
+  }
+  const primaryNorm = primary.trim().toLowerCase();
+
+  const onAccount = async (email: string): Promise<boolean> => {
+    const list = await repo.getUserEmailsById(agencyUserId);
+    return list.includes(email.trim().toLowerCase());
+  };
+
+  switch (request.kind) {
+    case "assign_rpm": {
+      let userEmail = request.userEmail;
+      let rpmEmail = request.rpmEmail;
+      if (userEmail && !rpmEmail) {
+        rpmEmail = userEmail;
+        userEmail = primaryNorm;
+      } else if (!userEmail && rpmEmail) {
+        userEmail = primaryNorm;
+      }
+      if (!userEmail?.trim() || !rpmEmail?.trim()) {
+        return {
+          ok: false,
+          message: "I need an RPM email and a project name. Your agency primary email is used as the project owner.",
+        };
+      }
+      const u = userEmail.trim().toLowerCase();
+      const r = rpmEmail.trim().toLowerCase();
+      if (!(await onAccount(u))) {
+        return { ok: false, message: "You can only assign RPMs for projects on your agency account." };
+      }
+      return { ok: true, request: { ...request, userEmail: u, rpmEmail: r } };
+    }
+    case "remove_rpm": {
+      const u = request.userEmail?.trim().toLowerCase() ?? primaryNorm;
+      if (!(await onAccount(u))) {
+        return { ok: false, message: "You can only remove RPMs from projects on your agency account." };
+      }
+      return { ok: true, request: { ...request, userEmail: u } };
+    }
+    case "delete_project": {
+      const u = request.userEmail?.trim().toLowerCase() ?? primaryNorm;
+      if (!(await onAccount(u))) {
+        return { ok: false, message: "You can only delete projects on your agency account." };
+      }
+      return { ok: true, request: { ...request, userEmail: u } };
+    }
+    case "show_projects":
+    case "show_rpm": {
+      if (!request.userEmail) {
+        return { ok: true, request: { ...request, userEmail: primaryNorm } };
+      }
+      if (!(await onAccount(request.userEmail))) {
+        return { ok: false, message: "You can only view projects for your own agency account." };
+      }
+      return { ok: true, request };
+    }
+    default:
+      return { ok: true, request };
+  }
+}
+
 async function handleAdminRequest(
   repo: MemoryRepository,
   userId: string,
   event: NormalizedEmailEvent,
-  request: AdminRequest,
+  initialRequest: AdminRequest,
   pendingAdminAction: Awaited<ReturnType<MemoryRepository["findLatestPendingAdminAction"]>>,
+  scope: "master" | "agency",
 ): Promise<InboundProcessingResult | null> {
+  let request: AdminRequest = initialRequest;
+  const nextSteps = scope === "agency" ? agencyAdminNextSteps : adminNextSteps;
+
   if (request.kind === "confirm") {
     if (!pendingAdminAction) {
       return {
@@ -409,6 +509,30 @@ async function handleAdminRequest(
     }
 
     const actionPayload = pendingAdminAction.action_payload as Record<string, unknown>;
+
+    if (scope === "agency" && !AGENCY_ADMIN_CONFIRMABLE_ACTION_KINDS.has(pendingAdminAction.action_kind)) {
+      await repo.resolvePendingAdminAction({
+        actionId: pendingAdminAction.id,
+        status: "expired",
+        resolvedByEmail: event.from,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That confirmation is not valid for your agency admin menu.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
 
     if (pendingAdminAction.action_kind === "update_tier") {
       const targetEmail = typeof actionPayload.userEmail === "string" ? actionPayload.userEmail.trim().toLowerCase() : "";
@@ -565,6 +689,30 @@ async function handleAdminRequest(
         };
       }
 
+      if (scope === "agency" && project.user_id !== userId) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            "That project is not part of your agency account.",
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+
       await repo.assignRpm(project.id, rpmEmail, event.from);
       await repo.resolvePendingAdminAction({
         actionId: pendingAdminAction.id,
@@ -671,6 +819,30 @@ async function handleAdminRequest(
         };
       }
 
+      if (scope === "agency" && project.user_id !== userId) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            "That project is not part of your agency account.",
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+
       await repo.deactivateActiveRpm(project.id);
       await repo.resolvePendingAdminAction({
         actionId: pendingAdminAction.id,
@@ -735,6 +907,7 @@ async function handleAdminRequest(
     const execution = await executeAdminAction(repo, reconstructed, {
       actorEmail: event.from,
       adminActionId: pendingAdminAction.id,
+      enforceOwnerUserId: scope === "agency" ? userId : null,
     });
 
     if (!execution.ok) {
@@ -773,7 +946,7 @@ async function handleAdminRequest(
         event.subject,
         execution.heading,
         execution.lines,
-        execution.nextSteps ?? adminNextSteps(),
+        execution.nextSteps ?? nextSteps(),
       ),
       context: {
         userId,
@@ -784,13 +957,132 @@ async function handleAdminRequest(
     };
   }
 
+  if (scope === "agency") {
+    if (!isAgencyAdminRequestKind(request.kind)) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That action is only available to the system administrator.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const normalized = await normalizeAgencyAdminRequest(repo, userId, request);
+    if (!normalized.ok) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(event.subject, normalized.message),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    request = normalized.request;
+  }
+
   if (request.kind === "menu") {
     return {
       recipients: [event.from],
       payload: undefined,
       outboundMode: "admin",
       rpmProfileProposal: null,
-      adminReply: buildAdminMenuReply(event.subject),
+      adminReply: scope === "agency" ? buildAgencyAdminMenuReply(event.subject) : buildAdminMenuReply(event.subject),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (request.kind === "show_agency_members") {
+    const emails = await repo.getUserEmailsById(userId);
+    const lines = emails.length > 0 ? emails.map((e, i) => `${i + 1}. ${e}`) : ["(no addresses found for this account)"];
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminResultReply(event.subject, "Agency account members", lines, nextSteps()),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (request.kind === "add_agency_member") {
+    if (!request.memberEmail?.trim()) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          'Please include the email (e.g. "Add member alice@example.com").',
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const memberEmail = request.memberEmail.trim().toLowerCase();
+    const existing = await repo.getUserEmailsById(userId);
+    if (existing.includes(memberEmail)) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That email is already a member of your agency account.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const addPayload: AdminActionPayload = { kind: "add_agency_member", memberEmail };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: "add_agency_member",
+      actionPayload: normalizeAdminActionPayload(addPayload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminActionConfirmation(event.subject, addPayload),
       context: {
         userId,
         projectId: null,
@@ -842,24 +1134,30 @@ async function handleAdminRequest(
       };
     }
 
-    const targetUser = await repo.findUserByEmail(request.userEmail);
-    if (!targetUser) {
-      return {
-        recipients: [event.from],
-        payload: undefined,
-        outboundMode: "admin",
-        rpmProfileProposal: null,
-        adminReply: buildAdminClarificationReply(event.subject, `I couldn’t find a user for ${request.userEmail}.`),
-        context: {
-          userId,
-          projectId: null,
-          eventId: event.eventId,
-          duplicate: false,
-        },
-      };
+    let targetUserId: string;
+    if (scope === "agency") {
+      targetUserId = userId;
+    } else {
+      const targetUser = await repo.findUserByEmail(request.userEmail);
+      if (!targetUser) {
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, `I couldn’t find a user for ${request.userEmail}.`),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      targetUserId = targetUser.id;
     }
 
-    const projects = await repo.findProjectsOwnedByUser(targetUser.id);
+    const projects = await repo.findProjectsOwnedByUser(targetUserId);
     if (request.kind === "show_projects") {
       const rows: Array<{ name: string; code: string; status: string; rpmEmail: string | null }> = [];
       for (const project of projects) {
@@ -875,7 +1173,7 @@ async function handleAdminRequest(
         payload: undefined,
         outboundMode: "admin",
         rpmProfileProposal: null,
-        adminReply: buildAdminResultReply(event.subject, "Projects", formatAdminProjectRows(rows), adminNextSteps()),
+        adminReply: buildAdminResultReply(event.subject, "Projects", formatAdminProjectRows(rows), nextSteps()),
         context: {
           userId,
           projectId: null,
@@ -898,7 +1196,7 @@ async function handleAdminRequest(
         payload: undefined,
         outboundMode: "admin",
         rpmProfileProposal: null,
-        adminReply: buildAdminResultReply(event.subject, "RPM assignments", formatAdminRpmRows(rows), adminNextSteps()),
+        adminReply: buildAdminResultReply(event.subject, "RPM assignments", formatAdminRpmRows(rows), nextSteps()),
         context: {
           userId,
           projectId: null,
@@ -931,7 +1229,7 @@ async function handleAdminRequest(
         event.subject,
         "Transactions",
         formatAdminTransactionRows(rows),
-        adminNextSteps(),
+        nextSteps(),
       ),
       context: {
         userId,
@@ -1188,7 +1486,7 @@ async function handleAdminRequest(
               senderEmail: row.senderEmail,
             })),
           ),
-          adminNextSteps(),
+          nextSteps(),
         ),
       );
     }
@@ -1200,7 +1498,7 @@ async function handleAdminRequest(
           event.subject,
           `Documents sent for "${project.name}"`,
           formatAdminDocumentRows(docs),
-          adminNextSteps(),
+          nextSteps(),
         ),
       );
     }
@@ -1221,7 +1519,7 @@ async function handleAdminRequest(
           },
           request.sections,
         ),
-        adminNextSteps(),
+        nextSteps(),
       ),
     );
   }
@@ -1233,7 +1531,7 @@ async function handleAdminRequest(
         event.subject,
         request.keyPrefix ? `System settings (${request.keyPrefix}*)` : "System settings",
         formatAdminSettingRows(rows),
-        adminNextSteps(),
+        nextSteps(),
       ),
     );
   }
@@ -1245,7 +1543,7 @@ async function handleAdminRequest(
         event.subject,
         request.key ? `Email template "${request.key}"` : "Email templates",
         formatAdminTemplateRows(rows, Boolean(request.key)),
-        adminNextSteps(),
+        nextSteps(),
       ),
     );
   }
@@ -1257,7 +1555,7 @@ async function handleAdminRequest(
         event.subject,
         request.key ? `Instruction "${request.key}"` : "Instructions",
         formatAdminInstructionRows(rows, Boolean(request.key)),
-        adminNextSteps(),
+        nextSteps(),
       ),
     );
   }
@@ -1609,6 +1907,28 @@ async function resolveInboundProject(
   });
 }
 
+async function applyHourPurchasePaidSideEffects(
+  repo: MemoryRepository,
+  input: {
+    ownerUserId: string;
+    projectId: string;
+    priorAccountTier: Tier;
+    actingEmail: string;
+  },
+): Promise<void> {
+  if (input.priorAccountTier === "freemium") {
+    await repo.setUserTier(input.ownerUserId, "solopreneur");
+  }
+  const tierAfterPayment = input.priorAccountTier === "freemium" ? "solopreneur" : input.priorAccountTier;
+  if (tierAfterPayment === "solopreneur") {
+    const rpmAfterPayment = await repo.getActiveRpm(input.projectId);
+    if (!rpmAfterPayment) {
+      await repo.assignRpm(input.projectId, getMasterUserEmail(), input.actingEmail);
+    }
+  }
+  await repo.appendRecentUpdate(input.projectId, "Payment confirmed for latest hour purchase.");
+}
+
 function shouldRequireRpmStructuredProjectClarification(
   parsed: NormalizedEmailEvent["parsed"],
   rawBody: string,
@@ -1617,6 +1937,9 @@ function shouldRequireRpmStructuredProjectClarification(
     return false;
   }
   if (parsed.paymentReceivedAck) {
+    return false;
+  }
+  if (parsed.masterPaymentConfirmAck) {
     return false;
   }
   if (hasAnyProjectMemoryPresence(parsed.projectSectionPresence)) {
@@ -1704,11 +2027,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const senderNormalized = event.from.trim().toLowerCase();
   const masterEmail = getMasterUserEmail();
   const senderIsMaster = senderNormalized === masterEmail;
-  const adminRequest = senderIsMaster ? parseAdminRequest(event.rawBody) : null;
-  const pendingAdminAction = senderIsMaster ? await repo.findLatestPendingAdminAction(user.id) : null;
+  const senderIsAgencyAdmin = user.tier === "agency" && !senderIsMaster;
+  const senderCanUseAdmin = senderIsMaster || senderIsAgencyAdmin;
+  const adminRequest = senderCanUseAdmin ? parseAdminRequest(event.rawBody) : null;
+  const pendingAdminAction = senderCanUseAdmin ? await repo.findLatestPendingAdminAction(user.id) : null;
   const pendingHumanApproval = await repo.findLatestPendingApproval(senderNormalized);
 
-  if (!inserted && senderIsMaster && (adminRequest || pendingAdminAction)) {
+  if (!inserted && senderCanUseAdmin && (adminRequest || pendingAdminAction)) {
     return {
       recipients: [event.from],
       payload: undefined,
@@ -1781,8 +2106,15 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     };
   }
 
-  if (senderIsMaster && adminRequest && (adminRequest.kind !== "confirm" || pendingAdminAction)) {
-    const adminResult = await handleAdminRequest(repo, user.id, event, adminRequest, pendingAdminAction);
+  if (senderCanUseAdmin && adminRequest && (adminRequest.kind !== "confirm" || pendingAdminAction)) {
+    const adminResult = await handleAdminRequest(
+      repo,
+      user.id,
+      event,
+      adminRequest,
+      pendingAdminAction,
+      senderIsAgencyAdmin ? "agency" : "master",
+    );
     if (adminResult) {
       return adminResult;
     }
@@ -1913,6 +2245,45 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     primaryUserEmail: ownerEmailForRole,
     activeRpmEmail,
   });
+
+  if (
+    contentEvent.parsed.paymentReceivedAck &&
+    !contentEvent.parsed.transactionEvent &&
+    role === "user" &&
+    canApproveTransaction(role)
+  ) {
+    const pendingTx = await repo.getLatestPendingHourPurchaseTransaction(project.id);
+    if (pendingTx) {
+      const { created } = await repo.insertPaymentVerificationPendingIfNotExists({
+        transactionId: pendingTx.id,
+        projectId: project.id,
+        payerAckEmail: event.from,
+      });
+      const projectName = (accessState.projectName ?? "Untitled Project").trim() || "Untitled Project";
+      const projectCodeTrim = accessState.projectCode?.trim() ?? "";
+      await sendPaymentVerificationNotifications({
+        masterEmail: getMasterUserEmail(),
+        payerEmail: event.from,
+        projectName,
+        projectCode: projectCodeTrim,
+        payment: pendingTx,
+        masterNotificationSent: created,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "full",
+        rpmProfileProposal: null,
+        paymentVerificationHandled: { masterNotificationSent: created },
+        context: {
+          userId: user.id,
+          projectId: project.id,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+  }
 
   if (
     role === "rpm" &&
@@ -2353,6 +2724,25 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const financialTier: Tier = nextTier === "agency" || priorAccountTier === "agency" ? "agency" : "solopreneur";
 
   if (
+    contentEvent.parsed.masterPaymentConfirmAck === true &&
+    !contentEvent.parsed.transactionEvent &&
+    role === "master"
+  ) {
+    const pendingVerification = await repo.getOpenPaymentVerificationForProject(project.id);
+    if (pendingVerification) {
+      const paidRow = await repo.markHourPurchasePaidById(pendingVerification.transactionId);
+      if (paidRow) {
+        await repo.deletePaymentVerificationPendingByTransactionId(pendingVerification.transactionId);
+        paymentConfirmedRecord = paidRow;
+        await applyHourPurchasePaidSideEffects(repo, {
+          ownerUserId,
+          projectId: project.id,
+          priorAccountTier,
+          actingEmail: event.from,
+        });
+      }
+    }
+  } else if (
     contentEvent.parsed.paymentReceivedAck === true &&
     !contentEvent.parsed.transactionEvent &&
     canApproveTransaction(role)
@@ -2360,17 +2750,12 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
     const paidRow = await repo.markLatestPendingHourPurchasePaid(project.id, event.from);
     if (paidRow) {
       paymentConfirmedRecord = paidRow;
-      if (priorAccountTier === "freemium") {
-        await repo.setUserTier(ownerUserId, "solopreneur");
-      }
-      const tierAfterPayment = priorAccountTier === "freemium" ? "solopreneur" : priorAccountTier;
-      if (tierAfterPayment === "solopreneur") {
-        const rpmAfterPayment = await repo.getActiveRpm(project.id);
-        if (!rpmAfterPayment) {
-          await repo.assignRpm(project.id, getMasterUserEmail(), event.from);
-        }
-      }
-      await repo.appendRecentUpdate(project.id, "Payment confirmed for latest hour purchase.");
+      await applyHourPurchasePaidSideEffects(repo, {
+        ownerUserId,
+        projectId: project.id,
+        priorAccountTier,
+        actingEmail: event.from,
+      });
     }
   }
 

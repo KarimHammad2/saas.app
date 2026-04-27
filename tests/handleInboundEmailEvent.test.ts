@@ -12,7 +12,7 @@ import { sendRpmProfileProposalEmail } from "@/modules/output/sendRpmProfileProp
 import {
   sendCcMembershipConfirmationEmail,
   sendClarificationEmail,
-  sendPdfResubmissionEmail,
+  sendUnsupportedDocumentResubmissionEmail,
   sendRpmStructuredProjectClarificationEmail,
 } from "@/modules/orchestration/sendClarificationEmail";
 import { sendEmail } from "@/modules/email/sendEmail";
@@ -52,7 +52,7 @@ vi.mock("@/modules/output/sendRpmProfileProposalEmail", () => ({
 vi.mock("@/modules/orchestration/sendClarificationEmail", () => ({
   sendCcMembershipConfirmationEmail: vi.fn(),
   sendClarificationEmail: vi.fn(),
-  sendPdfResubmissionEmail: vi.fn(),
+  sendUnsupportedDocumentResubmissionEmail: vi.fn(),
   sendRpmStructuredProjectClarificationEmail: vi.fn(),
 }));
 
@@ -67,7 +67,7 @@ const mockedSendPaymentConfirmedEmail = vi.mocked(sendPaymentConfirmedEmail);
 const mockedSendRpmProfileProposalEmail = vi.mocked(sendRpmProfileProposalEmail);
 const mockedSendEmail = vi.mocked(sendEmail);
 const mockedSendClarificationEmail = vi.mocked(sendClarificationEmail);
-const mockedSendPdfResubmissionEmail = vi.mocked(sendPdfResubmissionEmail);
+const mockedSendUnsupportedDocumentResubmissionEmail = vi.mocked(sendUnsupportedDocumentResubmissionEmail);
 const mockedSendCcMembershipConfirmationEmail = vi.mocked(sendCcMembershipConfirmationEmail);
 const mockedSendRpmStructuredProjectClarificationEmail = vi.mocked(sendRpmStructuredProjectClarificationEmail);
 
@@ -260,6 +260,59 @@ describe("handleInboundEmailEvent", () => {
     expect(mockedSendPaymentInstructionsEmail).toHaveBeenCalledWith(result.paymentInstructions);
     expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "payment-instructions", status: "sent" }),
+    );
+  });
+
+  it("records payment verification outbound events when owner Paid was queued (no project payload)", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com"],
+      payload: undefined,
+      outboundMode: "full",
+      rpmProfileProposal: null,
+      paymentVerificationHandled: { masterNotificationSent: true },
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_pv",
+        duplicate: false,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-verification-master", status: "sent", recipientCount: 1 }),
+    );
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-verification-ack", status: "sent", recipientCount: 1 }),
+    );
+  });
+
+  it("records only payer ack outbound event when verification row already existed", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["owner@example.com"],
+      payload: undefined,
+      outboundMode: "full",
+      rpmProfileProposal: null,
+      paymentVerificationHandled: { masterNotificationSent: false },
+      context: {
+        userId: "u1",
+        projectId: "p1",
+        eventId: "evt_pv2",
+        duplicate: false,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(recordOutboundEmailEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-verification-master" }),
+    );
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "payment-verification-ack", status: "sent", recipientCount: 1 }),
     );
   });
 
@@ -599,11 +652,13 @@ describe("handleInboundEmailEvent", () => {
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
   });
 
-  it("sends PDF resubmission email and skips inbound processing when attachment is PDF", async () => {
+  it("sends resubmission email and skips inbound processing when attachment is PDF", async () => {
     const response = await handleInboundEmailEvent({
       from: "user@example.com",
       subject: "Please review this",
-      attachments: [{ filename: "scope.pdf", contentType: "application/pdf", isPdf: true }],
+      attachments: [
+        { filename: "scope.pdf", contentType: "application/pdf", isPdf: true, isExcel: false, isWord: false },
+      ],
     } as never);
 
     expect(response).toMatchObject({
@@ -612,10 +667,38 @@ describe("handleInboundEmailEvent", () => {
       duplicate: false,
       clarificationSent: true,
     });
-    expect(mockedSendPdfResubmissionEmail).toHaveBeenCalledWith("user@example.com", "Please review this");
+    expect(mockedSendUnsupportedDocumentResubmissionEmail).toHaveBeenCalledWith("user@example.com", "Please review this");
     expect(mockedProcessInboundEmail).not.toHaveBeenCalled();
     expect(mockedSendProjectEmail).not.toHaveBeenCalled();
     expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends resubmission email when attachment is Excel", async () => {
+    const response = await handleInboundEmailEvent({
+      from: "user@example.com",
+      subject: "Sheet attached",
+      attachments: [
+        { filename: "data.xlsx", contentType: "application/octet-stream", isPdf: false, isExcel: true, isWord: false },
+      ],
+    } as never);
+
+    expect(response).toMatchObject({ clarificationSent: true });
+    expect(mockedSendUnsupportedDocumentResubmissionEmail).toHaveBeenCalledWith("user@example.com", "Sheet attached");
+    expect(mockedProcessInboundEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends resubmission email when attachment is Word", async () => {
+    const response = await handleInboundEmailEvent({
+      from: "user@example.com",
+      subject: "Doc attached",
+      attachments: [
+        { filename: "brief.docx", contentType: "application/octet-stream", isPdf: false, isExcel: false, isWord: true },
+      ],
+    } as never);
+
+    expect(response).toMatchObject({ clarificationSent: true });
+    expect(mockedSendUnsupportedDocumentResubmissionEmail).toHaveBeenCalledWith("user@example.com", "Doc attached");
+    expect(mockedProcessInboundEmail).not.toHaveBeenCalled();
   });
 
   it("sends lightweight RPM profile proposal email without project attachment", async () => {

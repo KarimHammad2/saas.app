@@ -68,6 +68,7 @@ const repoState = {
   createEscalationLog: vi.fn(),
   createReviewFlag: vi.fn(),
   createPendingApproval: vi.fn(),
+  findLatestPendingAdminAction: vi.fn(),
 };
 
 vi.mock("@/modules/memory/repository", async () => {
@@ -90,6 +91,7 @@ vi.mock("@/modules/memory/repository", async () => {
       createEscalationLog = repoState.createEscalationLog;
       createReviewFlag = repoState.createReviewFlag;
       createPendingApproval = repoState.createPendingApproval;
+      findLatestPendingAdminAction = repoState.findLatestPendingAdminAction;
     },
   };
 });
@@ -110,6 +112,7 @@ describe("processInboundEmail escalation routing", () => {
       created: false,
     });
     repoState.findLatestPendingApproval.mockResolvedValue(null);
+    repoState.findLatestPendingAdminAction.mockResolvedValue(null);
     repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue(null);
     repoState.ensureUserProfileRow.mockResolvedValue(undefined);
     repoState.findProjectByThreadMessageIdForUser.mockResolvedValue(baseProjectRecord);
@@ -175,6 +178,7 @@ Reason: User is unsure about next steps`,
         approvals: [],
         transactionEvent: null,
         paymentReceivedAck: false,
+        masterPaymentConfirmAck: false,
         projectStatus: null,
         currentStatus: null,
         userProfileContext: null,
@@ -248,6 +252,7 @@ Reason: User is unsure about next steps`,
         approvals: [],
         transactionEvent: null,
         paymentReceivedAck: false,
+        masterPaymentConfirmAck: false,
         projectStatus: null,
         currentStatus: null,
         userProfileContext: null,

@@ -99,17 +99,20 @@ export async function sendRpmStructuredProjectClarificationEmail(recipientEmail:
 }
 
 /**
- * Sends a direct reply when an inbound email contains PDFs.
+ * Sends a direct reply when an inbound email contains document attachments that Frank does not parse (PDF, Excel, Word).
  */
-export async function sendPdfResubmissionEmail(recipientEmail: string, originalSubject: string): Promise<void> {
+export async function sendUnsupportedDocumentResubmissionEmail(
+  recipientEmail: string,
+  originalSubject: string,
+): Promise<void> {
   const replySubject = buildReplySubject(originalSubject);
 
   const text = [
     "Hey!",
     "",
-    "Frank does not accept or parse PDF attachments.",
+    "Frank does not accept or parse PDF, Excel, or Word document attachments.",
     "",
-    "Please run the PDF through your best LLM first, then reply with the resulting text update.",
+    "Please convert the document to text (for example, run it through your best LLM) and reply with the resulting text update.",
     "",
     "Once you send the text version, Frank can continue immediately.",
     "",
@@ -118,8 +121,8 @@ export async function sendPdfResubmissionEmail(recipientEmail: string, originalS
 
   const html = `
 <p>Hey!</p>
-<p>Frank does not accept or parse PDF attachments.</p>
-<p>Please run the PDF through your best LLM first, then reply with the resulting text update.</p>
+<p>Frank does not accept or parse PDF, Excel, or Word document attachments.</p>
+<p>Please convert the document to text (for example, run it through your best LLM) and reply with the resulting text update.</p>
 <p>Once you send the text version, Frank can continue immediately.</p>
 <p>&mdash; Frank</p>
 `.trim();

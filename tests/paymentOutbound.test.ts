@@ -41,7 +41,7 @@ describe("payment outbound copy", () => {
     const body = formatPaymentInstructionsBody(payment);
     expect(body).toContain("Your purchase total is $500 (hours × rate).");
     expect(body).toContain("Pay here: https://pay.example/checkout");
-    expect(body).toContain("Paid");
+    expect(body).toContain("verify payment");
   });
 
   it("formats payment confirmed summary from project context and paid row", () => {

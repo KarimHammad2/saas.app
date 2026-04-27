@@ -12,6 +12,7 @@ export type AdminActionKind =
   | "create_user"
   | "delete_user"
   | "create_project"
+  | "add_agency_member"
   | "upsert_instruction"
   | "upsert_email_template"
   | "upsert_system_setting";
@@ -98,6 +99,10 @@ export type AdminActionPayload =
       kind: "upsert_system_setting";
       key: string;
       valueJson: unknown;
+    }
+  | {
+      kind: "add_agency_member";
+      memberEmail: string;
     };
 
 export type AdminRequest =
@@ -141,7 +146,9 @@ export type AdminRequest =
       field: "subject" | "text" | "html" | null;
       value: string | null;
     }
-  | { kind: "upsert_system_setting"; key: string | null; rawValue: string | null };
+  | { kind: "upsert_system_setting"; key: string | null; rawValue: string | null }
+  | { kind: "show_agency_members" }
+  | { kind: "add_agency_member"; memberEmail: string | null };
 
 export interface AdminReply {
   subject: string;
@@ -339,6 +346,15 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     return { kind: "menu" };
   }
 
+  if (/(?:show|list|view)\s+(?:all\s+)?(?:account\s+)?members?\b/i.test(candidate)) {
+    return { kind: "show_agency_members" };
+  }
+
+  if (/\b(?:add|invite)\s+(?:a\s+)?(?:agency\s+)?member\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "add_agency_member", memberEmail: emails[0] ?? null };
+  }
+
   if (/(?:show|list|view)\b(?:\s+\w+)*?\s+users?\b/i.test(candidate)) {
     return { kind: "show_users" };
   }
@@ -506,6 +522,10 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
   }
 
   if (/\bassign\b/i.test(candidate) || (/\b(set|change)\b/i.test(candidate) && /\brpm\b/i.test(candidate))) {
+    // Structured project update block ("Assign RPM:\\n...") is handled by project parsing, not admin email.
+    if (/^\s*assign\s+rpm\s*:/im.test(body) || /^\s*assign\s+rpm\s*:/im.test(candidate)) {
+      return null;
+    }
     const emails = extractEmails(candidate);
     return {
       kind: "assign_rpm",
@@ -562,6 +582,78 @@ const MENU_MANAGE_ITEMS: string[] = [
   'Update an email template — "Update template project_update subject to: <value>"',
   'Update a system setting — "Set setting email.admin_bcc.enabled to true"',
 ];
+
+const AGENCY_ADMIN_ALLOWED_REQUEST_KINDS = new Set<AdminRequest["kind"]>([
+  "menu",
+  "confirm",
+  "show_projects",
+  "show_rpm",
+  "show_agency_members",
+  "add_agency_member",
+  "assign_rpm",
+  "remove_rpm",
+  "delete_project",
+]);
+
+export function isAgencyAdminRequestKind(kind: AdminRequest["kind"]): boolean {
+  return AGENCY_ADMIN_ALLOWED_REQUEST_KINDS.has(kind);
+}
+
+/** Pending action kinds an agency admin may create and confirm (master-only kinds are blocked earlier). */
+export const AGENCY_ADMIN_CONFIRMABLE_ACTION_KINDS = new Set([
+  "assign_rpm",
+  "remove_rpm",
+  "delete_project",
+  "add_agency_member",
+]);
+
+const AGENCY_MENU_VIEW_ITEMS: string[] = [
+  'View all your projects — "Show all projects" or "Show projects for <your@email>"',
+  'View RPM assignments — "Show RPM for <your@email>" or include your account email',
+  'View account members — "Show members"',
+];
+
+const AGENCY_MENU_MANAGE_ITEMS: string[] = [
+  'Add a member — "Add member new@example.com" (they receive a notification email)',
+  'Assign an RPM — "Assign rpm@example.com for project Alpha Launch" (owner defaults to your primary email) or full form like the system admin menu',
+  'Remove an RPM — "Remove the RPM from <owner@email> for project Alpha Launch" (owner can be your primary email)',
+  'Delete a project — "Delete project Alpha Launch" (add "for <your@email>" if the name is ambiguous)',
+];
+
+export function buildAgencyAdminMenuReply(originalSubject: string): AdminReply {
+  const text = [
+    "Agency admin menu",
+    "",
+    "I can help with your agency account and projects. For anything that changes data I will echo what I understood and wait for you to reply CONFIRM.",
+    "",
+    "— View (read-only) —",
+    ...AGENCY_MENU_VIEW_ITEMS.map((item, index) => `${index + 1}. ${item}`),
+    "",
+    "— Manage (requires CONFIRM) —",
+    ...AGENCY_MENU_MANAGE_ITEMS.map((item, index) => `${index + 1 + AGENCY_MENU_VIEW_ITEMS.length}. ${item}`),
+    "",
+    "Just reply naturally with what you want to do.",
+    "",
+    "— Frank",
+  ].join("\n");
+
+  const html = [
+    "<p><strong>Agency admin menu</strong></p>",
+    "<p>I can help with your agency account and projects. For anything that changes data I will echo what I understood and wait for you to reply <strong>CONFIRM</strong>.</p>",
+    renderGroupedListHtml([
+      { heading: "View (read-only)", items: AGENCY_MENU_VIEW_ITEMS },
+      { heading: "Manage (requires CONFIRM)", items: AGENCY_MENU_MANAGE_ITEMS },
+    ]),
+    "<p>Just reply naturally with what you want to do.</p>",
+    "<p>&mdash; Frank</p>",
+  ].join("");
+
+  return {
+    subject: buildReplySubject(originalSubject),
+    text,
+    html,
+  };
+}
 
 export function buildAdminMenuReply(originalSubject: string): AdminReply {
   const text = [
@@ -773,6 +865,21 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
       ].join("\n");
     }
 
+    if (payload.kind === "add_agency_member") {
+      return [
+        "I understood:",
+        "",
+        "Add account member",
+        `Email: ${payload.memberEmail}`,
+        "",
+        "They will receive an email that they were added to your agency account.",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
     if (payload.kind === "upsert_instruction") {
       return [
         "I understood:",
@@ -922,6 +1029,17 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
         "<p><strong>Create project</strong><br>",
         `Project: <strong>${escapeHtml(payload.projectName)}</strong><br>`,
         `Owner: ${escapeHtml(payload.userEmail)}</p>`,
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "add_agency_member") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Add account member</strong><br>",
+        `Email: ${escapeHtml(payload.memberEmail)}</p>`,
+        "<p>They will receive an email that they were added to your agency account.</p>",
         '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
         "<p>&mdash; Frank</p>",
       ].join("");
@@ -1243,6 +1361,9 @@ export function summarizeAdminAction(action: AdminActionPayload): string {
   }
   if (action.kind === "create_project") {
     return `Create project ${action.projectName} for ${action.userEmail}`;
+  }
+  if (action.kind === "add_agency_member") {
+    return `Add agency member ${action.memberEmail}`;
   }
   if (action.kind === "upsert_instruction") {
     return `Update instruction ${action.key}`;
