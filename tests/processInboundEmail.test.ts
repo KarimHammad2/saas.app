@@ -144,6 +144,7 @@ const repoState = {
   ensureUserProfileRow: vi.fn(),
   getOrCreateUserByEmail: vi.fn(),
   findUserByEmail: vi.fn(),
+  findUserByAccountEmail: vi.fn(),
   listUsers: vi.fn(),
   findProjectByCodeAndUser: vi.fn(),
   findProjectByCode: vi.fn(),
@@ -189,6 +190,7 @@ const repoState = {
   approveSuggestion: vi.fn(),
   rejectSuggestion: vi.fn(),
   addAdditionalEmails: vi.fn(),
+  removeAdditionalAccountEmail: vi.fn(),
   addProjectMembersByEmails: vi.fn(),
   setUserTier: vi.fn(),
   createOrReusePendingCcMembershipConfirmation: vi.fn(),
@@ -234,6 +236,10 @@ const repoState = {
   hardDeleteProject: vi.fn(),
   loadUserDeletionSnapshot: vi.fn(),
   hardDeleteUser: vi.fn(),
+  isAccountPrimaryEmail: vi.fn(),
+  getAgencySuperAdminEmails: vi.fn(),
+  addAgencySuperAdminEmail: vi.fn(),
+  removeAgencySuperAdminEmail: vi.fn(),
 };
 
 // Intent classification is tested separately in classifyInboundIntent.test.ts.
@@ -252,6 +258,7 @@ vi.mock("@/modules/memory/repository", async () => {
       ensureUserProfileRow = repoState.ensureUserProfileRow;
       getOrCreateUserByEmail = repoState.getOrCreateUserByEmail;
       findUserByEmail = repoState.findUserByEmail;
+      findUserByAccountEmail = repoState.findUserByAccountEmail;
       listUsers = repoState.listUsers;
       findProjectByCodeAndUser = repoState.findProjectByCodeAndUser;
       findProjectByCode = repoState.findProjectByCode;
@@ -297,6 +304,7 @@ vi.mock("@/modules/memory/repository", async () => {
       approveSuggestion = repoState.approveSuggestion;
       rejectSuggestion = repoState.rejectSuggestion;
       addAdditionalEmails = repoState.addAdditionalEmails;
+      removeAdditionalAccountEmail = repoState.removeAdditionalAccountEmail;
       addProjectMembersByEmails = repoState.addProjectMembersByEmails;
       setUserTier = repoState.setUserTier;
       createOrReusePendingCcMembershipConfirmation = repoState.createOrReusePendingCcMembershipConfirmation;
@@ -342,6 +350,10 @@ vi.mock("@/modules/memory/repository", async () => {
       hardDeleteProject = repoState.hardDeleteProject;
       loadUserDeletionSnapshot = repoState.loadUserDeletionSnapshot;
       hardDeleteUser = repoState.hardDeleteUser;
+      isAccountPrimaryEmail = repoState.isAccountPrimaryEmail;
+      getAgencySuperAdminEmails = repoState.getAgencySuperAdminEmails;
+      addAgencySuperAdminEmail = repoState.addAgencySuperAdminEmail;
+      removeAgencySuperAdminEmail = repoState.removeAgencySuperAdminEmail;
     },
   };
 });
@@ -369,6 +381,7 @@ describe("processInboundEmail", () => {
       created: false,
     });
     repoState.findUserByEmail.mockResolvedValue(null);
+    repoState.findUserByAccountEmail.mockImplementation((email: string) => repoState.findUserByEmail(email));
     repoState.listUsers.mockResolvedValue([]);
     repoState.findProjectByCodeAndUser.mockResolvedValue(null);
     repoState.findProjectByCode.mockResolvedValue(null);
@@ -389,6 +402,7 @@ describe("processInboundEmail", () => {
     });
     repoState.getActiveRpm.mockResolvedValue("rpm@example.com");
     repoState.addAdditionalEmails.mockResolvedValue(1);
+    repoState.removeAdditionalAccountEmail.mockResolvedValue(undefined);
     repoState.addProjectMembersByEmails.mockResolvedValue([]);
     repoState.findLatestPendingCcMembershipConfirmation.mockResolvedValue(null);
     repoState.resolveCcMembershipConfirmation.mockResolvedValue(undefined);
@@ -424,6 +438,10 @@ describe("processInboundEmail", () => {
     });
     repoState.findLatestPendingAdminAction.mockResolvedValue(null);
     repoState.resolvePendingAdminAction.mockResolvedValue(undefined);
+    repoState.isAccountPrimaryEmail.mockResolvedValue(true);
+    repoState.getAgencySuperAdminEmails.mockResolvedValue([]);
+    repoState.addAgencySuperAdminEmail.mockResolvedValue(undefined);
+    repoState.removeAgencySuperAdminEmail.mockResolvedValue(undefined);
     repoState.getLatestPendingHourPurchaseTransaction.mockResolvedValue(null);
     repoState.getProjectState.mockResolvedValue({
       projectId: "p1",
@@ -4862,8 +4880,245 @@ Prefer concise updates.
 
     expect(result.outboundMode).toBe("admin");
     expect(result.adminReply?.text).toContain("Agency admin menu");
+    expect(result.adminReply?.text).toContain("Primary owner: delegated");
     expect(result.adminReply?.text).not.toContain("Show me all users");
     expect(repoState.createProjectForUser).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a non-primary agency alias as agency admin unless it is a delegated admin", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "primary@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.isAccountPrimaryEmail.mockResolvedValueOnce(false);
+    repoState.getAgencySuperAdminEmails.mockResolvedValueOnce([]);
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+    // "Show members" would be agency admin if allowed; here it must not run admin (no getUserEmailsById).
+    // Short-circuit project resolution with a greeting-only intent so we only assert admin gating.
+    classifyInboundIntentMock.mockReturnValueOnce({
+      isNewProjectIntent: false,
+      isGreetingOnly: true,
+      confidence: 1,
+      reason: "greeting",
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    await expect(
+      processInboundEmail({
+        eventId: "e-agency-member-no-admin",
+        provider: "resend",
+        providerEventId: "m-agency-member-no-admin",
+        timestamp: new Date().toISOString(),
+        from: "member@example.com",
+        fromDisplayName: null,
+        to: ["frank@saas2.app"],
+        cc: [],
+        subject: "Show members",
+        inReplyTo: null,
+        references: [],
+        rawBody: "Hello",
+        parsed: {
+          projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+          summary: null,
+          currentStatus: null,
+          goals: [],
+          actionItems: [],
+          completedTasks: [],
+          decisions: [],
+          risks: [],
+          recommendations: [],
+          notes: [],
+          userProfileContext: null,
+          rpmSuggestion: null,
+          transactionEvent: null,
+          approvals: [],
+          additionalEmails: [],
+        },
+      }),
+    ).rejects.toMatchObject({ name: "ClarificationRequiredError" });
+    expect(repoState.getUserEmailsById).not.toHaveBeenCalled();
+  });
+
+  it("allows agency admin for a delegated super-admin alias", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "primary@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.isAccountPrimaryEmail.mockResolvedValueOnce(false);
+    repoState.getAgencySuperAdminEmails.mockResolvedValueOnce(["delegate@example.com"]);
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-agency-delegate-admin",
+      provider: "resend",
+      providerEventId: "m-agency-delegate-admin",
+      timestamp: new Date().toISOString(),
+      from: "delegate@example.com",
+      fromDisplayName: null,
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Admin",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("Agency admin menu");
+    expect(result.adminReply?.text).not.toContain("Primary owner: delegated");
+  });
+
+  it("blocks delegated admins from adding super admins (primary only)", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "primary@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.isAccountPrimaryEmail.mockResolvedValueOnce(false);
+    repoState.getAgencySuperAdminEmails.mockResolvedValueOnce(["delegate@example.com"]);
+    repoState.getUserEmailsById.mockResolvedValueOnce(["primary@example.com", "delegate@example.com", "new@example.com"]);
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-agency-delegate-block-super",
+      provider: "resend",
+      providerEventId: "m-agency-delegate-block-super",
+      timestamp: new Date().toISOString(),
+      from: "delegate@example.com",
+      fromDisplayName: null,
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Add super admin new@example.com",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("Only the primary account owner");
+    expect(repoState.createOrReusePendingAdminAction).not.toHaveBeenCalled();
+  });
+
+  it("confirms add delegated agency admin from the primary owner", async () => {
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "primary@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.isAccountPrimaryEmail.mockResolvedValue(true);
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce({
+      id: "admin_super",
+      sender_user_id: "u-agency",
+      sender_email: "primary@example.com",
+      action_kind: "add_agency_super_admin",
+      action_payload: { superAdminEmail: "delegate@example.com" },
+      status: "pending",
+      source_subject: "Admin",
+      source_raw_body: "Add super admin delegate@example.com",
+      resolved_by_email: null,
+      resolved_at: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-agency-confirm-super",
+      provider: "resend",
+      providerEventId: "m-agency-confirm-super",
+      timestamp: new Date().toISOString(),
+      from: "primary@example.com",
+      fromDisplayName: null,
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Re: Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "CONFIRM",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(repoState.addAgencySuperAdminEmail).toHaveBeenCalledWith("u-agency", "delegate@example.com");
+    expect(repoState.resolvePendingAdminAction).toHaveBeenCalledWith({
+      actionId: "admin_super",
+      status: "executed",
+      resolvedByEmail: "primary@example.com",
+    });
+    expect(result.outboundMode).toBe("admin");
+    expect(result.adminReply?.text).toContain("Done");
   });
 
   it("blocks master-only admin commands for agency senders", async () => {

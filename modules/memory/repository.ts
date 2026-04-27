@@ -675,6 +675,45 @@ export class MemoryRepository {
     return data ?? null;
   }
 
+  /**
+   * Resolves a user by any address on the account: `user_emails` (primary or aliases) first,
+   * then falls back to `users.email` for legacy/edge cases. Use for admin actions that target
+   * "the account" (e.g. hard delete) so agency member addresses work the same as the primary.
+   */
+  async findUserByAccountEmail(email: string): Promise<UserRecord | null> {
+    const normalized = normalizeEmail(email);
+    if (!isEmail(normalized)) {
+      return null;
+    }
+
+    const { data: accountRow, error: accountError } = await this.supabase
+      .from("user_emails")
+      .select("user_id")
+      .eq("email", normalized)
+      .limit(1)
+      .maybeSingle<{ user_id: string }>();
+
+    if (accountError) {
+      throw new Error(`Failed to look up user by account email: ${accountError.message}`);
+    }
+
+    if (accountRow?.user_id) {
+      const { data: user, error: userError } = await this.supabase
+        .from("users")
+        .select("id, email, display_name, tier, created_at")
+        .eq("id", accountRow.user_id)
+        .maybeSingle<UserRecord>();
+
+      if (userError) {
+        throw new Error(`Failed to look up user by id after account email match: ${userError.message}`);
+      }
+
+      return user ?? null;
+    }
+
+    return this.findUserByEmail(email);
+  }
+
   async listUsers(limit = 25): Promise<UserRecord[]> {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 25;
     const { data, error } = await this.supabase
@@ -735,6 +774,129 @@ export class MemoryRepository {
     }
 
     return count ?? 1;
+  }
+
+  /**
+   * Removes a non-primary alias from `user_emails`. Cannot remove the primary account email.
+   */
+  async removeAdditionalAccountEmail(userId: string, email: string): Promise<void> {
+    const normalized = normalizeEmail(email);
+    if (!isEmail(normalized)) {
+      throw new Error("A valid email is required.");
+    }
+
+    const { data: row, error: fetchError } = await this.supabase
+      .from("user_emails")
+      .select("is_primary")
+      .eq("user_id", userId)
+      .eq("email", normalized)
+      .maybeSingle<{ is_primary: boolean }>();
+
+    if (fetchError) {
+      throw new Error(`Failed to look up account email: ${fetchError.message}`);
+    }
+    if (!row) {
+      throw new Error(`That email is not on this account.`);
+    }
+    if (row.is_primary) {
+      throw new Error("Cannot remove the primary account email.");
+    }
+
+    const { error: deleteError } = await this.supabase
+      .from("user_emails")
+      .delete()
+      .eq("user_id", userId)
+      .eq("email", normalized);
+
+    if (deleteError) {
+      throw new Error(`Failed to remove account email: ${deleteError.message}`);
+    }
+  }
+
+  async isAccountPrimaryEmail(userId: string, email: string): Promise<boolean> {
+    const normalized = normalizeEmail(email);
+    if (!isEmail(normalized)) {
+      return false;
+    }
+    const { data, error } = await this.supabase
+      .from("user_emails")
+      .select("is_primary")
+      .eq("user_id", userId)
+      .eq("email", normalized)
+      .maybeSingle<{ is_primary: boolean }>();
+    if (error) {
+      throw new Error(`Failed to look up primary account email: ${error.message}`);
+    }
+    return Boolean(data?.is_primary);
+  }
+
+  async getAgencySuperAdminEmails(userId: string): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .from("users")
+      .select("agency_super_admin_emails")
+      .eq("id", userId)
+      .maybeSingle<{ agency_super_admin_emails: string[] | null }>();
+    if (error) {
+      throw new Error(`Failed to load agency super admins: ${error.message}`);
+    }
+    const raw = Array.isArray(data?.agency_super_admin_emails) ? data.agency_super_admin_emails : [];
+    const normalized = raw
+      .map((e) => normalizeEmail(String(e)))
+      .filter((e) => isEmail(e));
+    return Array.from(new Set(normalized));
+  }
+
+  async addAgencySuperAdminEmail(userId: string, email: string): Promise<void> {
+    const normalized = normalizeEmail(email);
+    if (!isEmail(normalized)) {
+      throw new Error("A valid email is required.");
+    }
+    if (await this.isAccountPrimaryEmail(userId, normalized)) {
+      throw new Error("The primary account owner already has full agency admin access.");
+    }
+    const { data: row, error: lookupError } = await this.supabase
+      .from("user_emails")
+      .select("email")
+      .eq("user_id", userId)
+      .eq("email", normalized)
+      .maybeSingle<{ email: string }>();
+    if (lookupError) {
+      throw new Error(`Failed to validate account email: ${lookupError.message}`);
+    }
+    if (!row) {
+      throw new Error("That email must be an address on this account before it can be a delegated admin.");
+    }
+    const current = await this.getAgencySuperAdminEmails(userId);
+    if (current.includes(normalized)) {
+      throw new Error("That email is already a delegated agency admin.");
+    }
+    const next = [...current, normalized];
+    const { error: updateError } = await this.supabase
+      .from("users")
+      .update({ agency_super_admin_emails: next })
+      .eq("id", userId);
+    if (updateError) {
+      throw new Error(`Failed to add delegated agency admin: ${updateError.message}`);
+    }
+  }
+
+  async removeAgencySuperAdminEmail(userId: string, email: string): Promise<void> {
+    const normalized = normalizeEmail(email);
+    if (!isEmail(normalized)) {
+      throw new Error("A valid email is required.");
+    }
+    const current = await this.getAgencySuperAdminEmails(userId);
+    if (!current.includes(normalized)) {
+      throw new Error("That email is not a delegated agency admin.");
+    }
+    const next = current.filter((e) => e !== normalized);
+    const { error: updateError } = await this.supabase
+      .from("users")
+      .update({ agency_super_admin_emails: next })
+      .eq("id", userId);
+    if (updateError) {
+      throw new Error(`Failed to remove delegated agency admin: ${updateError.message}`);
+    }
   }
 
   async addProjectMembersByEmails(projectId: string, ownerUserId: string, emails: string[]): Promise<string[]> {

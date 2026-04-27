@@ -34,9 +34,15 @@ To send updates by email:
 `.trim();
 
 const DEFAULT_OWNER_BODY = `
-Here is your updated project file.
+We've attached your latest project file—this is the LLM operating context for your work.
 
-Upload it into your LLM and continue working on your project.
+Now: open the chat where you work (Copilot, Gemini, or another assistant).
+
+Next: drag the attachment from this email into that chat, or into the file area if your app shows one.
+
+Then say what you want to do next—a task, a question, or a change.
+
+In a new chat, drag the file in again so context stays in sync, or get a fresh export from the app when the project has changed.
 `.trim();
 
 function formatRecordedTransactionBlock(payload: ProjectEmailPayload): string {

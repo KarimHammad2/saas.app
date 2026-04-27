@@ -62,7 +62,8 @@ describe("formatProjectEmail", () => {
     expect(body).not.toContain("Total (hours × rate)");
     expect(body).not.toContain("Pay now:");
     expect(body).not.toContain("https://pay.saassquared.com/b/testpay");
-    expect(body).toContain("Here is your updated project file.");
+    expect(body).toContain("Copilot, Gemini");
+    expect(body).toContain("drag the attachment");
   });
 
   it("prepends the same block for RPM copy", () => {

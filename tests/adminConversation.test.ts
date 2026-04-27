@@ -207,6 +207,43 @@ describe("parseAdminRequest", () => {
     });
   });
 
+  it("parses remove agency member", () => {
+    expect(parseAdminRequest("Remove member bob@example.com")).toEqual({
+      kind: "remove_agency_member",
+      memberEmail: "bob@example.com",
+    });
+  });
+
+  it("parses delete agency with agency wording", () => {
+    expect(parseAdminRequest("Delete agency owner@example.com")).toEqual({
+      kind: "delete_user",
+      userEmail: "owner@example.com",
+      deletionWording: "agency",
+    });
+  });
+
+  it("parses remove agency with agency wording", () => {
+    expect(parseAdminRequest("Remove agency owner@example.com")).toEqual({
+      kind: "delete_user",
+      userEmail: "owner@example.com",
+      deletionWording: "agency",
+    });
+  });
+
+  it("does not treat delete agency member as delete agency", () => {
+    expect(parseAdminRequest("Delete agency member x@y.com")).toEqual({
+      kind: "remove_agency_member",
+      memberEmail: "x@y.com",
+    });
+  });
+
+  it("parses show all RPMs without a user email", () => {
+    expect(parseAdminRequest("Show all RPMs")).toEqual({
+      kind: "show_rpm",
+      userEmail: null,
+    });
+  });
+
   it("parses remove RPM for project by name", () => {
     expect(parseAdminRequest("Remove the RPM from john@example.com for project Alpha Launch")).toEqual({
       kind: "remove_rpm",
@@ -223,6 +260,22 @@ describe("parseAdminRequest", () => {
     });
   });
 
+  it("parses show super admins", () => {
+    expect(parseAdminRequest("List super admins")).toEqual({ kind: "show_agency_super_admins" });
+    expect(parseAdminRequest("Show all super admins")).toEqual({ kind: "show_agency_super_admins" });
+  });
+
+  it("parses add and remove super admin with an email", () => {
+    expect(parseAdminRequest("Add super admin alice@example.com")).toEqual({
+      kind: "add_agency_super_admin",
+      superAdminEmail: "alice@example.com",
+    });
+    expect(parseAdminRequest("Remove super admin bob@example.com")).toEqual({
+      kind: "remove_agency_super_admin",
+      superAdminEmail: "bob@example.com",
+    });
+  });
+
   it("returns null for unrelated text", () => {
     expect(parseAdminRequest("Hi Frank, please review my project")).toBeNull();
   });
@@ -235,6 +288,16 @@ describe("buildAgencyAdminMenuReply", () => {
     expect(reply.text).toContain("Agency admin menu");
     expect(reply.text).toContain("Show members");
     expect(reply.text).toContain("Add member");
+  });
+
+  it("includes delegated-admin commands only for the primary owner", () => {
+    const primary = buildAgencyAdminMenuReply("Admin", { isPrimaryOwner: true });
+    expect(primary.text).toContain("Primary owner: delegated");
+    expect(primary.text).toContain("Show super admins");
+
+    const delegate = buildAgencyAdminMenuReply("Admin", { isPrimaryOwner: false });
+    expect(delegate.text).not.toContain("Primary owner: delegated");
+    expect(delegate.text).not.toContain("Show super admins");
   });
 });
 

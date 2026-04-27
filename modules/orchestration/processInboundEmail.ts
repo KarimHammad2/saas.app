@@ -234,11 +234,20 @@ function normalizeAdminActionPayload(action: AdminActionPayload): Record<string,
     case "create_user":
       return { userEmail: action.userEmail };
     case "delete_user":
-      return { userEmail: action.userEmail };
+      return {
+        userEmail: action.userEmail,
+        ...(action.deletionWording === "agency" ? { deletionWording: "agency" } : {}),
+      };
     case "create_project":
       return { projectName: action.projectName, userEmail: action.userEmail };
     case "add_agency_member":
       return { memberEmail: action.memberEmail };
+    case "remove_agency_member":
+      return { memberEmail: action.memberEmail };
+    case "add_agency_super_admin":
+      return { superAdminEmail: action.superAdminEmail };
+    case "remove_agency_super_admin":
+      return { superAdminEmail: action.superAdminEmail };
     case "upsert_instruction":
       return { key: action.key, content: action.content };
     case "upsert_email_template":
@@ -341,7 +350,12 @@ function reconstructAdminActionPayload(
       if (!userEmail) {
         return null;
       }
-      return { kind: "delete_user", userEmail };
+      const w = asString(payload.deletionWording)?.toLowerCase() ?? null;
+      return {
+        kind: "delete_user",
+        userEmail,
+        ...(w === "agency" ? { deletionWording: "agency" as const } : {}),
+      };
     }
     case "create_project": {
       const projectName = asString(payload.projectName);
@@ -357,6 +371,27 @@ function reconstructAdminActionPayload(
         return null;
       }
       return { kind: "add_agency_member", memberEmail };
+    }
+    case "remove_agency_member": {
+      const memberEmail = asEmail(payload.memberEmail);
+      if (!memberEmail) {
+        return null;
+      }
+      return { kind: "remove_agency_member", memberEmail };
+    }
+    case "add_agency_super_admin": {
+      const superAdminEmail = asEmail(payload.superAdminEmail);
+      if (!superAdminEmail) {
+        return null;
+      }
+      return { kind: "add_agency_super_admin", superAdminEmail };
+    }
+    case "remove_agency_super_admin": {
+      const superAdminEmail = asEmail(payload.superAdminEmail);
+      if (!superAdminEmail) {
+        return null;
+      }
+      return { kind: "remove_agency_super_admin", superAdminEmail };
     }
     case "upsert_instruction": {
       const key = asString(payload.key);
@@ -487,6 +522,7 @@ async function handleAdminRequest(
   initialRequest: AdminRequest,
   pendingAdminAction: Awaited<ReturnType<MemoryRepository["findLatestPendingAdminAction"]>>,
   scope: "master" | "agency",
+  senderIsPrimaryAgency: boolean,
 ): Promise<InboundProcessingResult | null> {
   let request: AdminRequest = initialRequest;
   const nextSteps = scope === "agency" ? agencyAdminNextSteps : adminNextSteps;
@@ -873,6 +909,194 @@ async function handleAdminRequest(
       };
     }
 
+    if (pendingAdminAction.action_kind === "add_agency_super_admin") {
+      if (!senderIsPrimaryAgency) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            "Only the primary account owner can add or remove delegated agency admins.",
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      const superAdminEmail =
+        typeof actionPayload.superAdminEmail === "string" ? actionPayload.superAdminEmail.trim().toLowerCase() : "";
+      if (!superAdminEmail) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, "I couldn’t confirm the stored delegated admin change."),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      try {
+        await repo.addAgencySuperAdminEmail(userId, superAdminEmail);
+      } catch (err) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        const message = err instanceof Error ? err.message : "Could not add delegated admin.";
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, message),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      await repo.resolvePendingAdminAction({
+        actionId: pendingAdminAction.id,
+        status: "executed",
+        resolvedByEmail: event.from,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminResultReply(
+          event.subject,
+          "Done ✅",
+          [`${superAdminEmail} can now use agency admin (delegated).`],
+          ["Show super admins", "Show members"],
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
+    if (pendingAdminAction.action_kind === "remove_agency_super_admin") {
+      if (!senderIsPrimaryAgency) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            "Only the primary account owner can add or remove delegated agency admins.",
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      const superAdminEmail =
+        typeof actionPayload.superAdminEmail === "string" ? actionPayload.superAdminEmail.trim().toLowerCase() : "";
+      if (!superAdminEmail) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, "I couldn’t confirm the stored delegated admin change."),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      try {
+        await repo.removeAgencySuperAdminEmail(userId, superAdminEmail);
+      } catch (err) {
+        await repo.resolvePendingAdminAction({
+          actionId: pendingAdminAction.id,
+          status: "expired",
+          resolvedByEmail: event.from,
+        });
+        const message = err instanceof Error ? err.message : "Could not remove delegated admin.";
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(event.subject, message),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      await repo.resolvePendingAdminAction({
+        actionId: pendingAdminAction.id,
+        status: "executed",
+        resolvedByEmail: event.from,
+      });
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminResultReply(
+          event.subject,
+          "Done ✅",
+          [`${superAdminEmail} is no longer a delegated agency admin.`],
+          ["Show super admins", "Show members"],
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+
     // Generic dispatcher for all other admin action kinds (edit_project_field, archive_project,
     // restore_project, delete_project, create_user, create_project, upsert_instruction,
     // upsert_email_template, upsert_system_setting).
@@ -1001,7 +1225,10 @@ async function handleAdminRequest(
       payload: undefined,
       outboundMode: "admin",
       rpmProfileProposal: null,
-      adminReply: scope === "agency" ? buildAgencyAdminMenuReply(event.subject) : buildAdminMenuReply(event.subject),
+      adminReply:
+        scope === "agency"
+          ? buildAgencyAdminMenuReply(event.subject, { isPrimaryOwner: senderIsPrimaryAgency })
+          : buildAdminMenuReply(event.subject),
       context: {
         userId,
         projectId: null,
@@ -1083,6 +1310,318 @@ async function handleAdminRequest(
       outboundMode: "admin",
       rpmProfileProposal: null,
       adminReply: buildAdminActionConfirmation(event.subject, addPayload),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (request.kind === "remove_agency_member") {
+    if (!request.memberEmail?.trim()) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          'Please include the email (e.g. "Remove member alice@example.com").',
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const memberEmail = request.memberEmail.trim().toLowerCase();
+    const primary = await repo.getUserEmailById(userId);
+    if (primary && memberEmail === primary.trim().toLowerCase()) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "You can’t remove the primary account email. Add another member as primary first or contact support.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const accountEmails = await repo.getUserEmailsById(userId);
+    if (!accountEmails.includes(memberEmail)) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That email is not a member of your agency account.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const removePayload: AdminActionPayload = { kind: "remove_agency_member", memberEmail };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: "remove_agency_member",
+      actionPayload: normalizeAdminActionPayload(removePayload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminActionConfirmation(event.subject, removePayload),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (request.kind === "show_agency_super_admins") {
+    const primary = await repo.getUserEmailById(userId);
+    const delegated = await repo.getAgencySuperAdminEmails(userId);
+    const lines: string[] = [];
+    lines.push(
+      primary
+        ? `Primary account owner (full admin): ${primary.trim().toLowerCase()}`
+        : "Primary account owner: (unknown)",
+    );
+    if (delegated.length > 0) {
+      lines.push("Delegated agency admins:");
+      delegated.forEach((e, i) => lines.push(`  ${i + 1}. ${e}`));
+    } else {
+      lines.push("Delegated agency admins: (none — only the primary owner unless you add some)");
+    }
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminResultReply(event.subject, "Agency admin access", lines, nextSteps()),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (request.kind === "add_agency_super_admin") {
+    if (!senderIsPrimaryAgency) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "Only the primary account owner can add or remove delegated agency admins.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    if (!request.superAdminEmail?.trim()) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          'Please include the email (e.g. "Add super admin alice@example.com").',
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const superAdminEmail = request.superAdminEmail.trim().toLowerCase();
+    const primary = await repo.getUserEmailById(userId);
+    if (primary && superAdminEmail === primary.trim().toLowerCase()) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "The primary account owner already has full agency admin access.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const accountEmails = await repo.getUserEmailsById(userId);
+    if (!accountEmails.map((e) => e.trim().toLowerCase()).includes(superAdminEmail)) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That email must be on your agency account first (add them as a member, then delegate admin).",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const existingDelegated = await repo.getAgencySuperAdminEmails(userId);
+    if (existingDelegated.includes(superAdminEmail)) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That email is already a delegated agency admin.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const addSuperPayload: AdminActionPayload = { kind: "add_agency_super_admin", superAdminEmail };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: "add_agency_super_admin",
+      actionPayload: normalizeAdminActionPayload(addSuperPayload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminActionConfirmation(event.subject, addSuperPayload),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (request.kind === "remove_agency_super_admin") {
+    if (!senderIsPrimaryAgency) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "Only the primary account owner can add or remove delegated agency admins.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    if (!request.superAdminEmail?.trim()) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          'Please include the email (e.g. "Remove super admin alice@example.com").',
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const superAdminEmail = request.superAdminEmail.trim().toLowerCase();
+    const delegated = await repo.getAgencySuperAdminEmails(userId);
+    if (!delegated.includes(superAdminEmail)) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        adminReply: buildAdminClarificationReply(
+          event.subject,
+          "That email is not a delegated agency admin.",
+        ),
+        context: {
+          userId,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: false,
+        },
+      };
+    }
+    const removeSuperPayload: AdminActionPayload = { kind: "remove_agency_super_admin", superAdminEmail };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: "remove_agency_super_admin",
+      actionPayload: normalizeAdminActionPayload(removeSuperPayload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminActionConfirmation(event.subject, removeSuperPayload),
       context: {
         userId,
         projectId: null,
@@ -1668,7 +2207,9 @@ async function handleAdminRequest(
       return adminOut(
         buildAdminClarificationReply(
           event.subject,
-          'Please include the user email (e.g. "Delete user alice@example.com").',
+          request.deletionWording === "agency"
+            ? 'Please include the account email (e.g. "Delete agency alice@example.com").'
+            : 'Please include the user email (e.g. "Delete user alice@example.com").',
         ),
       );
     }
@@ -1684,6 +2225,7 @@ async function handleAdminRequest(
     const payload: AdminActionPayload = {
       kind: "delete_user",
       userEmail: request.userEmail,
+      ...(request.deletionWording === "agency" ? { deletionWording: "agency" } : {}),
     };
     await repo.createOrReusePendingAdminAction({
       senderUserId: userId,
@@ -2027,7 +2569,16 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const senderNormalized = event.from.trim().toLowerCase();
   const masterEmail = getMasterUserEmail();
   const senderIsMaster = senderNormalized === masterEmail;
-  const senderIsAgencyAdmin = user.tier === "agency" && !senderIsMaster;
+  let senderIsPrimaryAgency = false;
+  let senderIsAgencySuperAdmin = false;
+  if (user.tier === "agency" && !senderIsMaster) {
+    senderIsPrimaryAgency = await repo.isAccountPrimaryEmail(user.id, senderNormalized);
+    if (!senderIsPrimaryAgency) {
+      const delegated = await repo.getAgencySuperAdminEmails(user.id);
+      senderIsAgencySuperAdmin = delegated.includes(senderNormalized);
+    }
+  }
+  const senderIsAgencyAdmin = user.tier === "agency" && !senderIsMaster && (senderIsPrimaryAgency || senderIsAgencySuperAdmin);
   const senderCanUseAdmin = senderIsMaster || senderIsAgencyAdmin;
   const adminRequest = senderCanUseAdmin ? parseAdminRequest(event.rawBody) : null;
   const pendingAdminAction = senderCanUseAdmin ? await repo.findLatestPendingAdminAction(user.id) : null;
@@ -2114,6 +2665,7 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       adminRequest,
       pendingAdminAction,
       senderIsAgencyAdmin ? "agency" : "master",
+      senderIsPrimaryAgency,
     );
     if (adminResult) {
       return adminResult;

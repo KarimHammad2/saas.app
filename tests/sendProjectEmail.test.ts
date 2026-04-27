@@ -131,7 +131,19 @@ describe("sendProjectEmail", () => {
     expect(call?.html).not.toContain("<strong>Last Update:</strong>");
     expect(call?.html).not.toContain("You are working on:");
     expect(call?.text).toBe(
-      "Here is your updated project file.\n\nUpload it into your LLM and continue working on your project.\n\nAttachments: project-document.md, project-document.docx",
+      [
+        "We've attached your latest project file—this is the LLM operating context for your work.",
+        "",
+        "Now: open the chat where you work (Copilot, Gemini, or another assistant).",
+        "",
+        "Next: drag the attachment from this email into that chat, or into the file area if your app shows one.",
+        "",
+        "Then say what you want to do next—a task, a question, or a change.",
+        "",
+        "In a new chat, drag the file in again so context stays in sync, or get a fresh export from the app when the project has changed.",
+        "",
+        "Attachments: project-document.md, project-document.docx",
+      ].join("\n"),
     );
     expect(call?.text).not.toContain("Project:");
     expect(call?.text).not.toContain("Status:");
@@ -156,7 +168,7 @@ describe("sendProjectEmail", () => {
     const call = mockedSendEmail.mock.calls[0]?.[0];
     expect(call?.bcc).toBeUndefined();
     expect(call?.subject).toBe("Project Update — AI Real Estate Copilot [PJT-A1B2C3D4]");
-    expect(call?.html).toContain("Here is your updated project file.");
+    expect(call?.html).toContain("Copilot, Gemini");
     expect(call?.text).not.toContain("Project: AI SaaS for real estate");
   });
 
@@ -308,7 +320,7 @@ describe("sendProjectEmail", () => {
     const byTo = mockedSendEmail.mock.calls.map((c) => ({ to: String(c[0]?.to ?? ""), text: c[0]?.text ?? "" }));
     const ownerSend = byTo.find((x) => x.to.includes("owner"));
     const rpmSend = byTo.find((x) => x.to === "rpm@example.com");
-    expect(ownerSend?.text).toContain("Upload it into your LLM and continue working on your project.");
+    expect(ownerSend?.text).toContain("drag the attachment from this email into that chat");
     expect(ownerSend?.text).not.toContain("assigned RPM");
     expect(rpmSend?.text).toContain("assigned RPM");
     expect(rpmSend?.text).toContain("Correction:");

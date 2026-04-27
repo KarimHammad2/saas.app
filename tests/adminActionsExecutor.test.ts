@@ -41,8 +41,21 @@ const defaultProjectContext: ProjectContext = {
 };
 
 function makeRepo(overrides: Partial<Record<keyof MemoryRepository, unknown>> = {}): MemoryRepository {
+  const {
+    findUserByEmail: findUserByEmailOverride,
+    findUserByAccountEmail: findUserByAccountEmailOverride,
+    ...restOverrides
+  } = overrides;
+
+  const findUserByEmail =
+    (findUserByEmailOverride as ReturnType<typeof vi.fn> | undefined) ?? vi.fn(async () => null);
+  const findUserByAccountEmail =
+    (findUserByAccountEmailOverride as ReturnType<typeof vi.fn> | undefined) ??
+    vi.fn(async (email: string) => findUserByEmail(email));
+
   const repo: PartialRepo = {
-    findUserByEmail: vi.fn(async () => null),
+    findUserByEmail,
+    findUserByAccountEmail,
     findProjectsByName: vi.fn(async () => []),
     setProjectArchived: vi.fn(async () => undefined),
     loadProjectDeletionSnapshot: vi.fn(async () => ({ project: null, state: null, rpmEmail: null })),
@@ -97,8 +110,9 @@ function makeRepo(overrides: Partial<Record<keyof MemoryRepository, unknown>> = 
     assignRpm: vi.fn(async () => undefined),
     deactivateActiveRpm: vi.fn(async () => undefined),
     addAdditionalEmails: vi.fn(async () => 2),
+    removeAdditionalAccountEmail: vi.fn(async () => undefined),
     getUserEmailById: vi.fn(async () => "owner@example.com"),
-    ...(overrides as Record<string, unknown>),
+    ...(restOverrides as Record<string, unknown>),
   };
   return repo as unknown as MemoryRepository;
 }
@@ -567,7 +581,7 @@ describe("executeAdminAction - delete_user", () => {
       expect(result.lines.join(" ")).toMatch(/permanently deleted/i);
       expect(result.lines.join(" ")).toContain("victim@example.com");
     }
-    expect((repo.findUserByEmail as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("victim@example.com");
+    expect((repo.findUserByAccountEmail as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("victim@example.com");
     expect((repo.loadUserDeletionSnapshot as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("u-target");
     expect((repo.hardDeleteUser as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("u-target");
     expect((repo.recordAdminAuditLog as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
@@ -619,10 +633,65 @@ describe("executeAdminAction - delete_user", () => {
     if (!result.ok) {
       expect(result.reason.toLowerCase()).toContain("master");
     }
-    expect(repo.findUserByEmail).not.toHaveBeenCalled();
+    expect(repo.findUserByAccountEmail).not.toHaveBeenCalled();
     expect(repo.loadUserDeletionSnapshot).not.toHaveBeenCalled();
     expect(repo.hardDeleteUser).not.toHaveBeenCalled();
     expect(repo.recordAdminAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("resolves the account by alias when findUserByAccountEmail returns the user", async () => {
+    const target = {
+      id: "u-target",
+      email: "owner@example.com",
+      display_name: null,
+      tier: "agency" as const,
+      created_at: "2026-04-20T00:00:00.000Z",
+    };
+    const snapshot = { user: target, projects: [], emails: [] };
+    const findUserByAccountEmail = vi.fn(async () => target);
+    const findUserByEmail = vi.fn(async () => null);
+    const repo = makeRepo({
+      findUserByEmail,
+      findUserByAccountEmail,
+      loadUserDeletionSnapshot: vi.fn(async () => snapshot),
+      hardDeleteUser: vi.fn(async () => undefined),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "delete_user", userEmail: "member@example.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(findUserByAccountEmail).toHaveBeenCalledWith("member@example.com");
+    expect((repo.hardDeleteUser as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("u-target");
+    expect(findUserByEmail).not.toHaveBeenCalled();
+  });
+
+  it("uses agency success copy when deletionWording is agency", async () => {
+    const target = {
+      id: "u-target",
+      email: "owner@example.com",
+      display_name: null,
+      tier: "agency" as const,
+      created_at: "2026-04-20T00:00:00.000Z",
+    };
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => target),
+      loadUserDeletionSnapshot: vi.fn(async () => ({ user: null, projects: [], emails: [] })),
+      hardDeleteUser: vi.fn(async () => undefined),
+    });
+    const result = await executeAdminAction(
+      repo,
+      { kind: "delete_user", userEmail: "owner@example.com", deletionWording: "agency" },
+      actorContext,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.lines.join(" ")).toMatch(/\(agency\)/);
+      expect(result.lines.join(" ")).toMatch(/RPM/);
+    }
   });
 });
 
@@ -803,6 +872,43 @@ describe("executeAdminAction - agency scope", () => {
         subject: expect.stringContaining("primary@agency.com"),
       }),
     );
+  });
+
+  it("remove_agency_member removes a non-primary alias", async () => {
+    const repo = makeRepo({
+      removeAdditionalAccountEmail: vi.fn(async () => undefined),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "remove_agency_member", memberEmail: "gone@agency.com" },
+      { actorEmail: "primary@agency.com", adminActionId: "a-rem", enforceOwnerUserId: "u-agency" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(repo.removeAdditionalAccountEmail).toHaveBeenCalledWith("u-agency", "gone@agency.com");
+    expect(repo.recordAdminAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ actionKind: "remove_agency_member", entityRef: "gone@agency.com" }),
+    );
+  });
+
+  it("remove_agency_member surfaces primary-email error from the repository", async () => {
+    const repo = makeRepo({
+      removeAdditionalAccountEmail: vi.fn(async () => {
+        throw new Error("Cannot remove the primary account email.");
+      }),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "remove_agency_member", memberEmail: "primary@agency.com" },
+      { actorEmail: "primary@agency.com", adminActionId: "a-rem2", enforceOwnerUserId: "u-agency" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/primary account email/i);
+    }
   });
 
   it("rejects master-only actions when enforceOwnerUserId is set", async () => {

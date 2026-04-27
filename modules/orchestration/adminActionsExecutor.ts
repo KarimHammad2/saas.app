@@ -346,7 +346,7 @@ async function executeDeleteUser(
     return { ok: false, reason: "I can’t delete the master admin account." };
   }
 
-  const target = await repo.findUserByEmail(action.userEmail);
+  const target = await repo.findUserByAccountEmail(action.userEmail);
   if (!target) {
     return { ok: false, reason: `I couldn’t find a user for ${action.userEmail}.` };
   }
@@ -363,12 +363,17 @@ async function executeDeleteUser(
     afterJson: null,
   });
 
+  const agency = action.deletionWording === "agency";
   return {
     ok: true,
     heading: "Done ✅",
     lines: [
-      `User ${target.email} has been permanently deleted.`,
-      "All owned projects, transactions, and documents were removed via cascading deletes.",
+      agency
+        ? `The account for ${target.email} (agency) has been permanently deleted.`
+        : `User ${target.email} has been permanently deleted.`,
+      agency
+        ? "All account emails, owned projects, RPM assignments, and related data were removed via cascading deletes."
+        : "All owned projects, transactions, and documents were removed via cascading deletes.",
       "Audit snapshot saved to admin_audit_log.",
     ],
     nextSteps: ["Show me all users"],
@@ -737,6 +742,47 @@ async function executeAddAgencyMember(
   };
 }
 
+async function executeRemoveAgencyMember(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "remove_agency_member" }>,
+  context: AdminActionExecutionContext,
+): Promise<AdminExecutionResult> {
+  const agencyUserId = context.enforceOwnerUserId;
+  if (!agencyUserId) {
+    return { ok: false, reason: "Removing members is only available from an agency admin context." };
+  }
+  const member = action.memberEmail.trim().toLowerCase();
+  try {
+    await repo.removeAdditionalAccountEmail(agencyUserId, member);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/primary account email/i.test(msg)) {
+      return { ok: false, reason: "You can’t remove the primary account email." };
+    }
+    if (/not on this account/i.test(msg)) {
+      return { ok: false, reason: "That email is not on this account." };
+    }
+    return { ok: false, reason: msg };
+  }
+
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "remove_agency_member",
+    entityType: "user_email",
+    entityRef: member,
+    beforeJson: { memberEmail: member },
+    afterJson: null,
+  });
+
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines: [`${member} has been removed from your agency account.`],
+    nextSteps: ["Show members", "Show all RPMs"],
+  };
+}
+
 export async function executeAdminAction(
   repo: MemoryRepository,
   action: AdminActionPayload,
@@ -748,6 +794,7 @@ export async function executeAdminAction(
       "remove_rpm",
       "delete_project",
       "add_agency_member",
+      "remove_agency_member",
     ];
     if (!allowed.includes(action.kind)) {
       return { ok: false, reason: "That action is not available for agency admin." };
@@ -776,6 +823,14 @@ export async function executeAdminAction(
       return executeCreateProject(repo, action, context);
     case "add_agency_member":
       return executeAddAgencyMember(repo, action, context);
+    case "remove_agency_member":
+      return executeRemoveAgencyMember(repo, action, context);
+    case "add_agency_super_admin":
+    case "remove_agency_super_admin":
+      return {
+        ok: false,
+        reason: "Delegated admin changes are confirmed through a dedicated step; please send the command again.",
+      };
     case "upsert_instruction":
       return executeUpsertInstruction(repo, action, context);
     case "upsert_email_template":

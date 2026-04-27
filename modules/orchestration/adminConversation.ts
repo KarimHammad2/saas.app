@@ -13,6 +13,9 @@ export type AdminActionKind =
   | "delete_user"
   | "create_project"
   | "add_agency_member"
+  | "remove_agency_member"
+  | "add_agency_super_admin"
+  | "remove_agency_super_admin"
   | "upsert_instruction"
   | "upsert_email_template"
   | "upsert_system_setting";
@@ -79,6 +82,8 @@ export type AdminActionPayload =
   | {
       kind: "delete_user";
       userEmail: string;
+      /** Set when the master used "delete agency" / "remove agency" wording; same execution as `delete_user`. */
+      deletionWording?: "agency";
     }
   | {
       kind: "create_project";
@@ -103,6 +108,18 @@ export type AdminActionPayload =
   | {
       kind: "add_agency_member";
       memberEmail: string;
+    }
+  | {
+      kind: "remove_agency_member";
+      memberEmail: string;
+    }
+  | {
+      kind: "add_agency_super_admin";
+      superAdminEmail: string;
+    }
+  | {
+      kind: "remove_agency_super_admin";
+      superAdminEmail: string;
     };
 
 export type AdminRequest =
@@ -137,7 +154,7 @@ export type AdminRequest =
   | { kind: "restore_project"; projectName: string | null; userEmail: string | null }
   | { kind: "delete_project"; projectName: string | null; userEmail: string | null }
   | { kind: "create_user"; userEmail: string | null }
-  | { kind: "delete_user"; userEmail: string | null }
+  | { kind: "delete_user"; userEmail: string | null; deletionWording?: "agency" }
   | { kind: "create_project"; projectName: string | null; userEmail: string | null }
   | { kind: "upsert_instruction"; key: string | null; content: string | null }
   | {
@@ -148,7 +165,11 @@ export type AdminRequest =
     }
   | { kind: "upsert_system_setting"; key: string | null; rawValue: string | null }
   | { kind: "show_agency_members" }
-  | { kind: "add_agency_member"; memberEmail: string | null };
+  | { kind: "add_agency_member"; memberEmail: string | null }
+  | { kind: "remove_agency_member"; memberEmail: string | null }
+  | { kind: "show_agency_super_admins" }
+  | { kind: "add_agency_super_admin"; superAdminEmail: string | null }
+  | { kind: "remove_agency_super_admin"; superAdminEmail: string | null };
 
 export interface AdminReply {
   subject: string;
@@ -355,6 +376,25 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     return { kind: "add_agency_member", memberEmail: emails[0] ?? null };
   }
 
+  if (/\b(?:remove|delete)\s+(?:a\s+)?(?:agency\s+)?member\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "remove_agency_member", memberEmail: emails[0] ?? null };
+  }
+
+  if (/(?:show|list|view)\s+(?:all\s+)?super\s+admins?\b/i.test(candidate)) {
+    return { kind: "show_agency_super_admins" };
+  }
+
+  if (/\badd\s+(?:a\s+)?super\s+admin\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "add_agency_super_admin", superAdminEmail: emails[0] ?? null };
+  }
+
+  if (/\b(?:remove|delete)\s+(?:a\s+)?super\s+admin\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "remove_agency_super_admin", superAdminEmail: emails[0] ?? null };
+  }
+
   if (/(?:show|list|view)\b(?:\s+\w+)*?\s+users?\b/i.test(candidate)) {
     return { kind: "show_users" };
   }
@@ -372,7 +412,11 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     return { kind: "show_transactions", userEmail: emails[0] ?? null };
   }
 
-  if (/(?:what|show|view)\s+(?:the\s+)?rpm\b/i.test(candidate) || /\brpm\s+for\b/i.test(candidate)) {
+  if (
+    /(?:what|show|list|view)\s+(?:the\s+)?rpm\b/i.test(candidate) ||
+    /\brpm\s+for\b/i.test(candidate) ||
+    /\b(?:show|list|view)\s+all\s+rpms?\b/i.test(candidate)
+  ) {
     const emails = extractEmails(candidate);
     return { kind: "show_rpm", userEmail: emails[0] ?? null };
   }
@@ -429,6 +473,11 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
   if (/\bcreate\s+user\b/i.test(candidate)) {
     const emails = extractEmails(candidate);
     return { kind: "create_user", userEmail: emails[0] ?? null };
+  }
+
+  if (/\b(?:delete|remove)\s+agency\b(?!\s+member)\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "delete_user", userEmail: emails[0] ?? null, deletionWording: "agency" };
   }
 
   if (/\bdelete\s+user\b/i.test(candidate)) {
@@ -570,6 +619,7 @@ const MENU_VIEW_ITEMS: string[] = [
 const MENU_MANAGE_ITEMS: string[] = [
   'Create a user — "Create user alice@example.com"',
   'Delete a user — "Delete user alice@example.com"',
+  'Delete an agency (account + members + projects) — "Delete agency alice@example.com" or "Remove agency alice@example.com"',
   'Create a project — "Create project Alpha Launch for alice@example.com"',
   'Update a user\'s tier — "Make user@email.com an agency"',
   'Assign an RPM — "Assign user@email.com to john@company.com for project Alpha Launch"',
@@ -589,7 +639,11 @@ const AGENCY_ADMIN_ALLOWED_REQUEST_KINDS = new Set<AdminRequest["kind"]>([
   "show_projects",
   "show_rpm",
   "show_agency_members",
+  "show_agency_super_admins",
+  "add_agency_super_admin",
+  "remove_agency_super_admin",
   "add_agency_member",
+  "remove_agency_member",
   "assign_rpm",
   "remove_rpm",
   "delete_project",
@@ -605,23 +659,44 @@ export const AGENCY_ADMIN_CONFIRMABLE_ACTION_KINDS = new Set([
   "remove_rpm",
   "delete_project",
   "add_agency_member",
+  "remove_agency_member",
+  "add_agency_super_admin",
+  "remove_agency_super_admin",
 ]);
 
 const AGENCY_MENU_VIEW_ITEMS: string[] = [
   'View all your projects — "Show all projects" or "Show projects for <your@email>"',
-  'View RPM assignments — "Show RPM for <your@email>" or include your account email',
+  'View all RPMs on your projects — "Show all RPMs" (or "Show RPM for <your@email>")',
   'View account members — "Show members"',
 ];
 
 const AGENCY_MENU_MANAGE_ITEMS: string[] = [
   'Add a member — "Add member new@example.com" (they receive a notification email)',
+  'Remove a member — "Remove member old@example.com" (cannot remove the primary email)',
   'Assign an RPM — "Assign rpm@example.com for project Alpha Launch" (owner defaults to your primary email) or full form like the system admin menu',
   'Remove an RPM — "Remove the RPM from <owner@email> for project Alpha Launch" (owner can be your primary email)',
   'Delete a project — "Delete project Alpha Launch" (add "for <your@email>" if the name is ambiguous)',
 ];
 
-export function buildAgencyAdminMenuReply(originalSubject: string): AdminReply {
-  const text = [
+/** Shown only to the primary account owner: delegated agency admins (super admins). */
+const AGENCY_MENU_PRIMARY_OWNER_ITEMS: string[] = [
+  'List delegated admins — "Show super admins" or "List super admins"',
+  'Add a delegated admin — "Add super admin member@example.com" (must already be on the account)',
+  'Remove a delegated admin — "Remove super admin member@example.com"',
+];
+
+export interface BuildAgencyAdminMenuOptions {
+  /** When true, includes primary-only commands for managing delegated agency admins. */
+  isPrimaryOwner?: boolean;
+}
+
+export function buildAgencyAdminMenuReply(originalSubject: string, options: BuildAgencyAdminMenuOptions = {}): AdminReply {
+  const { isPrimaryOwner = false } = options;
+  const viewCount = AGENCY_MENU_VIEW_ITEMS.length;
+  const manageCount = AGENCY_MENU_MANAGE_ITEMS.length;
+  const primaryCount = isPrimaryOwner ? AGENCY_MENU_PRIMARY_OWNER_ITEMS.length : 0;
+
+  const textParts: string[] = [
     "Agency admin menu",
     "",
     "I can help with your agency account and projects. For anything that changes data I will echo what I understood and wait for you to reply CONFIRM.",
@@ -630,27 +705,43 @@ export function buildAgencyAdminMenuReply(originalSubject: string): AdminReply {
     ...AGENCY_MENU_VIEW_ITEMS.map((item, index) => `${index + 1}. ${item}`),
     "",
     "— Manage (requires CONFIRM) —",
-    ...AGENCY_MENU_MANAGE_ITEMS.map((item, index) => `${index + 1 + AGENCY_MENU_VIEW_ITEMS.length}. ${item}`),
-    "",
-    "Just reply naturally with what you want to do.",
-    "",
-    "— Frank",
-  ].join("\n");
+    ...AGENCY_MENU_MANAGE_ITEMS.map((item, index) => `${index + 1 + viewCount}. ${item}`),
+  ];
+
+  if (isPrimaryOwner) {
+    textParts.push(
+      "",
+      "— Primary owner: delegated admins (requires CONFIRM to add/remove) —",
+      ...AGENCY_MENU_PRIMARY_OWNER_ITEMS.map(
+        (item, index) => `${index + 1 + viewCount + manageCount}. ${item}`,
+      ),
+    );
+  }
+
+  textParts.push("", "Just reply naturally with what you want to do.", "", "— Frank");
+
+  const htmlGroups: Array<{ heading: string; items: string[] }> = [
+    { heading: "View (read-only)", items: AGENCY_MENU_VIEW_ITEMS },
+    { heading: "Manage (requires CONFIRM)", items: AGENCY_MENU_MANAGE_ITEMS },
+  ];
+  if (isPrimaryOwner) {
+    htmlGroups.push({
+      heading: "Primary owner: delegated admins (CONFIRM to add/remove)",
+      items: AGENCY_MENU_PRIMARY_OWNER_ITEMS,
+    });
+  }
 
   const html = [
     "<p><strong>Agency admin menu</strong></p>",
     "<p>I can help with your agency account and projects. For anything that changes data I will echo what I understood and wait for you to reply <strong>CONFIRM</strong>.</p>",
-    renderGroupedListHtml([
-      { heading: "View (read-only)", items: AGENCY_MENU_VIEW_ITEMS },
-      { heading: "Manage (requires CONFIRM)", items: AGENCY_MENU_MANAGE_ITEMS },
-    ]),
+    renderGroupedListHtml(htmlGroups),
     "<p>Just reply naturally with what you want to do.</p>",
     "<p>&mdash; Frank</p>",
   ].join("");
 
   return {
     subject: buildReplySubject(originalSubject),
-    text,
+    text: textParts.join("\n"),
     html,
   };
 }
@@ -837,13 +928,16 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
     }
 
     if (payload.kind === "delete_user") {
+      const agency = payload.deletionWording === "agency";
       return [
         "I understood:",
         "",
-        "Delete user (permanent)",
-        `User: ${payload.userEmail}`,
+        agency ? "Delete agency account (permanent)" : "Delete user (permanent)",
+        `Account: ${payload.userEmail}`,
         "",
-        "This will permanently remove the user account and all of their projects, transactions, and documents. This cannot be undone.",
+        agency
+          ? "This will permanently remove the account, all member addresses, owned projects, RPM assignments, transactions, and related data. This cannot be undone."
+          : "This will permanently remove the user account and all of their projects, transactions, and documents. This cannot be undone.",
         "",
         'Reply "CONFIRM" to proceed.',
         "",
@@ -873,6 +967,51 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
         `Email: ${payload.memberEmail}`,
         "",
         "They will receive an email that they were added to your agency account.",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
+    if (payload.kind === "remove_agency_member") {
+      return [
+        "I understood:",
+        "",
+        "Remove account member",
+        `Email: ${payload.memberEmail}`,
+        "",
+        "They will no longer be on your agency account (non-primary emails only).",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
+    if (payload.kind === "add_agency_super_admin") {
+      return [
+        "I understood:",
+        "",
+        "Add delegated agency admin",
+        `Email: ${payload.superAdminEmail}`,
+        "",
+        "They must already be an address on your account. They will be able to use the same agency admin actions as you, except managing delegated admins.",
+        "",
+        'Reply "CONFIRM" to proceed.',
+        "",
+        "— Frank",
+      ].join("\n");
+    }
+
+    if (payload.kind === "remove_agency_super_admin") {
+      return [
+        "I understood:",
+        "",
+        "Remove delegated agency admin",
+        `Email: ${payload.superAdminEmail}`,
+        "",
+        "They will lose agency admin access unless they are the primary account owner.",
         "",
         'Reply "CONFIRM" to proceed.',
         "",
@@ -1013,11 +1152,15 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
     }
 
     if (payload.kind === "delete_user") {
+      const agency = payload.deletionWording === "agency";
       return [
         "<p>I understood:</p>",
-        "<p><strong>Delete user (permanent)</strong><br>",
-        `User: ${escapeHtml(payload.userEmail)}</p>`,
-        "<p><strong>Warning:</strong> this will permanently remove the user account and all of their projects, transactions, and documents. This cannot be undone.</p>",
+        agency
+          ? `<p><strong>Delete agency account (permanent)</strong><br>Account: ${escapeHtml(payload.userEmail)}</p>`
+          : `<p><strong>Delete user (permanent)</strong><br>User: ${escapeHtml(payload.userEmail)}</p>`,
+        agency
+          ? "<p><strong>Warning:</strong> this will permanently remove the account, all member addresses, owned projects, RPM assignments, transactions, and related data. This cannot be undone.</p>"
+          : "<p><strong>Warning:</strong> this will permanently remove the user account and all of their projects, transactions, and documents. This cannot be undone.</p>",
         '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
         "<p>&mdash; Frank</p>",
       ].join("");
@@ -1040,6 +1183,39 @@ export function buildAdminConfirmationReply(originalSubject: string, payload: Ad
         "<p><strong>Add account member</strong><br>",
         `Email: ${escapeHtml(payload.memberEmail)}</p>`,
         "<p>They will receive an email that they were added to your agency account.</p>",
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "remove_agency_member") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Remove account member</strong><br>",
+        `Email: ${escapeHtml(payload.memberEmail)}</p>`,
+        "<p>They will no longer be on your agency account (non-primary emails only).</p>",
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "add_agency_super_admin") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Add delegated agency admin</strong><br>",
+        `Email: ${escapeHtml(payload.superAdminEmail)}</p>`,
+        "<p>They must already be an address on your account. They will be able to use the same agency admin actions as you, except managing delegated admins.</p>",
+        '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
+        "<p>&mdash; Frank</p>",
+      ].join("");
+    }
+
+    if (payload.kind === "remove_agency_super_admin") {
+      return [
+        "<p>I understood:</p>",
+        "<p><strong>Remove delegated agency admin</strong><br>",
+        `Email: ${escapeHtml(payload.superAdminEmail)}</p>`,
+        "<p>They will lose agency admin access unless they are the primary account owner.</p>",
         '<p>Reply <strong>CONFIRM</strong> to proceed.</p>',
         "<p>&mdash; Frank</p>",
       ].join("");
@@ -1357,13 +1533,24 @@ export function summarizeAdminAction(action: AdminActionPayload): string {
     return `Create user ${action.userEmail}`;
   }
   if (action.kind === "delete_user") {
-    return `Delete user ${action.userEmail}`;
+    return action.deletionWording === "agency"
+      ? `Delete agency account ${action.userEmail}`
+      : `Delete user ${action.userEmail}`;
   }
   if (action.kind === "create_project") {
     return `Create project ${action.projectName} for ${action.userEmail}`;
   }
   if (action.kind === "add_agency_member") {
     return `Add agency member ${action.memberEmail}`;
+  }
+  if (action.kind === "remove_agency_member") {
+    return `Remove agency member ${action.memberEmail}`;
+  }
+  if (action.kind === "add_agency_super_admin") {
+    return `Add delegated agency admin ${action.superAdminEmail}`;
+  }
+  if (action.kind === "remove_agency_super_admin") {
+    return `Remove delegated agency admin ${action.superAdminEmail}`;
   }
   if (action.kind === "upsert_instruction") {
     return `Update instruction ${action.key}`;

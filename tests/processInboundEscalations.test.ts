@@ -69,6 +69,8 @@ const repoState = {
   createReviewFlag: vi.fn(),
   createPendingApproval: vi.fn(),
   findLatestPendingAdminAction: vi.fn(),
+  isAccountPrimaryEmail: vi.fn(),
+  getAgencySuperAdminEmails: vi.fn(),
 };
 
 vi.mock("@/modules/memory/repository", async () => {
@@ -92,6 +94,8 @@ vi.mock("@/modules/memory/repository", async () => {
       createReviewFlag = repoState.createReviewFlag;
       createPendingApproval = repoState.createPendingApproval;
       findLatestPendingAdminAction = repoState.findLatestPendingAdminAction;
+      isAccountPrimaryEmail = repoState.isAccountPrimaryEmail;
+      getAgencySuperAdminEmails = repoState.getAgencySuperAdminEmails;
     },
   };
 });
@@ -151,6 +155,8 @@ describe("processInboundEmail escalation routing", () => {
       resolved_at: null,
       created_at: new Date().toISOString(),
     });
+    repoState.isAccountPrimaryEmail.mockResolvedValue(true);
+    repoState.getAgencySuperAdminEmails.mockResolvedValue([]);
   });
 
   it("notifies the rpm when an escalation block requests RPM help", async () => {

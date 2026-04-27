@@ -52,6 +52,10 @@ describe("generateProjectDocument", () => {
     expect(content).toContain("## Instructions to LLM");
     expect(content).toContain("Your role:");
     expect(content).toContain(" - Help the user think through this project");
+    expect(content).toContain("### Conversation Mode (VERY IMPORTANT)");
+    expect(content).toContain("behave like a sales/project consultant");
+    expect(content).toContain("### Sales Discovery Behavior");
+    expect(content).toContain("simulate a sales call");
     expect(content).toContain("Scope rules:");
     expect(content).toContain("Project Status:\n- Active");
     expect(content).toContain("Always format updates using the exact project update structure in this document");
