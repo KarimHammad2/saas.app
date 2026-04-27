@@ -268,6 +268,19 @@ describe("parseAdminRequest", () => {
     expect(parseAdminRequest("Show all agency delegated admins")).toEqual({ kind: "show_agency_super_admins" });
   });
 
+  it("parses show super admins when the reply includes a quoted agency menu (Gmail)", () => {
+    const body = [
+      "Show super admins",
+      "",
+      "On Mon, Apr 27, 2026 at 7:01 PM Frank <frank@example.com> wrote:",
+      "",
+      "Agency admin menu",
+      "View account members — \"Show members\"",
+      "List delegated admins — \"Show super admins\"",
+    ].join("\n");
+    expect(parseAdminRequest(body)).toEqual({ kind: "show_agency_super_admins" });
+  });
+
   it("parses add and remove super admin with an email", () => {
     expect(parseAdminRequest("Add super admin alice@example.com")).toEqual({
       kind: "add_agency_super_admin",

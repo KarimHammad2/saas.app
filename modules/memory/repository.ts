@@ -1,4 +1,5 @@
 import { getMasterUserEmail } from "@/lib/env";
+import { log } from "@/lib/log";
 import { getSupabaseAdminClient } from "@/lib/supabase";
 import type {
   CommunicationStyleContext,
@@ -33,6 +34,20 @@ import { compactOverviewForDocument } from "@/modules/output/overviewText";
 import { planAgencyRpmReplacement } from "@/modules/domain/agencyTierRpm";
 import { applyTierFinancials } from "@/modules/domain/financial";
 import { resolvePaymentLinkForTotal } from "@/modules/domain/paymentLinkCatalog";
+
+/** When the migration adding `users.agency_super_admin_emails` is not applied yet, PostgREST errors instead of returning null. */
+function isUsersAgencySuperAdminColumnMissingError(message: string): boolean {
+  const m = message.toLowerCase();
+  if (!m.includes("agency_super_admin_emails")) {
+    return false;
+  }
+  return (
+    m.includes("does not exist") ||
+    m.includes("undefined column") ||
+    m.includes("schema cache") ||
+    m.includes("could not find")
+  );
+}
 
 function formatNoteDatePrefix(iso?: string): string {
   const d = iso ? new Date(iso) : new Date();
@@ -837,6 +852,12 @@ export class MemoryRepository {
       .eq("id", userId)
       .maybeSingle<{ agency_super_admin_emails: string[] | null }>();
     if (error) {
+      if (isUsersAgencySuperAdminColumnMissingError(error.message)) {
+        log.warn("users.agency_super_admin_emails is missing; returning no delegated admins. Apply pending Supabase migrations.", {
+          userId,
+        });
+        return [];
+      }
       throw new Error(`Failed to load agency super admins: ${error.message}`);
     }
     const raw = Array.isArray(data?.agency_super_admin_emails) ? data.agency_super_admin_emails : [];
@@ -876,6 +897,11 @@ export class MemoryRepository {
       .update({ agency_super_admin_emails: next })
       .eq("id", userId);
     if (updateError) {
+      if (isUsersAgencySuperAdminColumnMissingError(updateError.message)) {
+        throw new Error(
+          "Delegated agency admins require the database migration that adds users.agency_super_admin_emails. Apply Supabase migrations, then try again.",
+        );
+      }
       throw new Error(`Failed to add delegated agency admin: ${updateError.message}`);
     }
   }
@@ -895,6 +921,11 @@ export class MemoryRepository {
       .update({ agency_super_admin_emails: next })
       .eq("id", userId);
     if (updateError) {
+      if (isUsersAgencySuperAdminColumnMissingError(updateError.message)) {
+        throw new Error(
+          "Delegated agency admins require the database migration that adds users.agency_super_admin_emails. Apply Supabase migrations, then try again.",
+        );
+      }
       throw new Error(`Failed to remove delegated agency admin: ${updateError.message}`);
     }
   }

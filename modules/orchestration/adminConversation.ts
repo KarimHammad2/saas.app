@@ -206,6 +206,28 @@ function stripAdminPrefix(body: string): { text: string; hadPrefix: boolean } {
   };
 }
 
+/**
+ * Only the sender's latest reply, not quoted thread text. Otherwise Frank's agency menu
+ * ("View account members", "Show members", etc.) matches admin parsers before the user's line.
+ */
+function sliceReplyHead(body: string): string {
+  const patterns = [
+    /\r?\nOn .{0,400}?wrote:\r?\n/i,
+    /\r?\n-{5,}\s*Original Message\s*-{5,}\s*\r?\n/i,
+    /\r?\nFrom:\s[^\n]+\r?\nSent:\s[^\n]+/i,
+    /\r?\n________________________________\r?\n/,
+  ];
+  let earliest = body.length;
+  for (const re of patterns) {
+    const m = re.exec(body);
+    if (m && m.index > 0 && m.index < earliest) {
+      earliest = m.index;
+    }
+  }
+  const head = earliest < body.length ? body.slice(0, earliest).trim() : body.trim();
+  return head.length > 0 ? head : body.trim();
+}
+
 function extractEmails(text: string): string[] {
   const matches = text.match(/[^\s<>()"']+@[^\s<>()"']+\.[^\s<>()"']+/g) ?? [];
   const emails: string[] = [];
@@ -351,12 +373,14 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     return null;
   }
 
-  if (/^confirm[.!?\s]*$/i.test(body)) {
+  const firstMeaningfulLine = body.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
+  if (/^confirm[.!?\s]*$/i.test(firstMeaningfulLine.trim())) {
     return { kind: "confirm" };
   }
 
-  const { text: strippedBody, hadPrefix } = stripAdminPrefix(body);
-  const candidate = strippedBody || normalizeBody(body);
+  const parseSource = sliceReplyHead(body);
+  const { text: strippedBody, hadPrefix } = stripAdminPrefix(parseSource);
+  const candidate = strippedBody || normalizeBody(parseSource);
   const lower = candidate.toLowerCase();
 
   if (hadPrefix && !candidate) {
@@ -365,20 +389,6 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
 
   if (lower === "admin" || lower === "admin menu" || lower === "menu") {
     return { kind: "menu" };
-  }
-
-  if (/(?:show|list|view)\s+(?:all\s+)?(?:account\s+)?members?\b/i.test(candidate)) {
-    return { kind: "show_agency_members" };
-  }
-
-  if (/\b(?:add|invite)\s+(?:a\s+)?(?:agency\s+)?member\b/i.test(candidate)) {
-    const emails = extractEmails(candidate);
-    return { kind: "add_agency_member", memberEmail: emails[0] ?? null };
-  }
-
-  if (/\b(?:remove|delete)\s+(?:a\s+)?(?:agency\s+)?member\b/i.test(candidate)) {
-    const emails = extractEmails(candidate);
-    return { kind: "remove_agency_member", memberEmail: emails[0] ?? null };
   }
 
   if (
@@ -396,6 +406,20 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
   if (/\b(?:remove|delete)\s+(?:a\s+)?super\s+admin\b/i.test(candidate)) {
     const emails = extractEmails(candidate);
     return { kind: "remove_agency_super_admin", superAdminEmail: emails[0] ?? null };
+  }
+
+  if (/(?:show|list|view)\s+(?:all\s+)?(?:account\s+)?members?\b/i.test(candidate)) {
+    return { kind: "show_agency_members" };
+  }
+
+  if (/\b(?:add|invite)\s+(?:a\s+)?(?:agency\s+)?member\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "add_agency_member", memberEmail: emails[0] ?? null };
+  }
+
+  if (/\b(?:remove|delete)\s+(?:a\s+)?(?:agency\s+)?member\b/i.test(candidate)) {
+    const emails = extractEmails(candidate);
+    return { kind: "remove_agency_member", memberEmail: emails[0] ?? null };
   }
 
   if (/(?:show|list|view)\b(?:\s+\w+)*?\s+users?\b/i.test(candidate)) {
