@@ -824,6 +824,78 @@ describe("executeAdminAction - create_project", () => {
   });
 });
 
+describe("executeAdminAction - update_tier", () => {
+  const baseUser = {
+    id: "u-tier",
+    email: "user@example.com",
+    display_name: null,
+    created_at: "2026-04-20T00:00:00.000Z" as const,
+  };
+
+  beforeEach(() => {
+    vi.mocked(sendEmail).mockClear();
+  });
+
+  it("sends a congratulatory notification email on upgrade and records audit log", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({ ...baseUser, tier: "freemium" as const })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "update_tier", userEmail: "user@example.com", tier: "solopreneur" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.lines.join(" ")).toMatch(/notification email/i);
+    }
+    expect((repo.setUserTier as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("u-tier", "solopreneur");
+    expect(vi.mocked(sendEmail)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.to).toBe("user@example.com");
+    expect(call.subject).toBe("Your SaaS² account tier was updated");
+    expect(call.text).toContain("Congratulations!");
+  });
+
+  it("sends neutral copy on downgrade (no Congratulations)", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({ ...baseUser, tier: "agency" as const })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "update_tier", userEmail: "user@example.com", tier: "freemium" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(sendEmail)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.text).toContain("updated from Agency to Freemium");
+    expect(call.text).not.toMatch(/Congratulations/i);
+  });
+
+  it("does not send email when the tier is unchanged", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async () => ({ ...baseUser, tier: "solopreneur" as const })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "update_tier", userEmail: "user@example.com", tier: "solopreneur" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.lines.join(" ")).not.toMatch(/notification email/i);
+    }
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled();
+  });
+});
+
 describe("executeAdminAction - agency scope", () => {
   it("rejects delete_project when project is not owned by enforceOwnerUserId", async () => {
     const project = { id: "p-target", name: "Alpha", user_id: "u-intruder", archived_at: null };

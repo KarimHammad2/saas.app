@@ -1,6 +1,7 @@
 import { getDefaultFromEmail, getMasterUserEmail } from "@/lib/env";
 import { log } from "@/lib/log";
 import { sendNewUserWelcomeEmail } from "@/modules/email/sendNewUserWelcomeEmail";
+import { sendUserTierChangedEmail } from "@/modules/email/sendUserTierChangedEmail";
 import { sendEmail } from "@/modules/email/sendEmail";
 import type { Tier } from "@/modules/contracts/types";
 import { normalizeProjectNameCandidate } from "@/modules/domain/projectName";
@@ -565,6 +566,9 @@ async function executeUpdateTier(
   if (action.tier === "agency") {
     await repo.applyAgencyTierRpmTransition(user.id);
   }
+  if (previousTier !== action.tier) {
+    await sendUserTierChangedEmail(action.userEmail, previousTier, action.tier);
+  }
   await repo.recordAdminAuditLog({
     adminActionId: context.adminActionId ?? null,
     actorEmail: context.actorEmail,
@@ -575,10 +579,16 @@ async function executeUpdateTier(
     afterJson: { tier: action.tier },
   });
   const article = action.tier === "agency" ? "an" : "a";
+  const lines: string[] = [
+    `${action.userEmail} is now ${article} ${action.tier[0].toUpperCase()}${action.tier.slice(1)} user.`,
+  ];
+  if (previousTier !== action.tier) {
+    lines.push("They have been sent a notification email.");
+  }
   return {
     ok: true,
     heading: "Done ✅",
-    lines: [`${action.userEmail} is now ${article} ${action.tier[0].toUpperCase()}${action.tier.slice(1)} user.`],
+    lines,
     nextSteps: ["Assign an RPM", "View projects"],
   };
 }
