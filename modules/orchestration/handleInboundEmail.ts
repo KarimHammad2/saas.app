@@ -64,7 +64,9 @@ export async function handleInboundEmailEvent(event: NormalizedEmailEvent) {
     throw error;
   }
 
-  if (!result.context.duplicate) {
+  // Duplicate inbound rows skip project outbounds, but admin replies must still send (e.g. deduped
+  // webhooks for read-only agency commands or CONFIRM flows that produced an adminReply).
+  if (!result.context.duplicate || result.adminReply) {
     const repo = new MemoryRepository();
     const payload = result.payload;
     if (result.escalationAction) {

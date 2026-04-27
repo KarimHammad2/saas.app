@@ -7,6 +7,11 @@ import { parseNormalizedContent } from "@/modules/email/parseInbound";
 import { CcMembershipConfirmationRequiredError, NonRetryableInboundError } from "@/modules/orchestration/errors";
 
 const sendPaymentVerificationNotificationsMock = vi.hoisted(() => vi.fn());
+const sendAgencySuperAdminGrantedEmailMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/modules/email/sendAgencySuperAdminGrantedEmail", () => ({
+  sendAgencySuperAdminGrantedEmail: sendAgencySuperAdminGrantedEmailMock,
+}));
 
 vi.mock("@/modules/output/paymentOutbound", async () => {
   const actual = await vi.importActual<typeof import("@/modules/output/paymentOutbound")>(
@@ -362,6 +367,7 @@ describe("processInboundEmail", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     sendPaymentVerificationNotificationsMock.mockResolvedValue(undefined);
+    sendAgencySuperAdminGrantedEmailMock.mockResolvedValue(undefined);
     repoState.ensureUserProfileRow.mockResolvedValue(undefined);
     classifyInboundIntentMock.mockReturnValue({
       isNewProjectIntent: true,
@@ -5064,6 +5070,7 @@ Prefer concise updates.
       created: false,
     });
     repoState.isAccountPrimaryEmail.mockResolvedValue(true);
+    repoState.getUserEmailById.mockResolvedValueOnce("primary@example.com");
     repoState.findLatestPendingAdminAction.mockResolvedValueOnce({
       id: "admin_super",
       sender_user_id: "u-agency",
@@ -5112,6 +5119,14 @@ Prefer concise updates.
     });
 
     expect(repoState.addAgencySuperAdminEmail).toHaveBeenCalledWith("u-agency", "delegate@example.com");
+    expect(sendAgencySuperAdminGrantedEmailMock).toHaveBeenCalledWith("delegate@example.com", "primary@example.com");
+    expect(repoState.recordAdminAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKind: "add_agency_super_admin",
+        entityRef: "delegate@example.com",
+        adminActionId: "admin_super",
+      }),
+    );
     expect(repoState.resolvePendingAdminAction).toHaveBeenCalledWith({
       actionId: "admin_super",
       status: "executed",
@@ -5119,6 +5134,62 @@ Prefer concise updates.
     });
     expect(result.outboundMode).toBe("admin");
     expect(result.adminReply?.text).toContain("Done");
+    expect(result.adminReply?.text).toContain("notification email");
+  });
+
+  it("returns agency super-admin list when inbound is duplicate but command is read-only admin", async () => {
+    repoState.registerInboundEvent.mockResolvedValueOnce(false);
+    repoState.getOrCreateUserByEmail.mockResolvedValueOnce({
+      user: {
+        id: "u-agency",
+        email: "primary@example.com",
+        display_name: null,
+        tier: "agency",
+        created_at: new Date().toISOString(),
+      },
+      created: false,
+    });
+    repoState.isAccountPrimaryEmail.mockResolvedValue(true);
+    repoState.getAgencySuperAdminEmails.mockResolvedValueOnce(["delegate@example.com"]);
+    repoState.getUserEmailById.mockResolvedValueOnce("primary@example.com");
+    repoState.findLatestPendingAdminAction.mockResolvedValueOnce(null);
+
+    const { processInboundEmail } = await import("@/modules/orchestration/processInboundEmail");
+    const result = await processInboundEmail({
+      eventId: "e-agency-dup-super-list",
+      provider: "resend",
+      providerEventId: "m-dup-super-list",
+      timestamp: new Date().toISOString(),
+      from: "primary@example.com",
+      fromDisplayName: null,
+      to: ["frank@saas2.app"],
+      cc: [],
+      subject: "Admin",
+      inReplyTo: null,
+      references: [],
+      rawBody: "Show agency super admins",
+      parsed: {
+        projectSectionPresence: EMPTY_PROJECT_SECTION_PRESENCE,
+        summary: null,
+        currentStatus: null,
+        goals: [],
+        actionItems: [],
+        completedTasks: [],
+        decisions: [],
+        risks: [],
+        recommendations: [],
+        notes: [],
+        userProfileContext: null,
+        rpmSuggestion: null,
+        transactionEvent: null,
+        approvals: [],
+        additionalEmails: [],
+      },
+    });
+
+    expect(result.context.duplicate).toBe(true);
+    expect(result.adminReply?.text).toContain("delegate@example.com");
+    expect(result.adminReply?.text).toContain("Primary account owner");
   });
 
   it("blocks master-only admin commands for agency senders", async () => {

@@ -530,6 +530,42 @@ describe("handleInboundEmailEvent", () => {
     expect(mockedSendRpmProfileProposalEmail).not.toHaveBeenCalled();
   });
 
+  it("sends admin reply email when inbound is duplicate but adminReply is present", async () => {
+    const result: InboundProcessingResult = {
+      recipients: ["admin@example.com"],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: {
+        subject: "Re: Admin",
+        text: "Agency admin access:\n\nPrimary…",
+        html: "<p>Agency admin access</p>",
+      },
+      context: {
+        userId: "u1",
+        projectId: null,
+        eventId: "evt_dup_admin",
+        duplicate: true,
+      },
+    };
+    mockedProcessInboundEmail.mockResolvedValue(result);
+
+    const response = await handleInboundEmailEvent({ provider: "resend" } as never);
+
+    expect(response).toMatchObject({ userId: "u1", duplicate: true });
+    expect(mockedSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "admin@example.com",
+        subject: "Re: Admin",
+        text: expect.stringContaining("Agency admin access"),
+      }),
+    );
+    expect(recordOutboundEmailEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "admin-response", status: "sent" }),
+    );
+    expect(mockedSendProjectEmail).not.toHaveBeenCalled();
+  });
+
   it("throws typed outbound error when send fails", async () => {
     const result: InboundProcessingResult = {
       recipients: ["owner@example.com"],

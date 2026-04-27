@@ -263,6 +263,9 @@ describe("parseAdminRequest", () => {
   it("parses show super admins", () => {
     expect(parseAdminRequest("List super admins")).toEqual({ kind: "show_agency_super_admins" });
     expect(parseAdminRequest("Show all super admins")).toEqual({ kind: "show_agency_super_admins" });
+    expect(parseAdminRequest("Show agency super admins")).toEqual({ kind: "show_agency_super_admins" });
+    expect(parseAdminRequest("List delegated admins")).toEqual({ kind: "show_agency_super_admins" });
+    expect(parseAdminRequest("Show all agency delegated admins")).toEqual({ kind: "show_agency_super_admins" });
   });
 
   it("parses add and remove super admin with an email", () => {

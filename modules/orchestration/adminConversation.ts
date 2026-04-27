@@ -381,7 +381,10 @@ export function parseAdminRequest(rawBody: string): AdminRequest | null {
     return { kind: "remove_agency_member", memberEmail: emails[0] ?? null };
   }
 
-  if (/(?:show|list|view)\s+(?:all\s+)?super\s+admins?\b/i.test(candidate)) {
+  if (
+    /(?:show|list|view)\s+(?:all\s+)?(?:agency\s+)?super\s+admins?\b/i.test(candidate) ||
+    /(?:show|list|view)\s+(?:all\s+)?(?:agency\s+)?delegated\s+admins?\b/i.test(candidate)
+  ) {
     return { kind: "show_agency_super_admins" };
   }
 

@@ -97,6 +97,7 @@ import {
   formatPaymentConfirmedPlainText,
   sendPaymentVerificationNotifications,
 } from "@/modules/output/paymentOutbound";
+import { sendAgencySuperAdminGrantedEmail } from "@/modules/email/sendAgencySuperAdminGrantedEmail";
 
 export interface InboundProcessingResult {
   recipients: string[];
@@ -978,6 +979,18 @@ async function handleAdminRequest(
           },
         };
       }
+      const primaryForNotice = await repo.getUserEmailById(userId);
+      if (primaryForNotice) {
+        await sendAgencySuperAdminGrantedEmail(superAdminEmail, primaryForNotice);
+      }
+      await repo.recordAdminAuditLog({
+        adminActionId: pendingAdminAction.id,
+        actorEmail: event.from,
+        actionKind: "add_agency_super_admin",
+        entityType: "user",
+        entityRef: superAdminEmail,
+        afterJson: { agencyUserId: userId, superAdminEmail },
+      });
       await repo.resolvePendingAdminAction({
         actionId: pendingAdminAction.id,
         status: "executed",
@@ -991,7 +1004,10 @@ async function handleAdminRequest(
         adminReply: buildAdminResultReply(
           event.subject,
           "Done ✅",
-          [`${superAdminEmail} can now use agency admin (delegated).`],
+          [
+            `${superAdminEmail} can now use agency admin (delegated).`,
+            ...(primaryForNotice ? ["They have been sent a notification email."] : []),
+          ],
           ["Show super admins", "Show members"],
         ),
         context: {
@@ -2585,18 +2601,28 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
   const pendingHumanApproval = await repo.findLatestPendingApproval(senderNormalized);
 
   if (!inserted && senderCanUseAdmin && (adminRequest || pendingAdminAction)) {
-    return {
-      recipients: [event.from],
-      payload: undefined,
-      outboundMode: "admin",
-      rpmProfileProposal: null,
-      context: {
-        userId: user.id,
-        projectId: null,
-        eventId: event.eventId,
-        duplicate: true,
-      },
-    };
+    const isReadOnlyAgencyAdminRequest =
+      adminRequest != null &&
+      adminRequest.kind !== "confirm" &&
+      (adminRequest.kind === "menu" ||
+        adminRequest.kind === "show_projects" ||
+        adminRequest.kind === "show_rpm" ||
+        adminRequest.kind === "show_agency_members" ||
+        adminRequest.kind === "show_agency_super_admins");
+    if (!isReadOnlyAgencyAdminRequest) {
+      return {
+        recipients: [event.from],
+        payload: undefined,
+        outboundMode: "admin",
+        rpmProfileProposal: null,
+        context: {
+          userId: user.id,
+          projectId: null,
+          eventId: event.eventId,
+          duplicate: true,
+        },
+      };
+    }
   }
 
   if (pendingHumanApproval) {
@@ -2668,7 +2694,13 @@ export async function processInboundEmail(event: NormalizedEmailEvent): Promise<
       senderIsPrimaryAgency,
     );
     if (adminResult) {
-      return adminResult;
+      return {
+        ...adminResult,
+        context: {
+          ...adminResult.context,
+          duplicate: !inserted,
+        },
+      };
     }
   }
 
