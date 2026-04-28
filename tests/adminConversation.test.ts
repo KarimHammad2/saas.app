@@ -260,6 +260,37 @@ describe("parseAdminRequest", () => {
     });
   });
 
+  it("parses create agency user", () => {
+    expect(parseAdminRequest("Create agency user alice@example.com")).toEqual({
+      kind: "create_agency_user",
+      userEmail: "alice@example.com",
+    });
+    expect(parseAdminRequest("Create agency account for alice@example.com")).toEqual({
+      kind: "create_agency_user",
+      userEmail: "alice@example.com",
+    });
+  });
+
+  it("parses add member with for agency master form", () => {
+    expect(
+      parseAdminRequest("Add member new@agency.com for agency primary@owner.com"),
+    ).toEqual({
+      kind: "add_agency_member",
+      memberEmail: "new@agency.com",
+      agencyPrimaryEmail: "primary@owner.com",
+    });
+  });
+
+  it("parses remove member with for agency master form", () => {
+    expect(
+      parseAdminRequest("Remove member old@agency.com for agency primary@owner.com"),
+    ).toEqual({
+      kind: "remove_agency_member",
+      memberEmail: "old@agency.com",
+      agencyPrimaryEmail: "primary@owner.com",
+    });
+  });
+
   it("parses show super admins", () => {
     expect(parseAdminRequest("List super admins")).toEqual({ kind: "show_agency_super_admins" });
     expect(parseAdminRequest("Show all super admins")).toEqual({ kind: "show_agency_super_admins" });
@@ -344,8 +375,10 @@ describe("buildAdminMenuReply", () => {
   it("advertises Create a user and Create a project under Manage", () => {
     const reply = buildAdminMenuReply("Admin");
     expect(reply.text).toContain("Create a user");
+    expect(reply.text).toContain("Create an agency account");
     expect(reply.text).toContain("Create a project");
     expect(reply.html).toContain("Create a user");
+    expect(reply.html).toContain("Create an agency account");
     expect(reply.html).toContain("Create a project");
   });
 
@@ -398,6 +431,17 @@ describe("buildAdminConfirmationReply for create_user and create_project", () =>
     expect(reply.html).toContain("Create user");
     expect(reply.html).toContain("alice@example.com");
     expect(reply.html).toContain("Freemium (default)");
+  });
+
+  it("echoes create_agency_user with agency messaging", () => {
+    const reply = buildAdminConfirmationReply("Admin", {
+      kind: "create_agency_user",
+      userEmail: "alice@example.com",
+    });
+    expect(reply.text).toContain("Create agency account");
+    expect(reply.text).toContain("alice@example.com");
+    expect(reply.html).toContain("Create agency account");
+    expect(reply.html).toContain("alice@example.com");
   });
 
   it("echoes the project name and owner email for create_project", () => {

@@ -5,11 +5,20 @@ vi.mock("@/modules/email/sendNewUserWelcomeEmail", () => ({
   sendNewUserWelcomeEmail: vi.fn(async () => undefined),
 }));
 
+vi.mock("@/modules/email/sendAgencyAccountProvisioningEmails", () => ({
+  sendNewAgencyUserWelcomeCombinedEmail: vi.fn(async () => undefined),
+  sendMasterAgencyProvisioningReceiptEmail: vi.fn(async () => undefined),
+}));
+
 vi.mock("@/modules/email/sendEmail", () => ({
   sendEmail: vi.fn(async () => undefined),
 }));
 
 import { sendEmail } from "@/modules/email/sendEmail";
+import {
+  sendMasterAgencyProvisioningReceiptEmail,
+  sendNewAgencyUserWelcomeCombinedEmail,
+} from "@/modules/email/sendAgencyAccountProvisioningEmails";
 import { executeAdminAction } from "@/modules/orchestration/adminActionsExecutor";
 import type { MemoryRepository } from "@/modules/memory/repository";
 import type { ProjectContext } from "@/modules/contracts/types";
@@ -994,5 +1003,122 @@ describe("executeAdminAction - agency scope", () => {
     if (!result.ok) {
       expect(result.reason).toMatch(/not available for agency admin/);
     }
+  });
+
+  it("master can add_agency_member with agencyPrimaryEmail to another agency account", async () => {
+    vi.mocked(sendEmail).mockClear();
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async (email: string) => {
+        if (email.trim().toLowerCase() === "primary@agency.com") {
+          return {
+            id: "u-remote-agency",
+            email: "primary@agency.com",
+            display_name: null,
+            tier: "agency" as const,
+            created_at: "2026-04-01T00:00:00.000Z",
+          };
+        }
+        return null;
+      }),
+      getUserEmailById: vi.fn(async (uid: string) =>
+        uid === "u-remote-agency" ? "primary@agency.com" : "owner@example.com",
+      ),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "add_agency_member",
+        memberEmail: "new@member.com",
+        agencyPrimaryEmail: "primary@agency.com",
+      },
+      { actorEmail: actorContext.actorEmail, adminActionId: "a-x", enforceOwnerUserId: null },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(repo.addAdditionalEmails).toHaveBeenCalledWith("u-remote-agency", ["new@member.com"]);
+  });
+
+  it("reject add_agency_member with agencyPrimaryEmail when actor is not master", async () => {
+    const repo = makeRepo({
+      findUserByEmail: vi.fn(async (email: string) => {
+        if (email.trim().toLowerCase() === "primary@agency.com") {
+          return {
+            id: "u-remote-agency",
+            email,
+            display_name: null,
+            tier: "agency" as const,
+            created_at: "2026-04-01T00:00:00.000Z",
+          };
+        }
+        return null;
+      }),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      {
+        kind: "add_agency_member",
+        memberEmail: "new@member.com",
+        agencyPrimaryEmail: "primary@agency.com",
+      },
+      { actorEmail: "not-master@agency.com", adminActionId: "a-x", enforceOwnerUserId: null },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/master admin/);
+    }
+  });
+});
+
+describe("executeAdminAction - create_agency_user", () => {
+  beforeEach(() => {
+    vi.mocked(sendNewAgencyUserWelcomeCombinedEmail).mockClear();
+    vi.mocked(sendMasterAgencyProvisioningReceiptEmail).mockClear();
+  });
+
+  it("promotes new account to agency with combined welcome and master receipt", async () => {
+    const repo = makeRepo({});
+    const result = await executeAdminAction(
+      repo,
+      { kind: "create_agency_user", userEmail: "new.agency@example.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(repo.setUserTier).toHaveBeenCalledWith("u-new", "agency");
+    expect(repo.applyAgencyTierRpmTransition).toHaveBeenCalledWith("u-new");
+    expect(sendNewAgencyUserWelcomeCombinedEmail).toHaveBeenCalledWith("new.agency@example.com");
+    expect(sendMasterAgencyProvisioningReceiptEmail).toHaveBeenCalledWith({
+      provisionedPrimaryEmail: "new.agency@example.com",
+      scenario: "create_agency_user",
+    });
+  });
+
+  it("returns early without emails when already agency tier", async () => {
+    const repo = makeRepo({
+      getOrCreateUserByEmail: vi.fn(async () => ({
+        user: {
+          id: "u-ag",
+          email: "existing@agency.com",
+          display_name: null,
+          tier: "agency",
+          created_at: "2025-01-01T00:00:00.000Z",
+        },
+        created: false,
+      })),
+    });
+
+    const result = await executeAdminAction(
+      repo,
+      { kind: "create_agency_user", userEmail: "existing@agency.com" },
+      actorContext,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(repo.setUserTier).not.toHaveBeenCalled();
+    expect(sendNewAgencyUserWelcomeCombinedEmail).not.toHaveBeenCalled();
+    expect(sendMasterAgencyProvisioningReceiptEmail).not.toHaveBeenCalled();
   });
 });

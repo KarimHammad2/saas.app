@@ -1,5 +1,9 @@
 import { getDefaultFromEmail, getMasterUserEmail } from "@/lib/env";
 import { log } from "@/lib/log";
+import {
+  sendMasterAgencyProvisioningReceiptEmail,
+  sendNewAgencyUserWelcomeCombinedEmail,
+} from "@/modules/email/sendAgencyAccountProvisioningEmails";
 import { sendNewUserWelcomeEmail } from "@/modules/email/sendNewUserWelcomeEmail";
 import { sendUserTierChangedEmail } from "@/modules/email/sendUserTierChangedEmail";
 import { sendEmail } from "@/modules/email/sendEmail";
@@ -26,6 +30,54 @@ export interface AdminActionExecutionContext {
 
 function escapeHtmlLite(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function actorIsMaster(actorEmail: string): boolean {
+  return actorEmail.trim().toLowerCase() === getMasterUserEmail().trim().toLowerCase();
+}
+
+async function resolveAgencyMembershipAccount(
+  repo: MemoryRepository,
+  action: { agencyPrimaryEmail?: string },
+  context: AdminActionExecutionContext,
+): Promise<{ ok: true; agencyUserId: string; primary: string } | { ok: false; reason: string }> {
+  if (context.enforceOwnerUserId) {
+    const primary = await repo.getUserEmailById(context.enforceOwnerUserId);
+    return {
+      ok: true,
+      agencyUserId: context.enforceOwnerUserId,
+      primary: primary ?? "",
+    };
+  }
+
+  const masterTarget = action.agencyPrimaryEmail?.trim().toLowerCase();
+  if (!masterTarget) {
+    return {
+      ok: false,
+      reason:
+        'To add or remove a member on another agency account from the master admin inbox, include the agency primary email — e.g. "Add member new@example.com for agency primary@example.com".',
+    };
+  }
+  if (!actorIsMaster(context.actorEmail)) {
+    return { ok: false, reason: "That cross-account action requires the master admin." };
+  }
+  const owner = await repo.findUserByEmail(masterTarget);
+  if (!owner) {
+    return {
+      ok: false,
+      reason: `I couldn’t find an account whose primary matches ${masterTarget}.`,
+    };
+  }
+  if ((owner.tier as Tier) !== "agency") {
+    return {
+      ok: false,
+      reason: `The account ${masterTarget} is not an Agency tier account.`,
+    };
+  }
+
+  const primary = await repo.getUserEmailById(owner.id);
+
+  return { ok: true, agencyUserId: owner.id, primary: primary ?? masterTarget };
 }
 
 function parseListValue(value: string): string[] {
@@ -337,6 +389,72 @@ async function executeCreateUser(
   };
 }
 
+async function executeCreateAgencyUser(
+  repo: MemoryRepository,
+  action: Extract<AdminActionPayload, { kind: "create_agency_user" }>,
+  context: AdminActionExecutionContext,
+): Promise<AdminExecutionResult> {
+  const { user, created } = await repo.getOrCreateUserByEmail(action.userEmail.trim().toLowerCase());
+  const previousTier = user.tier as Tier;
+
+  if (previousTier === "agency") {
+    return {
+      ok: true,
+      heading: "Already agency",
+      lines: [`${user.email} already has an agency account.`],
+      nextSteps: [`Show projects for ${user.email}`],
+    };
+  }
+
+  await repo.setUserTier(user.id, "agency");
+  await repo.applyAgencyTierRpmTransition(user.id);
+
+  await repo.recordAdminAuditLog({
+    adminActionId: context.adminActionId ?? null,
+    actorEmail: context.actorEmail,
+    actionKind: "create_agency_user",
+    entityType: "user",
+    entityRef: user.email,
+    beforeJson: { tier: previousTier },
+    afterJson: { tier: "agency", inserted: created },
+  });
+
+  const lines: string[] = [`${user.email} is now an Agency account.`];
+
+  try {
+    if (created) {
+      await sendNewAgencyUserWelcomeCombinedEmail(user.email);
+      lines.push("They received a combined welcome email for Agency.");
+    } else {
+      await sendUserTierChangedEmail(user.email, previousTier, "agency");
+      lines.push("They have been sent a tier update email.");
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error("user notification failed after create_agency_user", { recipient: user.email, message });
+    lines.push(`User notification email could not be sent: ${message}`);
+  }
+
+  try {
+    await sendMasterAgencyProvisioningReceiptEmail({
+      provisionedPrimaryEmail: user.email,
+      scenario: "create_agency_user",
+    });
+    lines.push("You have been sent a confirmation email.");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error("master receipt failed after create_agency_user", { message });
+    lines.push(`Master confirmation email could not be sent: ${message}`);
+  }
+
+  return {
+    ok: true,
+    heading: "Done ✅",
+    lines,
+    nextSteps: ["Assign an RPM", "Add member", "Show members"],
+  };
+}
+
 async function executeDeleteUser(
   repo: MemoryRepository,
   action: Extract<AdminActionPayload, { kind: "delete_user" }>,
@@ -585,6 +703,23 @@ async function executeUpdateTier(
   if (previousTier !== action.tier) {
     lines.push("They have been sent a notification email.");
   }
+  if (
+    actorIsMaster(context.actorEmail) &&
+    previousTier !== action.tier &&
+    action.tier === "agency"
+  ) {
+    try {
+      await sendMasterAgencyProvisioningReceiptEmail({
+        provisionedPrimaryEmail: action.userEmail,
+        scenario: "update_tier_to_agency",
+      });
+      lines.push("You have been sent a confirmation email.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("master receipt failed after update_tier to agency", { message });
+      lines.push(`Master confirmation email could not be sent: ${message}`);
+    }
+  }
   return {
     ok: true,
     heading: "Done ✅",
@@ -690,15 +825,14 @@ async function executeAddAgencyMember(
   action: Extract<AdminActionPayload, { kind: "add_agency_member" }>,
   context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
-  const agencyUserId = context.enforceOwnerUserId;
-  if (!agencyUserId) {
-    return { ok: false, reason: "Adding members is only available from an agency admin context." };
+  const scope = await resolveAgencyMembershipAccount(repo, action, context);
+  if (!scope.ok) {
+    return scope;
   }
-  const primary = await repo.getUserEmailById(agencyUserId);
-  if (!primary) {
-    return { ok: false, reason: "I couldn’t resolve your agency account email." };
-  }
+  const { agencyUserId, primary } = scope;
+
   const member = action.memberEmail.trim().toLowerCase();
+
   try {
     await repo.addAdditionalEmails(agencyUserId, [member]);
   } catch (error) {
@@ -738,14 +872,25 @@ async function executeAddAgencyMember(
     entityType: "user_email",
     entityRef: member,
     beforeJson: null,
-    afterJson: { agencyUserId, memberEmail: member },
+    afterJson: {
+      agencyUserId,
+      memberEmail: member,
+      ...(action.agencyPrimaryEmail?.trim()
+        ? { agencyPrimaryEmail: action.agencyPrimaryEmail.trim().toLowerCase() }
+        : {}),
+    },
   });
+
+  const location =
+    actorIsMaster(context.actorEmail) && action.agencyPrimaryEmail?.trim()
+      ? `the agency account for ${primary}`
+      : "your agency account";
 
   return {
     ok: true,
     heading: "Done ✅",
     lines: [
-      `${member} has been added to your agency account.`,
+      `${member} has been added to ${location}.`,
       "They have been sent a notification email.",
     ],
     nextSteps: ["Show members", "Show all projects"],
@@ -757,10 +902,12 @@ async function executeRemoveAgencyMember(
   action: Extract<AdminActionPayload, { kind: "remove_agency_member" }>,
   context: AdminActionExecutionContext,
 ): Promise<AdminExecutionResult> {
-  const agencyUserId = context.enforceOwnerUserId;
-  if (!agencyUserId) {
-    return { ok: false, reason: "Removing members is only available from an agency admin context." };
+  const scope = await resolveAgencyMembershipAccount(repo, action, context);
+  if (!scope.ok) {
+    return scope;
   }
+  const { agencyUserId, primary } = scope;
+
   const member = action.memberEmail.trim().toLowerCase();
   try {
     await repo.removeAdditionalAccountEmail(agencyUserId, member);
@@ -782,13 +929,23 @@ async function executeRemoveAgencyMember(
     entityType: "user_email",
     entityRef: member,
     beforeJson: { memberEmail: member },
-    afterJson: null,
+    afterJson: action.agencyPrimaryEmail?.trim()
+      ? {
+          agencyUserId,
+          agencyPrimaryEmail: action.agencyPrimaryEmail.trim().toLowerCase(),
+        }
+      : { agencyUserId },
   });
+
+  const location =
+    actorIsMaster(context.actorEmail) && action.agencyPrimaryEmail?.trim()
+      ? `the agency account for ${primary}`
+      : "your agency account";
 
   return {
     ok: true,
     heading: "Done ✅",
-    lines: [`${member} has been removed from your agency account.`],
+    lines: [`${member} has been removed from ${location}.`],
     nextSteps: ["Show members", "Show all RPMs"],
   };
 }
@@ -827,6 +984,8 @@ export async function executeAdminAction(
       return executeDeleteProject(repo, action, context);
     case "create_user":
       return executeCreateUser(repo, action, context);
+    case "create_agency_user":
+      return executeCreateAgencyUser(repo, action, context);
     case "delete_user":
       return executeDeleteUser(repo, action, context);
     case "create_project":

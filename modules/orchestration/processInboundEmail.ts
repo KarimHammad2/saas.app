@@ -234,6 +234,8 @@ function normalizeAdminActionPayload(action: AdminActionPayload): Record<string,
       return { projectName: action.projectName, userEmail: action.userEmail };
     case "create_user":
       return { userEmail: action.userEmail };
+    case "create_agency_user":
+      return { userEmail: action.userEmail };
     case "delete_user":
       return {
         userEmail: action.userEmail,
@@ -242,9 +244,19 @@ function normalizeAdminActionPayload(action: AdminActionPayload): Record<string,
     case "create_project":
       return { projectName: action.projectName, userEmail: action.userEmail };
     case "add_agency_member":
-      return { memberEmail: action.memberEmail };
+      return {
+        memberEmail: action.memberEmail,
+        ...(action.agencyPrimaryEmail?.trim()
+          ? { agencyPrimaryEmail: action.agencyPrimaryEmail.trim().toLowerCase() }
+          : {}),
+      };
     case "remove_agency_member":
-      return { memberEmail: action.memberEmail };
+      return {
+        memberEmail: action.memberEmail,
+        ...(action.agencyPrimaryEmail?.trim()
+          ? { agencyPrimaryEmail: action.agencyPrimaryEmail.trim().toLowerCase() }
+          : {}),
+      };
     case "add_agency_super_admin":
       return { superAdminEmail: action.superAdminEmail };
     case "remove_agency_super_admin":
@@ -346,6 +358,13 @@ function reconstructAdminActionPayload(
       }
       return { kind: "create_user", userEmail };
     }
+    case "create_agency_user": {
+      const userEmail = asEmail(payload.userEmail);
+      if (!userEmail) {
+        return null;
+      }
+      return { kind: "create_agency_user", userEmail };
+    }
     case "delete_user": {
       const userEmail = asEmail(payload.userEmail);
       if (!userEmail) {
@@ -371,14 +390,24 @@ function reconstructAdminActionPayload(
       if (!memberEmail) {
         return null;
       }
-      return { kind: "add_agency_member", memberEmail };
+      const agencyPrimaryEmail = asEmail(payload.agencyPrimaryEmail);
+      return {
+        kind: "add_agency_member",
+        memberEmail,
+        ...(agencyPrimaryEmail ? { agencyPrimaryEmail } : {}),
+      };
     }
     case "remove_agency_member": {
       const memberEmail = asEmail(payload.memberEmail);
       if (!memberEmail) {
         return null;
       }
-      return { kind: "remove_agency_member", memberEmail };
+      const agencyPrimaryEmail = asEmail(payload.agencyPrimaryEmail);
+      return {
+        kind: "remove_agency_member",
+        memberEmail,
+        ...(agencyPrimaryEmail ? { agencyPrimaryEmail } : {}),
+      };
     }
     case "add_agency_super_admin": {
       const superAdminEmail = asEmail(payload.superAdminEmail);
@@ -511,6 +540,13 @@ async function normalizeAgencyAdminRequest(
       }
       return { ok: true, request };
     }
+    case "add_agency_member":
+    case "remove_agency_member": {
+      if (request.agencyPrimaryEmail?.trim()) {
+        return { ok: true, request: { ...request, agencyPrimaryEmail: null } };
+      }
+      return { ok: true, request };
+    }
     default:
       return { ok: true, request };
   }
@@ -527,6 +563,49 @@ async function handleAdminRequest(
 ): Promise<InboundProcessingResult | null> {
   let request: AdminRequest = initialRequest;
   const nextSteps = scope === "agency" ? agencyAdminNextSteps : adminNextSteps;
+
+  if (scope === "agency" && request.kind === "create_agency_user") {
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminClarificationReply(
+        event.subject,
+        "Creating agency accounts is only available from the master administrator inbox.",
+      ),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
+
+  if (
+    scope === "master" &&
+    (request.kind === "add_agency_member" || request.kind === "remove_agency_member") &&
+    request.memberEmail?.trim() &&
+    !request.agencyPrimaryEmail?.trim()
+  ) {
+    return {
+      recipients: [event.from],
+      payload: undefined,
+      outboundMode: "admin",
+      rpmProfileProposal: null,
+      adminReply: buildAdminClarificationReply(
+        event.subject,
+        'To add or remove someone on another agency account from your admin inbox, include the agency primary — e.g. "Add member new@example.com for agency primary@example.com".',
+      ),
+      context: {
+        userId,
+        projectId: null,
+        eventId: event.eventId,
+        duplicate: false,
+      },
+    };
+  }
 
   if (request.kind === "confirm") {
     if (!pendingAdminAction) {
@@ -1291,18 +1370,60 @@ async function handleAdminRequest(
         },
       };
     }
+
     const memberEmail = request.memberEmail.trim().toLowerCase();
-    const existing = await repo.getUserEmailsById(userId);
+    const agencyPrimaryNormalized = request.agencyPrimaryEmail?.trim().toLowerCase() ?? null;
+
+    let agencyAccountUserId = userId;
+    if (scope === "master" && agencyPrimaryNormalized) {
+      const agencyOwnerRow = await repo.findUserByEmail(agencyPrimaryNormalized);
+      if (!agencyOwnerRow) {
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            `I couldn’t find an agency account whose primary is ${agencyPrimaryNormalized}.`,
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      if (agencyOwnerRow.tier !== "agency") {
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            `The account ${agencyPrimaryNormalized} is not an Agency tier account.`,
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      agencyAccountUserId = agencyOwnerRow.id;
+    }
+
+    const existing = await repo.getUserEmailsById(agencyAccountUserId);
     if (existing.includes(memberEmail)) {
       return {
         recipients: [event.from],
         payload: undefined,
         outboundMode: "admin",
         rpmProfileProposal: null,
-        adminReply: buildAdminClarificationReply(
-          event.subject,
-          "That email is already a member of your agency account.",
-        ),
+        adminReply: buildAdminClarificationReply(event.subject, "That email is already a member of that agency account."),
         context: {
           userId,
           projectId: null,
@@ -1311,7 +1432,12 @@ async function handleAdminRequest(
         },
       };
     }
-    const addPayload: AdminActionPayload = { kind: "add_agency_member", memberEmail };
+
+    const addPayload: AdminActionPayload = {
+      kind: "add_agency_member",
+      memberEmail,
+      ...(agencyPrimaryNormalized ? { agencyPrimaryEmail: agencyPrimaryNormalized } : {}),
+    };
     await repo.createOrReusePendingAdminAction({
       senderUserId: userId,
       senderEmail: event.from,
@@ -1355,7 +1481,51 @@ async function handleAdminRequest(
       };
     }
     const memberEmail = request.memberEmail.trim().toLowerCase();
-    const primary = await repo.getUserEmailById(userId);
+    const agencyPrimaryNormalized = request.agencyPrimaryEmail?.trim().toLowerCase() ?? null;
+
+    let agencyAccountUserId = userId;
+    if (scope === "master" && agencyPrimaryNormalized) {
+      const agencyOwnerRow = await repo.findUserByEmail(agencyPrimaryNormalized);
+      if (!agencyOwnerRow) {
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            `I couldn’t find an agency account whose primary is ${agencyPrimaryNormalized}.`,
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      if (agencyOwnerRow.tier !== "agency") {
+        return {
+          recipients: [event.from],
+          payload: undefined,
+          outboundMode: "admin",
+          rpmProfileProposal: null,
+          adminReply: buildAdminClarificationReply(
+            event.subject,
+            `The account ${agencyPrimaryNormalized} is not an Agency tier account.`,
+          ),
+          context: {
+            userId,
+            projectId: null,
+            eventId: event.eventId,
+            duplicate: false,
+          },
+        };
+      }
+      agencyAccountUserId = agencyOwnerRow.id;
+    }
+
+    const primary = await repo.getUserEmailById(agencyAccountUserId);
     if (primary && memberEmail === primary.trim().toLowerCase()) {
       return {
         recipients: [event.from],
@@ -1374,7 +1544,7 @@ async function handleAdminRequest(
         },
       };
     }
-    const accountEmails = await repo.getUserEmailsById(userId);
+    const accountEmails = await repo.getUserEmailsById(agencyAccountUserId);
     if (!accountEmails.includes(memberEmail)) {
       return {
         recipients: [event.from],
@@ -1383,7 +1553,7 @@ async function handleAdminRequest(
         rpmProfileProposal: null,
         adminReply: buildAdminClarificationReply(
           event.subject,
-          "That email is not a member of your agency account.",
+          "That email is not a member of that agency account.",
         ),
         context: {
           userId,
@@ -1393,7 +1563,11 @@ async function handleAdminRequest(
         },
       };
     }
-    const removePayload: AdminActionPayload = { kind: "remove_agency_member", memberEmail };
+    const removePayload: AdminActionPayload = {
+      kind: "remove_agency_member",
+      memberEmail,
+      ...(agencyPrimaryNormalized ? { agencyPrimaryEmail: agencyPrimaryNormalized } : {}),
+    };
     await repo.createOrReusePendingAdminAction({
       senderUserId: userId,
       senderEmail: event.from,
@@ -2206,6 +2380,30 @@ async function handleAdminRequest(
     const payload: AdminActionPayload = {
       kind: "create_user",
       userEmail: request.userEmail,
+    };
+    await repo.createOrReusePendingAdminAction({
+      senderUserId: userId,
+      senderEmail: event.from,
+      actionKind: payload.kind,
+      actionPayload: normalizeAdminActionPayload(payload),
+      sourceSubject: event.subject,
+      sourceRawBody: event.rawBody,
+    });
+    return adminOut(buildAdminActionConfirmation(event.subject, payload));
+  }
+
+  if (request.kind === "create_agency_user") {
+    if (!request.userEmail) {
+      return adminOut(
+        buildAdminClarificationReply(
+          event.subject,
+          'Please include the primary owner email — e.g. "Create agency user alice@example.com" or "Create agency account for alice@example.com".',
+        ),
+      );
+    }
+    const payload: AdminActionPayload = {
+      kind: "create_agency_user",
+      userEmail: request.userEmail.trim().toLowerCase(),
     };
     await repo.createOrReusePendingAdminAction({
       senderUserId: userId,
