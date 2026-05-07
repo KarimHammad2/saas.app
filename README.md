@@ -100,6 +100,234 @@ This repository implements the **SaaS² orchestration layer** for the full MVP e
 
 `User → Frank → Email → saas2.app → memory contracts → database → outbound state email`
 
+### Project structure guide
+
+#### Folders (what each contains)
+
+- `app/` — Next.js App Router entrypoint:
+  - `app/api/inbound/route.ts` receives inbound provider webhooks.
+  - `app/api/cron/inbound/route.ts` runs queued inbound processing.
+  - `app/api/cron/reminders/route.ts` sends idle-project reminders.
+  - `app/layout.tsx`, `app/page.tsx`, `app/globals.css` are the minimal site shell.
+- `modules/` — main product logic, split by concern:
+  - `modules/email/` parsing, provider abstraction, policies, and outbound send helpers.
+  - `modules/orchestration/` end-to-end inbound flow and admin email command handling.
+  - `modules/domain/` business rules (RBAC, pricing, kickoff, transactions, follow-ups, escalations).
+  - `modules/memory/`, `modules/projectState/`, `modules/updates/`, `modules/users/`, `modules/projects/` data and state operations.
+  - `modules/output/` outbound formatting and project document generation (`.md` + `.docx`).
+  - `modules/contracts/` shared TypeScript contracts used across layers.
+- `lib/` — cross-cutting infrastructure helpers:
+  - `lib/env.ts` environment and policy values (including inbound trigger email).
+  - `lib/supabase.ts` admin DB client setup.
+  - `lib/resend.ts` provider helper wiring.
+  - `lib/log.ts` logging utility.
+- `supabase/` — database evolution:
+  - `supabase/migrations/` ordered SQL migrations for schema, RLS, cron, and feature rollout.
+- `tests/` — Vitest test suite; file names map to modules/routes they verify.
+- `src/` — compatibility/legacy service wrappers and parser/orchestration helpers kept for architecture continuity and tests.
+- `public/` — static assets used by Next.js (SVG icons and public files).
+- `scripts/` — reserved for local/dev ops scripts (currently empty).
+- `.next/` — generated Next.js build/dev artifacts (do not hand-edit).
+- `node_modules/` — installed dependencies (do not hand-edit).
+- `.cursor/` — local editor/agent metadata (not runtime app logic).
+
+#### Top-level files (what each is for)
+
+- `README.md` — product, architecture, setup, and operational runbook.
+- `package.json` / `package-lock.json` — dependency and script definitions (`dev`, `build`, `start`, `test`, `lint`).
+- `next.config.ts` — Next.js runtime config (currently root redirect policy).
+- `tsconfig.json` — TypeScript compiler options and path aliases.
+- `vitest.config.ts` — test runner config and alias resolution.
+- `eslint.config.mjs` — lint rules and ignore patterns.
+- `postcss.config.mjs` — PostCSS/Tailwind integration.
+- `next-env.d.ts` — Next.js-generated TypeScript typings.
+- `tsconfig.tsbuildinfo` — TypeScript incremental build cache.
+- `.gitignore` — Git ignore rules.
+- `.env.local` — local secrets/env values for development.
+- `AGENTS.md` / `CLAUDE.md` — workspace AI-agent instruction references.
+
+#### What you can safely update or add
+
+- Safe and expected updates:
+  - Add/modify logic in `modules/`, `lib/`, and `app/api/*` routes.
+  - Add tests in `tests/` for every behavior change.
+  - Add static files in `public/` as needed.
+  - Add helper scripts to `scripts/` for repeatable local/dev tasks.
+- Database changes:
+  - Add a **new** migration under `supabase/migrations/` (timestamped).
+  - Do not rewrite old applied migrations in shared/production environments.
+- Configuration changes:
+  - Update `next.config.ts`, `tsconfig.json`, `eslint.config.mjs`, or `vitest.config.ts` when behavior/tooling requires it.
+  - Keep `.env.local` local and never commit secrets.
+- Avoid manual edits to generated/vendor artifacts:
+  - `.next/`, `node_modules/`, `next-env.d.ts`, `tsconfig.tsbuildinfo`.
+- Recommended pattern for new features:
+  - Add domain/orchestration logic in `modules/`.
+  - Expose via `app/api/*` route (if API-facing).
+  - Add/adjust SQL migration (if schema changes).
+  - Add corresponding `tests/*.test.ts`.
+
+#### Deep dive: `app/` (everything inside)
+
+- `app/layout.tsx` — global HTML shell, metadata, and font setup for all routes.
+- `app/page.tsx` — minimal public landing page (marketing/info only).
+- `app/globals.css` — Tailwind import + global styles/tokens.
+- `app/favicon.ico` — browser tab icon.
+- `app/api/inbound/route.ts` — webhook intake endpoint; validates provider payload/signature, applies inbound policy, and queues normalized inbound jobs.
+- `app/api/cron/inbound/route.ts` — queue worker endpoint; drains queued jobs, runs orchestration, retries transient failures, and records terminal failures.
+- `app/api/cron/reminders/route.ts` — reminder worker endpoint; selects idle projects and sends reminder emails.
+
+**What is safe to edit in `app/`:**
+
+- Safe/common:
+  - `app/page.tsx`, `app/layout.tsx`, `app/globals.css` for UI/content changes.
+  - API route response formatting, logging text, and non-contract refactors.
+- Edit with extra care:
+  - `app/api/inbound/route.ts` auth/signature/payload handling.
+  - `app/api/cron/*` auth and retry behavior.
+- Avoid:
+  - Breaking response contracts expected by providers or cron jobs.
+
+#### Deep dive: `modules/` (everything inside)
+
+##### `modules/config`
+
+- `modules/config/runtimeConfig.ts` — loads runtime templates/settings from DB + env fallback and renders tokenized templates.
+
+##### `modules/contracts`
+
+- `modules/contracts/types.ts` — shared domain contracts for inbound events, project state, profile/suggestions, transactions, and output payloads.
+
+##### `modules/domain`
+
+- `modules/domain/agencyTierRpm.ts` — computes RPM assignment changes during agency-tier transitions.
+- `modules/domain/ccMembershipDecision.ts` — parses owner yes/no decision for CC membership confirmations.
+- `modules/domain/completionDetection.ts` — detects completed tasks from natural-language text.
+- `modules/domain/entitlements.ts` — maps tier to capability flags and participant limits.
+- `modules/domain/financial.ts` — transaction math and fee/buffer/remainder calculations.
+- `modules/domain/followUps.ts` — parses follow-up timing text and normalizes due dates.
+- `modules/domain/kickoff.ts` — generates kickoff summary/goals/tasks and follow-up prompts.
+- `modules/domain/kickoffSeed.ts` — extracts a clean kickoff intent seed from noisy first emails.
+- `modules/domain/kickoffService.ts` — applies kickoff effects to project memory/repository.
+- `modules/domain/memoryInference.ts` — infers profile/context hints from inbound content.
+- `modules/domain/mergeUniqueStrings.ts` — ordered de-dupe merge helpers for string lists.
+- `modules/domain/overviewCleaning.ts` — cleans and compresses summary/overview text.
+- `modules/domain/overviewRegeneration.ts` — rules-based overview regeneration from state.
+- `modules/domain/paymentLinkCatalog.ts` — tier/currency payment-link catalog and resolver.
+- `modules/domain/playbookVariant.ts` — deterministic variant selection for copy/playbook flows.
+- `modules/domain/pricing.ts` — tier transition policy logic.
+- `modules/domain/projectAccess.ts` — sender authorization checks for project modifications.
+- `modules/domain/projectDomain.ts` — project domain inference/normalization (`tech_product`, `marketing`, etc.).
+- `modules/domain/projectEmailRecipients.ts` — composes deduped recipient list (owner/participants/RPM).
+- `modules/domain/projectName.ts` — normalizes or infers a project name from text.
+- `modules/domain/rbac.ts` — actor role resolution and permission gates.
+- `modules/domain/rpmApprovedProfileContext.ts` — applies approved RPM suggestion into profile context shape.
+- `modules/domain/rpmSuggestions.ts` — generates deterministic RPM profile suggestions.
+- `modules/domain/scopeChangeDetection.ts` — detects pivot/scope-change signals from text.
+- `modules/domain/sowSignalsPatch.ts` — safe patching of SOW signals in profile JSON.
+- `modules/domain/taskIntentClassifier.ts` — classifies task-intent actions from free text.
+- `modules/domain/taskLabels.ts` — normalizes/formats task label strings.
+- `modules/domain/userProfileEnrichment.ts` — extracts profile fields from inbound text heuristically.
+- `modules/domain/userProfileMerge.ts` — deep merge behavior for profile context updates.
+- `modules/domain/userProfileSuggestionOnly.ts` — detects suggestion-only emails (no broad update intent).
+
+##### `modules/email`
+
+- `modules/email/buildHtmlEmail.ts` — wraps content in base HTML email shell.
+- `modules/email/emailAddress.ts` — email normalization and display-name parsing utilities.
+- `modules/email/inboundPolicy.ts` — policy guard for who can trigger processing.
+- `modules/email/messageId.ts` — canonical Message-ID normalization.
+- `modules/email/noteInputValidation.ts` — removes low-signal note fragments.
+- `modules/email/parseInbound.ts` — core parser for sections, approvals, transactions, and normalized inbound event structure.
+- `modules/email/participantEmails.ts` — extracts participant candidates from sender/CC.
+- `modules/email/sendAgencyAccountProvisioningEmails.ts` — agency provisioning notifications.
+- `modules/email/sendAgencySuperAdminGrantedEmail.ts` — super-admin grant notification email.
+- `modules/email/sendEmail.ts` — provider-agnostic outbound sending with retry/fallback behavior.
+- `modules/email/sendNewUserWelcomeEmail.ts` — first-time user welcome email.
+- `modules/email/sendUserTierChangedEmail.ts` — user tier-change notification.
+- `modules/email/stripEmailSignature.ts` — signature/footer stripping.
+- `modules/email/stripQuotedReply.ts` — quoted-thread stripping.
+
+##### `modules/email/providers`
+
+- `modules/email/providers/index.ts` — provider selection and fallback wiring.
+- `modules/email/providers/normalizeInboundPayload.ts` — normalizes Resend/SES payloads to one shape.
+- `modules/email/providers/resendProvider.ts` — Resend inbound verification + outbound send implementation.
+- `modules/email/providers/sesProvider.ts` — SES inbound verification adapter.
+- `modules/email/providers/types.ts` — inbound/outbound/provider interfaces.
+
+##### `modules/email/templates`
+
+- `modules/email/templates/projectEmailTemplates.ts` — reminder and project email template builders.
+
+##### `modules/memory`
+
+- `modules/memory/repository.ts` — central Supabase persistence boundary (users, projects, participants, queues, transactions, suggestions, audits, thread mappings, reminders).
+
+##### `modules/orchestration`
+
+- `modules/orchestration/adminActionsExecutor.ts` — executes confirmed admin mutations and writes audit entries.
+- `modules/orchestration/adminConversation.ts` — parses and formats admin email command flows.
+- `modules/orchestration/classifyInboundIntent.ts` — classifies new-project intent confidence.
+- `modules/orchestration/errors.ts` — orchestration-specific error classes.
+- `modules/orchestration/escalations.ts` — escalation extraction, recording, and escalation notifications.
+- `modules/orchestration/handleInboundEmail.ts` — orchestrates processing + outbound composition/sending.
+- `modules/orchestration/processInboundEmail.ts` — core workflow state machine (kickoff, RBAC, approvals, payments, updates, admin branches).
+- `modules/orchestration/sendClarificationEmail.ts` — sends clarification and confirmation-request responses.
+- `modules/orchestration/sendProcessingFallbackEmail.ts` — fallback “processing delayed” response.
+
+##### `modules/output`
+
+- `modules/output/checkoutCurrencyDisplay.ts` — USD/CAD amount formatting helpers.
+- `modules/output/formatProjectEmail.ts` — main human-readable email body/subject formatter.
+- `modules/output/generateProjectDocument.ts` — generates `project-document.md` attachment.
+- `modules/output/generateProjectDocumentDocx.ts` — generates `project-document.docx` from markdown content.
+- `modules/output/overviewText.ts` — overview compaction/truncation helpers.
+- `modules/output/paymentOutbound.ts` — payment-specific outbound email wording and recipient routing.
+- `modules/output/presentationHelpers.ts` — display helpers for concise sections/status lines.
+- `modules/output/sendProjectEmail.ts` — sends project updates + attachments and records outbound metadata.
+- `modules/output/sendRpmProfileProposalEmail.ts` — sends owner approval request for RPM profile suggestion flows.
+- `modules/output/types.ts` — output payload/type definitions.
+
+##### `modules/projectState`
+
+- `modules/projectState/buildProjectState.ts` — constructs/persists merged project state from updates.
+- `modules/projectState/extractStructuredData.ts` — extracts goals/tasks/risks/notes from text.
+- `modules/projectState/mergeProjectState.ts` — deterministic dedupe merge for state fields.
+
+##### `modules/projects`
+
+- `modules/projects/getOrCreateProject.ts` — helper to fetch first project or create default project.
+
+##### `modules/updates`
+
+- `modules/updates/createProjectUpdate.ts` — writes a project update record.
+
+##### `modules/users`
+
+- `modules/users/getOrCreateUser.ts` — helper to fetch/create user by normalized email.
+
+**What is safe to edit in `modules/`:**
+
+- Safe/common:
+  - `modules/domain/*` heuristics and policy tuning.
+  - `modules/output/*` formatting/presentation/document structure.
+  - `modules/email/templates/*` and email-copy helpers.
+- Edit with extra care:
+  - `modules/contracts/types.ts` (shared contract surface).
+  - `modules/email/parseInbound.ts` (parser semantics drive many workflows).
+  - `modules/memory/repository.ts` (data integrity boundary).
+  - `modules/orchestration/processInboundEmail.ts` and `handleInboundEmail.ts` (core state machine).
+  - `modules/email/providers/*` (provider auth/signature/sending correctness).
+
+**High-risk hotspots (breakage-prone):**
+
+- Inbound parsing + policy: `modules/email/parseInbound.ts`, `modules/email/inboundPolicy.ts`, `app/api/inbound/route.ts`.
+- Core orchestration: `modules/orchestration/processInboundEmail.ts`, `modules/orchestration/handleInboundEmail.ts`.
+- Persistence/data consistency: `modules/memory/repository.ts`.
+- Outbound contract + attachments: `modules/output/sendProjectEmail.ts`, `modules/output/generateProjectDocument.ts`, `modules/output/generateProjectDocumentDocx.ts`.
+- Payments/transactions lifecycle: `modules/output/paymentOutbound.ts` + payment branches in `modules/orchestration/processInboundEmail.ts`.
+
 ### What’s included
 
 **HTTP API**
